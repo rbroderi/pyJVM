@@ -1,0 +1,22 @@
+{
+  "version": "0.9.0",
+  "reference_python": "current environment CPython (3.13.x)",
+  "focused_conformance": {
+    "passed": 38,
+    "unsupported": 0,
+    "failed": 0
+  },
+  "new_features": [
+    "bare generator reraise after suspension",
+    "yield inside generator finally suites",
+    "generator with statements across suspension",
+    "with cleanup on return/break/continue",
+    "general function decorators",
+    "generator loop else",
+    "assignment expressions with comprehension containing-scope binding"
+  ],
+  "known_generator_limits": [
+    "return/break/continue through a yielding generator finally suite",
+    "remaining exact GeneratorExit edge cases"
+  ]
+}
