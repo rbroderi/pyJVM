@@ -263,3 +263,18 @@ access invokes `__get__(None, owner)`, and missing instance attributes can fall 
 
 The focused differential suite now contains 43 passing programs, including new cases
 derived from CPython's `test_call.py` method-binding behavior and descriptor semantics.
+
+## 0.12 logical frames and Python-visible tracebacks
+
+Version 0.12 adds a Python-level frame/traceback model that is independent of JVM
+reflection frames. Compiled calls maintain a lightweight logical frame stack; generated
+statements update the current Python source line, and exceptions build traceback chains
+from those logical frames as they propagate.
+
+Exception objects now expose `__traceback__`; traceback objects expose `tb_next`,
+`tb_frame`, and `tb_lineno`; frames expose `f_code` and `f_locals`; and code objects
+expose `co_name`, `co_filename`, and `co_firstlineno`. Ordinary functions and generators
+are both covered. Nested-function traceback order, first-line metadata, and active line
+numbers match the reference CPython cases in the focused differential corpus.
+
+The focused suite now contains 46 passing executable conformance programs.
