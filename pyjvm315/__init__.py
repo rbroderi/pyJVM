@@ -1,4 +1,4 @@
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 
 from .compiler import compile_file, compile_source
 

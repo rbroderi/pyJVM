@@ -1,26 +1,20 @@
 {
-  "version": "0.16.0",
+  "version": "0.17.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 65, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 67, "unsupported": 0, "failed": 0},
   "new_features": [
-    "async generator objects distinct from coroutines",
-    "__aiter__ and __anext__ on compiled async generators",
-    "asend, athrow, and aclose operation awaitables",
-    "async-for consumption of compiled async generators",
-    "persistent partial-expression state across suspension",
-    "strict CI failure on unsupported focused cases"
-  ],
-  "known_limits": [
-    "await inside async generator bodies",
-    "async generator expressions and async comprehensions",
-    "custom metaclass namespace/call protocol"
+    "await inside async-generator bodies",
+    "tagged user-visible async-generator yields",
+    "distinct untagged scheduler suspension values",
+    "resume-value forwarding through async-generator operation awaitables",
+    "exception forwarding through suspended async-generator awaits"
   ],
   "next_focus": [
-    "tagged async-generator scheduler suspensions",
-    "await inside async generators",
-    "async generator expressions and async comprehensions",
-    "custom metaclasses",
+    "async generator expressions",
+    "async list/set/dict comprehensions",
+    "fully suspendable async-for and async-with protocol calls",
+    "custom metaclass namespace/call protocol",
     "larger CPython 3.15 Lib/test slices"
   ]
 }
