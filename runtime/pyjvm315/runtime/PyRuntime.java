@@ -76,6 +76,7 @@ public final class PyRuntime {
         if (value instanceof PyFunction) return "function";
         if (value instanceof PyGenerator) return "generator";
         if (value instanceof PyCoroutine) return "coroutine";
+        if (value instanceof PyAsyncGenerator) return "async_generator";
         if (value instanceof PyClass) return "type";
         if (value instanceof PyInstance i) return i.cls.name;
         if (value instanceof PyDictView) return "dict_view";
@@ -661,6 +662,7 @@ public final class PyRuntime {
     public static Object iterNext(Object iterator) { return ((Iterator<?>) iterator).next(); }
 
     public static Object aiter(Object value) {
+        if(value instanceof PyAsyncGenerator generator) return generator;
         if(value instanceof PyInstance instance){
             PyMethod method=instance.cls.lookupMethod("__aiter__");
             if(method!=null)return invoke(instance,method,new Object[0]);
@@ -668,6 +670,7 @@ public final class PyRuntime {
         throw new PyException("TypeError","object is not an async iterable");
     }
     public static Object anext_(Object iterator) {
+        if(iterator instanceof PyAsyncGenerator generator) return generator.anext();
         if(iterator instanceof PyInstance instance){
             PyMethod method=instance.cls.lookupMethod("__anext__");
             if(method!=null)return invoke(instance,method,new Object[0]);
@@ -915,6 +918,10 @@ public final class PyRuntime {
         PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyCoroutine(frame,(String)nameObj);
     }
+    public static Object makeAsyncGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
+        PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
+        return new PyAsyncGenerator(frame,(String)nameObj);
+    }
     public static Object generatorEnv(Object genObj) { return ((PyGenerator)genObj).env; }
     public static Object generatorState(Object genObj) { return ((PyGenerator)genObj).state; }
     public static Object generatorSentValue(Object genObj) { return ((PyGenerator)genObj).sentValue; }
@@ -1039,6 +1046,7 @@ public final class PyRuntime {
         PyFunction f=(PyFunction)functionObj; f.displayName=(String)nameObj; f.filename=(String)filenameObj; f.firstlineno=bigInt(firstlineObj).longValue();
     }
     public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
+    public static void setFunctionAsyncGenerator(Object functionObj) { ((PyFunction)functionObj).asyncGeneratorMode=true; }
 
     private static List<String> splitNames(String csv) {
         if (csv == null || csv.isEmpty()) return List.of();
@@ -1075,7 +1083,7 @@ public final class PyRuntime {
         final LinkedHashMap<String,Object> defaults;
         final PyEnv closure;
         final boolean envMode;
-        String displayName, filename; long firstlineno; boolean asyncMode=false;
+        String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -1177,6 +1185,48 @@ public final class PyRuntime {
         @Override public String toString() { return "<function " + method + ">"; }
     }
 
+    public static final class PyAsyncGenerator {
+        final PyGenerator frame; final String displayName;
+        PyAsyncGenerator(PyGenerator frame,String displayName){this.frame=frame;this.displayName=displayName;}
+        Object anext(){return new PyAsyncGenAwaitable(this,"next",null);}
+        Object asend(Object value){return new PyAsyncGenAwaitable(this,"send",value);}
+        Object athrow(Object value){return new PyAsyncGenAwaitable(this,"throw",value);}
+        Object aclose(){return new PyAsyncGenAwaitable(this,"close",null);}
+        @Override public String toString(){return "<async_generator object "+displayName+">";}
+    }
+
+    private static final class PyAsyncGenAwaitable {
+        final PyAsyncGenerator generator; final String action; final Object value;
+        PyAsyncGenAwaitable(PyAsyncGenerator generator,String action,Object value){this.generator=generator;this.action=action;this.value=value;}
+        Object iterator(){return new PyAsyncGenAwaitIterator(this);}
+    }
+
+    private static final class PyAsyncGenAwaitIterator implements Iterator<Object>, Iterable<Object> {
+        final PyAsyncGenAwaitable awaitable; boolean done=false;
+        PyAsyncGenAwaitIterator(PyAsyncGenAwaitable awaitable){this.awaitable=awaitable;}
+        public boolean hasNext(){return !done;}
+        public Object next(){
+            if(done) throw new PyGeneratorEnd(null);
+            done=true;
+            try {
+                Object item = switch(awaitable.action) {
+                    case "next" -> awaitable.generator.frame.send(null);
+                    case "send" -> awaitable.generator.frame.send(awaitable.value);
+                    case "throw" -> awaitable.generator.frame.throw_(awaitable.value);
+                    case "close" -> { awaitable.generator.frame.close(); yield null; }
+                    default -> throw new PyException("RuntimeError","unknown async generator operation");
+                };
+                throw new PyGeneratorEnd(item);
+            } catch(PyGeneratorEnd end) {
+                if(awaitable.action.equals("close")) throw new PyGeneratorEnd(null);
+                if(awaitable.generator.frame.finished && end.value==awaitable.generator.frame.returnValue)
+                    throw new PyException("StopAsyncIteration",null);
+                throw end;
+            }
+        }
+        public Iterator<Object> iterator(){return this;}
+    }
+
     public static final class PyCoroutine {
         final PyFunction function; final Object[] bound; final String displayName;
         PyGenerator frame=null; PyCoroutine adopted=null;
@@ -1273,6 +1323,7 @@ public final class PyRuntime {
     }
     public static Object awaitIterator(Object value){
         if(value instanceof PyCoroutine coroutine) return coroutine.awaitIterator();
+        if(value instanceof PyAsyncGenAwaitable awaitable) return awaitable.iterator();
         if(value instanceof PyInstance instance && instance.cls.lookupMethod("__await__")!=null)
             return invoke(instance,instance.cls.lookupMethod("__await__"),new Object[0]);
         throw new PyException("TypeError","object can't be used in 'await' expression");
@@ -1539,6 +1590,16 @@ public final class PyRuntime {
             PyMethod method=cls.lookupMethod(name);
             if(method==null) throw new PyException("AttributeError","type object '"+cls.name+"' has no method '"+name+"'");
             return invokeOnClass(cls,method,args);
+        }
+        if (obj instanceof PyAsyncGenerator generator) {
+            return switch(name) {
+                case "__aiter__" -> { requireArgs(name,args,0); yield generator; }
+                case "__anext__" -> { requireArgs(name,args,0); yield generator.anext(); }
+                case "asend" -> { requireArgs(name,args,1); yield generator.asend(args[0]); }
+                case "athrow" -> { requireArgs(name,args,1); yield generator.athrow(args[0]); }
+                case "aclose" -> { requireArgs(name,args,0); yield generator.aclose(); }
+                default -> throw new PyException("AttributeError","'async_generator' object has no attribute '"+name+"'");
+            };
         }
         if (obj instanceof PyCoroutine coroutine) {
             return switch(name) {
