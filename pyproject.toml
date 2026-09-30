@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyjvm315"
-version = "0.11.0"
+version = "0.12.0"
 description = "Experimental Python 3.15 AST to JVM classfile transpiler"
 requires-python = ">=3.15"
 readme = "README.md"
