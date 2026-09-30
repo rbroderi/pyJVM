@@ -761,6 +761,55 @@ class Compiler:
             b.mark(done)
             self._gen_env_load(syn,b,scope); b.invokestatic(RUNTIME,"yieldFromReturnValue",f"({OBJ}){OBJ}")
 
+        def gen_value(expr: ast.expr):
+            if isinstance(expr, ast.Yield):
+                emit_yield(expr); return
+            if isinstance(expr, ast.YieldFrom):
+                emit_yield_from(expr); return
+            if not self._contains_yield(expr):
+                self._expr(expr,b,scope); return
+            if isinstance(expr, ast.BinOp):
+                gen_value(expr.left); left_slot=scope.temp(); b.astore(left_slot)
+                gen_value(expr.right); right_slot=scope.temp(); b.astore(right_slot)
+                b.aload(left_slot); b.aload(right_slot); self._binary_runtime(expr.op,b); return
+            if isinstance(expr, ast.List):
+                b.invokestatic(RUNTIME,"list0",f"(){OBJ}")
+                for elt in expr.elts:
+                    if isinstance(elt,ast.Starred):
+                        b.dup(); gen_value(elt.value); b.invokestatic(RUNTIME,"listExtend",f"({OBJ}{OBJ})V")
+                    else:
+                        b.dup(); gen_value(elt); b.invokestatic(RUNTIME,"listAppend",f"({OBJ}{OBJ})V")
+                return
+            if isinstance(expr, ast.Tuple):
+                b.invokestatic(RUNTIME,"tuple0",f"(){OBJ}")
+                for elt in expr.elts:
+                    if isinstance(elt,ast.Starred):
+                        b.dup(); gen_value(elt.value); b.invokestatic(RUNTIME,"tupleExtend",f"({OBJ}{OBJ})V")
+                    else:
+                        b.dup(); gen_value(elt); b.invokestatic(RUNTIME,"tupleAppend",f"({OBJ}{OBJ})V")
+                return
+            if isinstance(expr, ast.Set):
+                b.invokestatic(RUNTIME,"set0",f"(){OBJ}")
+                for elt in expr.elts:
+                    if isinstance(elt,ast.Starred):
+                        b.dup(); gen_value(elt.value); b.invokestatic(RUNTIME,"setUpdate",f"({OBJ}{OBJ})V")
+                    else:
+                        b.dup(); gen_value(elt); b.invokestatic(RUNTIME,"setAdd",f"({OBJ}{OBJ})V")
+                return
+            if isinstance(expr, ast.Dict):
+                b.invokestatic(RUNTIME,"dict0",f"(){OBJ}")
+                for key,value in zip(expr.keys,expr.values):
+                    b.dup()
+                    if key is None:
+                        gen_value(value); b.invokestatic(RUNTIME,"dictUpdate",f"({OBJ}{OBJ})V")
+                    else:
+                        gen_value(key); gen_value(value); b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
+                return
+            if isinstance(expr, ast.IfExp):
+                no,end=b.label(),b.label(); self._truthy(expr.test,b,scope); b.ifeq(no)
+                gen_value(expr.body); b.goto(end); b.mark(no); gen_value(expr.orelse); b.mark(end); return
+            raise CompileError(f"suspension inside {type(expr).__name__} is not implemented yet")
+
         synthetic_counter=[0]
 
         def gen_try_except(body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt]):
@@ -833,6 +882,19 @@ class Compiler:
             if isinstance(stmt,ast.AnnAssign) and isinstance(stmt.value,ast.Yield):
                 emit_yield(stmt.value)
                 self._store_target(stmt.target,b,scope); return
+            if isinstance(stmt,ast.Assign) and stmt.value is not None and self._contains_yield(stmt.value):
+                gen_value(stmt.value)
+                if len(stmt.targets)==1:
+                    self._store_target(stmt.targets[0],b,scope)
+                else:
+                    tmp=scope.temp(); b.astore(tmp)
+                    for target in stmt.targets:
+                        b.aload(tmp); self._store_target(target,b,scope)
+                return
+            if isinstance(stmt,ast.AnnAssign) and stmt.value is not None and self._contains_yield(stmt.value):
+                gen_value(stmt.value); self._store_target(stmt.target,b,scope); return
+            if isinstance(stmt,ast.Expr) and self._contains_yield(stmt.value):
+                gen_value(stmt.value); b.pop(); return
             if isinstance(stmt, ast.Raise) and stmt.exc is None:
                 if gen_active_exception_env:
                     self._gen_env_load(gen_active_exception_env[-1], b, scope)
@@ -843,7 +905,7 @@ class Compiler:
                 raise CompileError("No active exception to reraise")
             if isinstance(stmt,ast.Return):
                 if stmt.value is None: b.aconst_null()
-                else: self._expr(stmt.value,b,scope)
+                else: gen_value(stmt.value)
                 ret=scope.temp(); b.astore(ret)
                 if gen_finally_stack: emit_generator_cleanups()
                 b.aload(gen_slot); b.aload(ret)
