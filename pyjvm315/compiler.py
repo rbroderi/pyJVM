@@ -111,6 +111,7 @@ class FinallyContext:
     return_entry: object
     branch_entries: dict[object, object]
     manager_slot: int | None = None
+    async_manager: bool = False
 
 
 class Scope:
@@ -270,7 +271,7 @@ class Compiler:
         if name in {"object","int","bool","float","str","list","tuple","dict","set","range","type",
                     "BaseException","Exception","ArithmeticError","LookupError","ValueError","TypeError",
                     "ZeroDivisionError","OverflowError","IndexError","KeyError","AssertionError","RuntimeError",
-                    "NameError","UnboundLocalError","AttributeError","StopIteration","GeneratorExit","OSError"}:
+                    "NameError","UnboundLocalError","AttributeError","StopIteration","StopAsyncIteration","GeneratorExit","OSError"}:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
@@ -1221,7 +1222,9 @@ class Compiler:
 
     def _emit_context_cleanup(self, ctx: FinallyContext, b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         if ctx.manager_slot is not None:
-            b.aload(ctx.manager_slot); b.invokestatic(RUNTIME, "withExitNormal", f"({OBJ})V")
+            b.aload(ctx.manager_slot)
+            method = "asyncWithExitNormal" if ctx.async_manager else "withExitNormal"
+            b.invokestatic(RUNTIME, method, f"({OBJ})V")
         else:
             self._compile_finalbody_copy(ctx.finalbody, b, scope, in_function)
 
@@ -1263,28 +1266,28 @@ class Compiler:
 
         b.mark(done)
 
-    def _compile_with(self, items: list[ast.withitem], body: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool) -> None:
+    def _compile_with(self, items: list[ast.withitem], body: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool, *, is_async: bool = False) -> None:
         if not items:
             for stmt in body: self._stmt(stmt, b, scope, in_function)
             return
         item, rest = items[0], items[1:]
         manager_slot, exc_slot = scope.temp(), scope.temp()
         return_slot = scope.temp(); return_entry = b.label()
-        ctx = FinallyContext([], return_slot, return_entry, {}, manager_slot=manager_slot)
+        ctx = FinallyContext([], return_slot, return_entry, {}, manager_slot=manager_slot, async_manager=is_async)
         self._expr(item.context_expr, b, scope); b.astore(manager_slot)
-        b.aload(manager_slot); b.invokestatic(RUNTIME, "withEnter", f"({OBJ}){OBJ}")
+        b.aload(manager_slot); b.invokestatic(RUNTIME, "asyncWithEnter" if is_async else "withEnter", f"({OBJ}){OBJ}")
         if item.optional_vars is None: b.pop()
         else: self._store_target(item.optional_vars, b, scope)
         start, protected_end, handler, done = b.label(), b.label(), b.label(), b.label()
         b.mark(start)
         self.finally_stack.append(ctx)
-        self._compile_with(rest, body, b, scope, in_function)
+        self._compile_with(rest, body, b, scope, in_function, is_async=is_async)
         self.finally_stack.pop()
         b.mark(protected_end)
-        b.aload(manager_slot); b.invokestatic(RUNTIME, "withExitNormal", f"({OBJ})V")
+        b.aload(manager_slot); b.invokestatic(RUNTIME, "asyncWithExitNormal" if is_async else "withExitNormal", f"({OBJ})V")
         b.goto(done)
         b.mark(handler); b.astore(exc_slot)
-        b.aload(manager_slot); b.aload(exc_slot); b.invokestatic(RUNTIME, "withExitException", f"({OBJ}{OBJ})Z")
+        b.aload(manager_slot); b.aload(exc_slot); b.invokestatic(RUNTIME, "asyncWithExitException" if is_async else "withExitException", f"({OBJ}{OBJ})Z")
         b.ifne(done); b.aload(exc_slot); b.athrow()
         b.add_exception_handler(start, protected_end, handler, "java/lang/Throwable")
 
@@ -1431,6 +1434,21 @@ class Compiler:
                 self._expr(value, b, scope)
                 self._binary_runtime(op, b)
                 self._store_name(name, b, scope)
+            case ast.AugAssign(target=ast.Attribute(value=obj, attr=attr), op=op, value=value):
+                obj_slot, result_slot = scope.temp(), scope.temp()
+                self._expr(obj, b, scope); b.astore(obj_slot)
+                b.aload(obj_slot); b.ldc_string(attr); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
+                self._expr(value, b, scope); self._binary_runtime(op, b); b.astore(result_slot)
+                b.aload(obj_slot); b.ldc_string(attr); b.aload(result_slot)
+                b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
+            case ast.AugAssign(target=ast.Subscript(value=obj, slice=key), op=op, value=value):
+                obj_slot, key_slot, result_slot = scope.temp(), scope.temp(), scope.temp()
+                self._expr(obj, b, scope); b.astore(obj_slot)
+                self._expr(key, b, scope); b.astore(key_slot)
+                b.aload(obj_slot); b.aload(key_slot); b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
+                self._expr(value, b, scope); self._binary_runtime(op, b); b.astore(result_slot)
+                b.aload(obj_slot); b.aload(key_slot); b.aload(result_slot)
+                b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
             case ast.Global(names=names):
                 scope.global_decl.update(names)
             case ast.Nonlocal(names=names):
@@ -1468,6 +1486,20 @@ class Compiler:
                 start, normal_end, break_end = b.label(), b.label(), b.label()
                 b.mark(start); b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterHasNext", f"({OBJ})Z"); b.ifeq(normal_end)
                 b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterNext", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
+                self.loop_stack.append((start, break_end))
+                for s in body: self._stmt(s, b, scope, in_function)
+                self.loop_stack.pop(); b.goto(start)
+                b.mark(normal_end)
+                for s in orelse: self._stmt(s, b, scope, in_function)
+                b.mark(break_end)
+            case ast.AsyncFor(target=target, iter=iterable, body=body, orelse=orelse):
+                iterator_slot, result_slot = scope.temp(), scope.temp()
+                self._expr(iterable, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
+                start, normal_end, break_end = b.label(), b.label(), b.label()
+                b.mark(start)
+                b.aload(iterator_slot); b.invokestatic(RUNTIME, "asyncIterNext", f"({OBJ}){OBJ}"); b.astore(result_slot)
+                b.aload(result_slot); b.invokestatic(RUNTIME, "asyncNextDone", f"({OBJ})Z"); b.ifne(normal_end)
+                b.aload(result_slot); b.invokestatic(RUNTIME, "asyncNextValue", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
                 self.loop_stack.append((start, break_end))
                 for s in body: self._stmt(s, b, scope, in_function)
                 self.loop_stack.pop(); b.goto(start)
@@ -1521,6 +1553,8 @@ class Compiler:
                 self._compile_try_finally(body, handlers, orelse, finalbody, b, scope, in_function)
             case ast.With(items=items, body=body):
                 self._compile_with(items, body, b, scope, in_function)
+            case ast.AsyncWith(items=items, body=body):
+                self._compile_with(items, body, b, scope, in_function, is_async=True)
             case _:
                 raise CompileError(f"Unsupported statement: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
@@ -1666,6 +1700,10 @@ class Compiler:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "dictFrom", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"sorted", "reversed"}:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, name, f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="aiter"), args=[arg], keywords=[]):
+                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="anext"), args=[arg], keywords=[]):
+                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "anext_", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="iter"), args=[arg], keywords=[]):
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="next"), args=[arg], keywords=[]):
@@ -1674,7 +1712,7 @@ class Compiler:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "enumerate1", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="zip"), args=[a, c], keywords=[]):
                 self._expr(a, b, scope); self._expr(c, b, scope); b.invokestatic(RUNTIME, "zip2", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in {"Exception", "BaseException", "ValueError", "TypeError", "ZeroDivisionError", "OverflowError", "IndexError", "KeyError", "AssertionError", "RuntimeError", "NameError", "UnboundLocalError", "AttributeError", "StopIteration", "GeneratorExit", "OSError"}:
+            case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in {"Exception", "BaseException", "ValueError", "TypeError", "ZeroDivisionError", "OverflowError", "IndexError", "KeyError", "AssertionError", "RuntimeError", "NameError", "UnboundLocalError", "AttributeError", "StopIteration", "StopAsyncIteration", "GeneratorExit", "OSError"}:
                 if len(args) > 1: raise CompileError("exception constructors currently accept zero or one positional argument")
                 b.ldc_string(name)
                 if args: self._expr(args[0], b, scope)
