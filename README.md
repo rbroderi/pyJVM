@@ -331,7 +331,8 @@ an external scheduling token, receive a value back on resume, return a final val
 receive an exception injected at the suspended await point.
 
 This tranche also introduces repository-native compatibility CI with Java 21 and the
-currently available CPython 3.14 runner. The compiler still parses source with the Python
+currently available CPython 3.14 runner. The focused corpus contains 61 focused executable
+conformance cases at this milestone. The compiler still parses source with the Python
 3.15 AST feature level; a dedicated 3.15 CI lane will be added when setup-python exposes
 3.15 on the hosted runner.
 
