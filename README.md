@@ -227,3 +227,23 @@ environment. A deliberately explicit remaining corner is abrupt
 `return`/`break`/`continue` through a *yielding* generator `finally`; that case
 needs a persisted pending-control-transfer record in addition to the pending
 exception record now implemented.
+
+## 0.10 class model and CPython test probing
+
+Version 0.10 extends user-defined classes with class attributes, `@property`
+getters/setters, zero-argument and explicit `super()`, `@classmethod`,
+`@staticmethod`, and broader special-method dispatch. User classes can now
+participate in `str`/`repr`, truth testing, `len`, arithmetic/comparison,
+indexing, membership, and iterator protocol through their dunder methods.
+
+A new `pyjvm315-probe` command provides a compile-coverage lane for a real
+CPython checkout. Point it at `Lib/test` to group the remaining unsupported
+compiler features by frequency before attempting full differential execution:
+
+```bash
+pyjvm315-probe /path/to/cpython/Lib/test --pattern 'test_*.py'
+pyjvm315-probe /path/to/cpython/Lib/test --json > probe.json
+```
+
+The bundled focused differential corpus is now 41/41 passing in the current
+development environment.
