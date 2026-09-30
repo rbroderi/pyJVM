@@ -650,7 +650,9 @@ class Compiler:
             def visit_FunctionDef(self, n):
                 if n is node:
                     for st in n.body: self.visit(st)
-            def visit_AsyncFunctionDef(self, n): return
+            def visit_AsyncFunctionDef(self, n):
+                if n is node:
+                    for st in n.body: self.visit(st)
             def visit_Lambda(self, n): return
         V().visit(node)
         return out
