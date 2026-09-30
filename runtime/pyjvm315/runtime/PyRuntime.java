@@ -75,6 +75,7 @@ public final class PyRuntime {
         if (value instanceof PyRange) return "range";
         if (value instanceof PyFunction) return "function";
         if (value instanceof PyGenerator) return "generator";
+        if (value instanceof PyCoroutine) return "coroutine";
         if (value instanceof PyClass) return "type";
         if (value instanceof PyInstance i) return i.cls.name;
         if (value instanceof PyDictView) return "dict_view";
@@ -659,6 +660,34 @@ public final class PyRuntime {
     public static boolean iterHasNext(Object iterator) { return ((Iterator<?>) iterator).hasNext(); }
     public static Object iterNext(Object iterator) { return ((Iterator<?>) iterator).next(); }
 
+    public static Object aiter(Object value) {
+        if(value instanceof PyInstance instance){
+            PyMethod method=instance.cls.lookupMethod("__aiter__");
+            if(method!=null)return invoke(instance,method,new Object[0]);
+        }
+        throw new PyException("TypeError","object is not an async iterable");
+    }
+    public static Object anext_(Object iterator) {
+        if(iterator instanceof PyInstance instance){
+            PyMethod method=instance.cls.lookupMethod("__anext__");
+            if(method!=null)return invoke(instance,method,new Object[0]);
+        }
+        throw new PyException("TypeError","object is not an async iterator");
+    }
+    public static final class PyAsyncNextResult {
+        final boolean done; final Object value;
+        PyAsyncNextResult(boolean done,Object value){this.done=done;this.value=value;}
+    }
+    public static Object asyncIterNext(Object iterator) {
+        try { return new PyAsyncNextResult(false,awaitValue(anext_(iterator))); }
+        catch(PyException e) {
+            if(e.typeName.equals("StopAsyncIteration")) return new PyAsyncNextResult(true,null);
+            throw e;
+        }
+    }
+    public static boolean asyncNextDone(Object result){return ((PyAsyncNextResult)result).done;}
+    public static Object asyncNextValue(Object result){return ((PyAsyncNextResult)result).value;}
+
     private static Iterable<?> iterable(Object value) {
         if(value instanceof PyInstance instance){
             PyMethod m=instance.cls.lookupMethod("__iter__");
@@ -1172,6 +1201,17 @@ public final class PyRuntime {
         Object result=callMethod(manager, "__exit__", new Object[]{new PyExceptionType(pythonExceptionType(t)), exceptionValue(t), null});
         return truth(result);
     }
+    public static Object asyncWithEnter(Object manager) {
+        return awaitValue(callMethod(manager,"__aenter__",new Object[0]));
+    }
+    public static void asyncWithExitNormal(Object manager) {
+        awaitValue(callMethod(manager,"__aexit__",new Object[]{null,null,null}));
+    }
+    public static boolean asyncWithExitException(Object manager,Object throwableObj) {
+        Throwable t=(Throwable)throwableObj;
+        Object result=awaitValue(callMethod(manager,"__aexit__",new Object[]{new PyExceptionType(pythonExceptionType(t)),exceptionInstance(t),null}));
+        return truth(result);
+    }
 
     // ---------- Python-visible code/frame/traceback objects ----------
     private static final class ActiveFrame {
@@ -1232,6 +1272,7 @@ public final class PyRuntime {
     public static void raiseObject(Object value) {
         if (value instanceof PyExceptionValue e) throw new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback);
         if (value instanceof PyException e) throw e;
+        if (value instanceof PyBuiltinType t && exceptionIsSubclass(t.name,"BaseException")) throw new PyException(t.name,null);
         throw new PyException("TypeError", "exceptions must derive from BaseException");
     }
     public static void rethrowThrowable(Object value) {

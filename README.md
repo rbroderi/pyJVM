@@ -301,3 +301,20 @@ compiled awaits synchronously to completion; event-loop suspension, async genera
 The focused differential corpus contains 51 executable cases and remains green in
 batched validation against the available CPython reference.
 
+## 0.14 async iteration and async context managers
+
+Version 0.14 extends the coroutine groundwork with Python's async iteration and context
+manager protocols. Compiled code now supports `async for`, loop `else`, `async with`,
+`aiter()`, `anext()`, `__aiter__`, `__anext__`, `__aenter__`, `__aexit__`, and
+`StopAsyncIteration`. Return/break/continue cleanup through async context managers uses
+the same structured unwinding machinery as regular `with` and `try/finally`.
+
+The tranche also closes two general compatibility gaps found by the async cases:
+augmented assignment now supports attribute and subscript targets while evaluating the
+container/object only once, and exception classes can be raised directly (for example
+`raise ValueError`) rather than requiring an explicitly-created exception instance.
+
+The focused differential corpus now contains 57 executable cases. All cases pass in
+batched validation against the available CPython reference, including the multi-file
+import/package cases.
+
