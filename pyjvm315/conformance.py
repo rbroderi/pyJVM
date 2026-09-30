@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             reasons = Counter(r.detail for r in results if r.status == "UNSUPPORTED")
             for reason, count in reasons.most_common():
                 print(f"  {count:4}  {reason}")
-    return 1 if failed else 0
+    return 1 if (failed or unsupported) else 0
 
 
 if __name__ == "__main__":
