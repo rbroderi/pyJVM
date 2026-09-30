@@ -393,8 +393,6 @@ class Compiler:
         is_generator = yf.found and isinstance(node, ast.FunctionDef)
         is_async = isinstance(node, ast.AsyncFunctionDef)
         is_async_generator = is_async and yf.found
-        if is_async_generator and self._contains_await(node):
-            raise CompileError("await inside async generators is not implemented yet")
         env_mode = is_generator or is_async or bool(enclosing_locals) or has_nested or bool(nonlocal_names)
 
         posonly = [a.arg for a in node.args.posonlyargs]
@@ -547,7 +545,8 @@ class Compiler:
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         if info.is_async_generator:
-            self._compile_generator_function(node, info, as_async_generator=True)
+            lowered = self._lower_async_function(node) if self._contains_await(node) else node
+            self._compile_generator_function(lowered, info, as_async_generator=True)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         if info.is_async and self._contains_await(node):
@@ -674,7 +673,7 @@ class Compiler:
         b.invokestatic(RUNTIME,maker,f"({OBJ*6}){OBJ}"); b.areturn()
         code=b.finish()
         self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
-        self._compile_generator_resume(node, info, resume_name)
+        self._compile_generator_resume(node, info, resume_name, async_generator_mode=as_async_generator)
 
     def _gen_env_store(self, name: str, value_slot: int, b: CodeBuilder, scope: Scope) -> None:
         b.aload(scope.env_slot); b.ldc_string(name); b.aload(value_slot)
@@ -684,7 +683,7 @@ class Compiler:
         b.aload(scope.env_slot); b.ldc_string(name)
         b.invokestatic(RUNTIME,"envGet",f"({OBJ}{OBJ}){OBJ}")
 
-    def _compile_generator_resume(self, node: ast.FunctionDef | ast.AsyncFunctionDef, info: FunctionInfo, resume_name: str) -> None:
+    def _compile_generator_resume(self, node: ast.FunctionDef | ast.AsyncFunctionDef, info: FunctionInfo, resume_name: str, *, async_generator_mode: bool = False) -> None:
         yields=self._generator_yields(node)
         state_for={id(y):i+1 for i,y in enumerate(yields)}
         labels={i:b_label for i,b_label in []}  # populated below
@@ -722,6 +721,8 @@ class Compiler:
             value_slot=scope.temp()
             if y.value is None: b.aconst_null()
             else: self._expr(y.value,b,scope)
+            if async_generator_mode:
+                b.invokestatic(RUNTIME,"asyncGeneratorYield",f"({OBJ}){OBJ}")
             b.astore(value_slot)
             next_state=state_for[id(y)]
             b.aload(gen_slot); self._emit_int(next_state,b)
