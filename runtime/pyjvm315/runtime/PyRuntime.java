@@ -806,6 +806,8 @@ public final class PyRuntime {
         private Object advance() {
             if (finished) throw new PyGeneratorEnd(returnValue);
             started = true;
+            ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
                 var reflected=cls.getDeclaredMethod(resumeMethod, Object.class);
@@ -817,13 +819,16 @@ public final class PyRuntime {
                 if (cause instanceof PyGeneratorEnd e) { finished=true; throw e; }
                 if (cause instanceof PyException p && p.typeName.equals("StopIteration")) {
                     finished=true;
-                    throw new PyException("RuntimeError", "generator raised StopIteration");
+                    PyException wrapped=new PyException("RuntimeError", "generator raised StopIteration"); wrapped.addFrame(displayName,filename,logical.firstlineno,logical.line); throw wrapped;
                 }
+                if (cause instanceof PyException p) { finished=true; p.addFrame(displayName,filename,logical.firstlineno,logical.line); throw p; }
                 if (cause instanceof RuntimeException r) { finished=true; throw r; }
                 if (cause instanceof Error e) { finished=true; throw e; }
                 throw new RuntimeException(cause);
             } catch (ReflectiveOperationException exc) {
                 throw new RuntimeException(exc);
+            } finally {
+                ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
             }
         }
 
@@ -1086,6 +1091,8 @@ public final class PyRuntime {
         }
 
         private Object invokeStatic(Object[] bound) {
+            ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
                 int hidden = envMode ? 1 : 0;
@@ -1100,11 +1107,14 @@ public final class PyRuntime {
                 return reflected.invoke(null, actual);
             } catch (java.lang.reflect.InvocationTargetException exc) {
                 Throwable cause=exc.getCause();
+                if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
                 if (cause instanceof RuntimeException r) throw r;
                 if (cause instanceof Error e) throw e;
                 throw new RuntimeException(cause);
             } catch (ReflectiveOperationException exc) {
                 throw new RuntimeException(exc);
+            } finally {
+                ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
             }
         }
 
