@@ -1,24 +1,23 @@
 {
-  "version": "0.10.0",
-  "reference_python": "current environment CPython (3.13.x)",
+  "version": "0.11.0",
+  "reference_python": "current environment CPython (3.13.x); CPython 3.15 test sources used for feature prioritization",
   "focused_conformance": {
-    "passed": 41,
+    "passed": 43,
     "unsupported": 0,
     "failed": 0
   },
   "new_features": [
-    "class attributes",
-    "property getters/setters",
-    "zero-argument and explicit super",
-    "classmethod/staticmethod",
-    "special-method dispatch",
-    "CPython Lib/test compile probe"
+    "full Python argument binding for instance methods",
+    "keyword/default/varargs binding for classmethod and staticmethod",
+    "keyword-aware class construction through __init__",
+    "user-defined __get__/__set__/__delete__ descriptor protocol",
+    "__getattr__ fallback"
   ],
   "next_focus": [
     "traceback/frame objects",
-    "method argument binding/defaults",
-    "richer descriptors",
+    "exception traceback attachment",
+    "richer class decorators and descriptors",
     "async def/await",
-    "real CPython 3.15 Lib/test execution"
+    "curated CPython 3.15 Lib/test execution"
   ]
 }
