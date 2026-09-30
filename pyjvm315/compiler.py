@@ -1376,11 +1376,14 @@ class Compiler:
                         b.aload(module_slot); b.ldc_string(alias.name)
                         b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
                     self._store_name(alias.asname or alias.name, b, scope)
-            case ast.ClassDef(name=name):
+            case ast.ClassDef(name=name, decorator_list=decorators):
                 info = self.classes[name]
+                decorator_slots: list[int] = []
+                for decorator in decorators:
+                    self._expr(decorator, b, scope)
+                    slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
                 b.ldc_string(name)
                 b.invokestatic(RUNTIME, "class0", f"({OBJ}){OBJ}")
-                b.dup(); b.putstatic(self.class_name, info.class_field, OBJ)
                 class_slot = scope.temp(); b.astore(class_slot)
                 for base_name in info.bases:
                     b.aload(class_slot); self._load_name(base_name, b, scope)
@@ -1402,12 +1405,23 @@ class Compiler:
                     else: b.ldc_string(method.kwarg)
                     b.aload(defaults_slot); b.ldc_string(self.filename); self._emit_int(method.firstlineno, b)
                     b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 13})V")
+                    if method.is_async:
+                        b.aload(class_slot); b.ldc_string(method.py_name)
+                        b.invokestatic(RUNTIME, "classSetMethodAsync", f"({OBJ}{OBJ})V")
                 for prop in info.properties.values():
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
                     else: b.ldc_string(prop.setter.java_name)
                     b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
                 b.aload(class_slot); b.invokestatic(RUNTIME, "classFinalize", f"({OBJ})V")
+                for decorator_slot in reversed(decorator_slots):
+                    b.aload(decorator_slot)
+                    b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                    b.dup(); b.aload(class_slot); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                    b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    b.astore(class_slot)
+                b.aload(class_slot); b.putstatic(self.class_name, info.class_field, OBJ)
             case ast.AnnAssign(target=ast.Name(id=name), value=value):
                 if value is None: b.aconst_null()
                 else: self._expr(value, b, scope)
