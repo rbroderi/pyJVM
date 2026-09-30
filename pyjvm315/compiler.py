@@ -1027,6 +1027,8 @@ class Compiler:
         return info
 
     def _compile_lambda_method(self, node: ast.Lambda, info: FunctionInfo) -> None:
+        saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
+        self.current_frame_name,self.current_frame_firstlineno="<lambda>",node.lineno
         b=CodeBuilder(self.cf.cp); arg_start=1 if info.env_mode else 0
         scope=Scope(info.bound_args,start_slot=arg_start,env_mode=info.env_mode,
                     local_names=info.local_names,free_names=info.free_names)
@@ -1040,6 +1042,7 @@ class Compiler:
         self._expr(node.body,b,scope); b.areturn()
         self.loop_stack,self.exception_stack,self.finally_stack=saved_loop,saved_exc,saved_finally
         code=b.finish(); self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
+        self.current_frame_name,self.current_frame_firstlineno=saved_frame
 
     def _emit_lambda(self, node: ast.Lambda, b: CodeBuilder, scope: Scope) -> None:
         info=self._lambda_info(node,scope)
@@ -1057,6 +1060,8 @@ class Compiler:
         else: b.aconst_null()
         self._boxed_bool(info.env_mode,b)
         b.invokestatic(RUNTIME,"makeFunctionEx",f"({OBJ*10}){OBJ}")
+        b.dup(); b.ldc_string("<lambda>"); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
+        b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
 
     def _emit_call_parts(self, args: list[ast.expr], keywords: list[ast.keyword], b: CodeBuilder, scope: Scope) -> None:
         b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -1280,6 +1285,8 @@ class Compiler:
         b.mark(done)
 
     def _stmt(self, node: ast.stmt, b: CodeBuilder, scope: Scope, in_function: bool) -> None:
+        if hasattr(node, "lineno"):
+            self._emit_int(node.lineno, b); b.invokestatic(RUNTIME,"setCurrentLine",f"({OBJ})V")
         match node:
             case ast.Pass():
                 return
@@ -1689,6 +1696,7 @@ class Compiler:
         for stmt in orelse: self._stmt(stmt, b, scope, in_function)
         b.goto(done)
         b.mark(dispatch); b.astore(exc_slot)
+        b.aload(exc_slot); b.invokestatic(RUNTIME,"tracebackAddCurrentFrame",f"({OBJ})V")
         b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
         for handler in handlers:
             next_handler = b.label()
