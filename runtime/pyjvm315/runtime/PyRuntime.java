@@ -1,6 +1,7 @@
 package pyjvm315.runtime;
 
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -793,9 +794,13 @@ public final class PyRuntime {
         boolean started = false;
         boolean buffered = false;
         Object bufferedValue = null;
+        String displayName, filename; long firstlineno;
 
         PyGenerator(String owner, String resumeMethod, PyEnv env) {
-            this.owner=owner; this.resumeMethod=resumeMethod; this.env=env;
+            this(owner,resumeMethod,env,resumeMethod,owner,0);
+        }
+        PyGenerator(String owner,String resumeMethod,PyEnv env,String displayName,String filename,long firstlineno) {
+            this.owner=owner; this.resumeMethod=resumeMethod; this.env=env; this.displayName=displayName; this.filename=filename; this.firstlineno=firstlineno;
         }
 
         private Object advance() {
@@ -868,6 +873,9 @@ public final class PyRuntime {
 
     public static Object makeGenerator(Object ownerObj, Object methodObj, Object envObj) {
         return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj);
+    }
+    public static Object makeGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
+        return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
     }
     public static Object generatorEnv(Object genObj) { return ((PyGenerator)genObj).env; }
     public static Object generatorState(Object genObj) { return ((PyGenerator)genObj).state; }
@@ -972,6 +980,10 @@ public final class PyRuntime {
         );
     }
 
+    public static void setFunctionMeta(Object functionObj,Object nameObj,Object filenameObj,Object firstlineObj) {
+        PyFunction f=(PyFunction)functionObj; f.displayName=(String)nameObj; f.filename=(String)filenameObj; f.firstlineno=bigInt(firstlineObj).longValue();
+    }
+
     private static List<String> splitNames(String csv) {
         if (csv == null || csv.isEmpty()) return List.of();
         return Arrays.asList(csv.split(",", -1));
@@ -1007,6 +1019,7 @@ public final class PyRuntime {
         final LinkedHashMap<String,Object> defaults;
         final PyEnv closure;
         final boolean envMode;
+        String displayName, filename; long firstlineno;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -1017,6 +1030,7 @@ public final class PyRuntime {
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults, PyEnv closure, boolean envMode) {
             this.owner=owner; this.method=method; this.posonly=posonly; this.poskw=poskw; this.kwonly=kwonly;
             this.vararg=vararg; this.kwarg=kwarg; this.defaults=defaults; this.closure=closure; this.envMode=envMode;
+            this.displayName=method; this.filename=owner; this.firstlineno=0;
         }
 
         Object call(List<Object> args, Map<Object,Object> kwargsRaw) {
@@ -1225,13 +1239,14 @@ public final class PyRuntime {
     }
     public static void classAddMethodEx(Object cls, Object pyName, Object owner, Object javaName, Object kind,
                                         Object posonlyObj, Object poskwObj, Object kwonlyObj,
-                                        Object varargObj, Object kwargObj, Object defaultsObj) {
+                                        Object varargObj, Object kwargObj, Object defaultsObj, Object filenameObj, Object firstlineObj) {
         @SuppressWarnings("unchecked") Map<Object,Object> rawDefaults=(Map<Object,Object>)defaultsObj;
         LinkedHashMap<String,Object> defaults=new LinkedHashMap<>();
         for(var e:rawDefaults.entrySet()) defaults.put((String)e.getKey(),e.getValue());
         PyFunction function=new PyFunction((String)owner,(String)javaName,
             splitNames((String)posonlyObj),splitNames((String)poskwObj),splitNames((String)kwonlyObj),
             (String)varargObj,(String)kwargObj,defaults);
+        function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
         ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
     }
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
