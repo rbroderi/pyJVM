@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -392,7 +393,7 @@ class Compiler:
         if isinstance(node, ast.AsyncFunctionDef) and yf.found:
             raise CompileError("async generators are not implemented yet")
         is_async = isinstance(node, ast.AsyncFunctionDef)
-        env_mode = is_generator or bool(enclosing_locals) or has_nested or bool(nonlocal_names)
+        env_mode = is_generator or is_async or bool(enclosing_locals) or has_nested or bool(nonlocal_names)
 
         posonly = [a.arg for a in node.args.posonlyargs]
         poskw = [a.arg for a in node.args.args]
@@ -543,6 +544,11 @@ class Compiler:
             self._compile_generator_function(node, info)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
+        if info.is_async and self._contains_await(node):
+            lowered = self._lower_async_function(node)
+            self._compile_generator_function(lowered, info, as_coroutine=True)
+            self.current_frame_name,self.current_frame_firstlineno=saved_frame
+            return
         b = CodeBuilder(self.cf.cp)
         arg_start = 1 if info.env_mode else 0
         scope = Scope(info.bound_args, start_slot=arg_start, env_mode=info.env_mode,
@@ -563,6 +569,54 @@ class Compiler:
         self.cf.add_method(Method(info.java_name, info.descriptor, code,
             max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
         self.current_frame_name,self.current_frame_firstlineno=saved_frame
+
+    @staticmethod
+    def _contains_await(node: ast.AST) -> bool:
+        class V(ast.NodeVisitor):
+            found = False
+            root = None
+            def visit_Await(self, n): self.found = True
+            def visit_FunctionDef(self, n):
+                if n is self.root:
+                    for st in n.body: self.visit(st)
+            def visit_AsyncFunctionDef(self, n):
+                if n is self.root:
+                    for st in n.body: self.visit(st)
+            def visit_Lambda(self, n): return
+        v=V(); v.root=node; v.visit(node); return v.found
+
+    def _lower_async_function(self, node: ast.AsyncFunctionDef) -> ast.FunctionDef:
+        original = copy.deepcopy(node)
+
+        class Lower(ast.NodeTransformer):
+            def __init__(self, root):
+                self.root=root
+            def visit_FunctionDef(self, n):
+                if n is self.root:
+                    return self.generic_visit(n)
+                return n
+            def visit_AsyncFunctionDef(self, n):
+                if n is self.root:
+                    return self.generic_visit(n)
+                return n
+            def visit_Lambda(self, n):
+                return n
+            def visit_Await(self, n):
+                awaited=self.visit(n.value)
+                call=ast.Call(func=ast.Name(id="__py_await_iter_internal",ctx=ast.Load()),args=[awaited],keywords=[])
+                return ast.copy_location(ast.YieldFrom(value=call),n)
+
+        lowered_async=Lower(original).visit(original)
+        lowered=ast.FunctionDef(
+            name=lowered_async.name,
+            args=lowered_async.args,
+            body=lowered_async.body,
+            decorator_list=[],
+            returns=lowered_async.returns,
+            type_comment=getattr(lowered_async,"type_comment",None),
+            type_params=getattr(lowered_async,"type_params",[]),
+        )
+        return ast.copy_location(lowered,node)
 
     @staticmethod
     def _contains_yield(node: ast.AST) -> bool:
@@ -593,7 +647,7 @@ class Compiler:
         V().visit(node)
         return out
 
-    def _compile_generator_function(self, node: ast.FunctionDef, info: FunctionInfo) -> None:
+    def _compile_generator_function(self, node: ast.FunctionDef, info: FunctionInfo, *, as_coroutine: bool = False) -> None:
         # The callable body creates a persistent frame and returns immediately.
         b=CodeBuilder(self.cf.cp)
         scope=Scope(info.bound_args,start_slot=1,env_mode=True,local_names=info.local_names,
@@ -606,7 +660,8 @@ class Compiler:
         resume_name=info.java_name+"$resume"
         b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
         b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
-        b.invokestatic(RUNTIME,"makeGeneratorEx",f"({OBJ*6}){OBJ}"); b.areturn()
+        maker = "makeSuspendableCoroutineEx" if as_coroutine else "makeGeneratorEx"
+        b.invokestatic(RUNTIME,maker,f"({OBJ*6}){OBJ}"); b.areturn()
         code=b.finish()
         self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
         self._compile_generator_resume(node, info, resume_name)
@@ -1700,6 +1755,8 @@ class Compiler:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "dictFrom", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"sorted", "reversed"}:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, name, f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
+                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="aiter"), args=[arg], keywords=[]):
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="anext"), args=[arg], keywords=[]):

@@ -911,6 +911,10 @@ public final class PyRuntime {
     public static Object makeGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
         return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
     }
+    public static Object makeSuspendableCoroutineEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
+        PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
+        return new PyCoroutine(frame,(String)nameObj);
+    }
     public static Object generatorEnv(Object genObj) { return ((PyGenerator)genObj).env; }
     public static Object generatorState(Object genObj) { return ((PyGenerator)genObj).state; }
     public static Object generatorSentValue(Object genObj) { return ((PyGenerator)genObj).sentValue; }
@@ -968,8 +972,24 @@ public final class PyRuntime {
                     return new PyYieldFromResult(true,end.value);
                 }
             }
+            if(iteratorObj instanceof PyCoroutineAwaitIterator awaiter) {
+                if(exceptionObjectIs(pending,"GeneratorExit")) {
+                    awaiter.close();
+                    raiseObject(pending);
+                    return null;
+                }
+                try {
+                    return new PyYieldFromResult(false,awaiter.throw_(pending));
+                } catch(PyGeneratorEnd end) {
+                    return new PyYieldFromResult(true,end.value);
+                }
+            }
             raiseObject(pending);
             return null;
+        }
+        if(iteratorObj instanceof PyCoroutineAwaitIterator awaiter) {
+            try { return new PyYieldFromResult(false,awaiter.send(parent.sentValue)); }
+            catch(PyGeneratorEnd end) { return new PyYieldFromResult(true,end.value); }
         }
         return yieldFromStep(iteratorObj,parent.sentValue);
     }
@@ -983,6 +1003,7 @@ public final class PyRuntime {
     public static Object yieldFromValue(Object resultObj) { return ((PyYieldFromResult)resultObj).value; }
     public static Object yieldFromReturnValue(Object iteratorObj) {
         if (iteratorObj instanceof PyGenerator gen) return gen.returnValue;
+        if (iteratorObj instanceof PyCoroutineAwaitIterator awaiter) return awaiter.coroutine.result;
         return null;
     }
 
@@ -1157,36 +1178,112 @@ public final class PyRuntime {
     }
 
     public static final class PyCoroutine {
-        final PyFunction function; final Object[] bound; boolean started=false, finished=false, closed=false; Object result=null;
-        PyCoroutine(PyFunction function,Object[] bound){this.function=function;this.bound=bound;}
-        Object run(){
+        final PyFunction function; final Object[] bound; final String displayName;
+        PyGenerator frame=null; PyCoroutine adopted=null;
+        boolean started=false, finished=false, closed=false; Object result=null;
+
+        PyCoroutine(PyFunction function,Object[] bound){
+            this.function=function;this.bound=bound;this.displayName=function.displayName;
+        }
+        PyCoroutine(PyGenerator frame,String displayName){
+            this.function=null;this.bound=null;this.frame=frame;this.displayName=displayName;
+        }
+
+        private Object resume(Object value,Object thrown,boolean closing){
             if(closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
-            if(finished) return result;
-            started=true; result=function.invokeStatic(bound); finished=true; return result;
+            if(finished) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
+            if(!started && value!=null && thrown==null)
+                throw new PyException("TypeError","can't send non-None value to a just-started coroutine");
+            started=true;
+
+            if(adopted!=null) return adopted.resume(value,thrown,closing);
+            if(frame!=null) {
+                try {
+                    Object yielded;
+                    if(closing) { frame.close(); finished=true; result=null; throw new PyException("StopIteration",null); }
+                    if(thrown!=null) yielded=frame.throw_(thrown);
+                    else yielded=frame.send(value);
+                    return yielded;
+                } catch(PyGeneratorEnd end) {
+                    finished=true; result=end.value; throw new PyException("StopIteration",result);
+                }
+            }
+
+            Object out=function.invokeStatic(bound);
+            if(out instanceof PyCoroutine inner) {
+                adopted=inner;
+                try { return adopted.resume(value,thrown,closing); }
+                catch(PyException e) {
+                    if(e.typeName.equals("StopIteration")) { finished=true; result=e.value; }
+                    throw e;
+                }
+            }
+            finished=true; result=out;
+            throw new PyException("StopIteration",out);
         }
-        Object send(Object value){
-            if(value!=null) throw new PyException("TypeError","can't send non-None value to a just-started coroutine");
-            if(finished || closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
-            Object out=run(); throw new PyException("StopIteration",out);
+
+        Object run(){
+            while(true) {
+                try {
+                    Object yielded=resume(null,null,false);
+                    throw new PyException("RuntimeError","coroutine suspended while synchronous completion was required: "+pyRepr(yielded));
+                } catch(PyException e) {
+                    if(e.typeName.equals("StopIteration")) return e.value;
+                    throw e;
+                }
+            }
         }
-        Object close(){closed=true;finished=true;return null;}
+        Object send(Object value){return resume(value,null,false);}
+        Object throw_(Object value){return resume(null,value,false);}
+        Object close(){
+            if(finished || closed){closed=true;return null;}
+            try { resume(null,new PyExceptionValue("GeneratorExit",null),true); }
+            catch(PyException e) {
+                if(e.typeName.equals("StopIteration") || e.typeName.equals("GeneratorExit")) { closed=true;finished=true;return null; }
+                throw e;
+            }
+            closed=true;finished=true;return null;
+        }
         Object awaitIterator(){return new PyCoroutineAwaitIterator(this);}
-        @Override public String toString(){return "<coroutine object "+function.displayName+">";}
+        @Override public String toString(){return "<coroutine object "+displayName+">";}
     }
     private static final class PyCoroutineAwaitIterator implements Iterator<Object>, Iterable<Object> {
         final PyCoroutine coroutine; boolean done=false;
         PyCoroutineAwaitIterator(PyCoroutine coroutine){this.coroutine=coroutine;}
+        Object send(Object value){
+            if(done)throw new PyGeneratorEnd(coroutine.result);
+            try { return coroutine.send(value); }
+            catch(PyException e) {
+                if(e.typeName.equals("StopIteration")) { done=true; throw new PyGeneratorEnd(e.value); }
+                throw e;
+            }
+        }
+        Object throw_(Object value){
+            if(done){raiseObject(value);return null;}
+            try { return coroutine.throw_(value); }
+            catch(PyException e) {
+                if(e.typeName.equals("StopIteration")) { done=true; throw new PyGeneratorEnd(e.value); }
+                throw e;
+            }
+        }
+        Object close(){done=true;return coroutine.close();}
         public boolean hasNext(){return !done && !coroutine.finished && !coroutine.closed;}
-        public Object next(){if(done)throw new PyGeneratorEnd(coroutine.result);done=true;Object value=coroutine.run();throw new PyGeneratorEnd(value);}
+        public Object next(){return send(null);}
         public Iterator<Object> iterator(){return this;}
+    }
+    public static Object awaitIterator(Object value){
+        if(value instanceof PyCoroutine coroutine) return coroutine.awaitIterator();
+        if(value instanceof PyInstance instance && instance.cls.lookupMethod("__await__")!=null)
+            return invoke(instance,instance.cls.lookupMethod("__await__"),new Object[0]);
+        throw new PyException("TypeError","object can't be used in 'await' expression");
     }
     public static Object awaitValue(Object value){
         if(value instanceof PyCoroutine coroutine) return coroutine.run();
-        if(value instanceof PyInstance instance && instance.cls.lookupMethod("__await__")!=null){
-            Object iterator=invoke(instance,instance.cls.lookupMethod("__await__"),new Object[0]);
-            while(true){try{next_(iterator);}catch(PyException e){if(e.typeName.equals("StopIteration"))return e.value;throw e;}}
+        Object iterator=awaitIterator(value);
+        while(true){
+            try { next_(iterator); }
+            catch(PyException e){if(e.typeName.equals("StopIteration"))return e.value;throw e;}
         }
-        throw new PyException("TypeError","object can't be used in 'await' expression");
     }
 
     // ---------- Context managers ----------
@@ -1446,6 +1543,7 @@ public final class PyRuntime {
         if (obj instanceof PyCoroutine coroutine) {
             return switch(name) {
                 case "send" -> { requireArgs(name,args,1); yield coroutine.send(args[0]); }
+                case "throw" -> { requireArgs(name,args,1); yield coroutine.throw_(args[0]); }
                 case "close" -> { requireArgs(name,args,0); yield coroutine.close(); }
                 case "__await__" -> { requireArgs(name,args,0); yield coroutine.awaitIterator(); }
                 default -> throw new PyException("AttributeError","'coroutine' object has no attribute '"+name+"'");

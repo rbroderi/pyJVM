@@ -318,3 +318,21 @@ The focused differential corpus now contains 57 executable cases. All cases pass
 batched validation against the available CPython reference, including the multi-file
 import/package cases.
 
+## 0.15 suspendable coroutine state machine
+
+Version 0.15 moves explicit `await` points onto the same persistent JVM state-machine
+backend used by generators. Async functions without suspension points retain the cheaper
+direct coroutine path; functions containing `await` preserve locals and program counters
+in a persistent environment and can yield control back to their caller.
+
+Coroutine `.send()`, `.throw()`, `.close()`, and `__await__()` now forward through
+nested awaited coroutines and custom awaitables. A custom `__await__` iterator may yield
+an external scheduling token, receive a value back on resume, return a final value, or
+receive an exception injected at the suspended await point.
+
+This tranche also introduces repository-native compatibility CI with Java 21 and the
+currently available CPython 3.14 runner. The focused corpus contains 61 focused executable
+conformance cases at this milestone. The compiler still parses source with the Python
+3.15 AST feature level; a dedicated 3.15 CI lane will be added when setup-python exposes
+3.15 on the hosted runner.
+

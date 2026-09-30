@@ -1,25 +1,21 @@
 {
-  "version": "0.14.0",
-  "reference_python": "current environment CPython (3.13.x); Python 3.15 AST frontend and CPython 3.15 regression sources used for prioritization",
-  "focused_conformance": {"passed": 57, "unsupported": 0, "failed": 0},
+  "version": "0.15.0",
+  "frontend": "Python 3.15 AST feature level",
+  "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
   "new_features": [
-    "async for with loop-else and normal break handling",
-    "async with including return cleanup and exception suppression",
-    "aiter()/anext() builtins",
-    "__aiter__/__anext__ protocol",
-    "__aenter__/__aexit__ protocol",
-    "StopAsyncIteration",
-    "augmented assignment for attributes and subscripts",
-    "raising exception classes directly"
+    "suspendable explicit await points",
+    "outward yielded scheduling values from custom awaitables",
+    "resume values forwarded through coroutine send()",
+    "throw() forwarded into suspended awaits",
+    "nested suspendable coroutine delegation",
+    "fast no-suspension async path retained",
+    "GitHub Actions Java 21 compatibility gate"
   ],
-  "known_async_limits": [
-    "true event-loop suspension on externally yielding awaitables",
-    "async generators",
-    "custom metaclasses"
-  ],
+  "conformance_cases": 61,
   "next_focus": [
-    "suspendable await state machine",
-    "async generators and async generator expressions",
+    "async generator state machines",
+    "full coroutine close/finally edge cases",
+    "external scheduler/event-loop adapter",
     "custom metaclass namespace/call protocol",
     "larger CPython 3.15 Lib/test slices"
   ]
