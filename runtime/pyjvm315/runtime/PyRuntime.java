@@ -988,6 +988,7 @@ public final class PyRuntime {
     public static void setFunctionMeta(Object functionObj,Object nameObj,Object filenameObj,Object firstlineObj) {
         PyFunction f=(PyFunction)functionObj; f.displayName=(String)nameObj; f.filename=(String)filenameObj; f.firstlineno=bigInt(firstlineObj).longValue();
     }
+    public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
 
     private static List<String> splitNames(String csv) {
         if (csv == null || csv.isEmpty()) return List.of();
@@ -1024,7 +1025,7 @@ public final class PyRuntime {
         final LinkedHashMap<String,Object> defaults;
         final PyEnv closure;
         final boolean envMode;
-        String displayName, filename; long firstlineno;
+        String displayName, filename; long firstlineno; boolean asyncMode=false;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -1087,11 +1088,16 @@ public final class PyRuntime {
             for (String name : kwonly) bound.add(assigned.get(name));
             if (vararg != null) { PyTuple tuple=new PyTuple(); tuple.items.addAll(extraPos); bound.add(tuple); }
             if (kwarg != null) bound.add(new LinkedHashMap<Object,Object>(extraKw));
-            return invokeStatic(bound.toArray());
+            Object[] boundArray=bound.toArray();
+            if(asyncMode) return new PyCoroutine(this,boundArray);
+            return invokeStatic(boundArray);
         }
 
         private Object invokeStatic(Object[] bound) {
             ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
+            if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
+            for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
             LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
@@ -1121,6 +1127,38 @@ public final class PyRuntime {
         @Override public String toString() { return "<function " + method + ">"; }
     }
 
+    public static final class PyCoroutine {
+        final PyFunction function; final Object[] bound; boolean started=false, finished=false, closed=false; Object result=null;
+        PyCoroutine(PyFunction function,Object[] bound){this.function=function;this.bound=bound;}
+        Object run(){
+            if(closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
+            if(finished) return result;
+            started=true; result=function.invokeStatic(bound); finished=true; return result;
+        }
+        Object send(Object value){
+            if(value!=null) throw new PyException("TypeError","can't send non-None value to a just-started coroutine");
+            if(finished || closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
+            Object out=run(); throw new PyException("StopIteration",out);
+        }
+        Object close(){closed=true;finished=true;return null;}
+        Object awaitIterator(){return new PyCoroutineAwaitIterator(this);}
+        @Override public String toString(){return "<coroutine object "+function.displayName+">";}
+    }
+    private static final class PyCoroutineAwaitIterator implements Iterator<Object>, Iterable<Object> {
+        final PyCoroutine coroutine; boolean done=false;
+        PyCoroutineAwaitIterator(PyCoroutine coroutine){this.coroutine=coroutine;}
+        public boolean hasNext(){return !done && !coroutine.finished && !coroutine.closed;}
+        public Object next(){if(done)throw new PyGeneratorEnd(coroutine.result);done=true;Object value=coroutine.run();throw new PyGeneratorEnd(value);}
+        public Iterator<Object> iterator(){return this;}
+    }
+    public static Object awaitValue(Object value){
+        if(value instanceof PyCoroutine coroutine) return coroutine.run();
+        if(value instanceof PyInstance instance && instance.cls.lookupMethod("__await__")!=null){
+            Object iterator=invoke(instance,instance.cls.lookupMethod("__await__"),new Object[0]);
+            while(true){try{next_(iterator);}catch(PyException e){if(e.typeName.equals("StopIteration"))return e.value;throw e;}}
+        }
+        throw new PyException("TypeError","object can't be used in 'await' expression");
+    }
 
     // ---------- Context managers ----------
     public static Object withEnter(Object manager) {
@@ -1138,6 +1176,7 @@ public final class PyRuntime {
     // ---------- Python-visible code/frame/traceback objects ----------
     private static final class ActiveFrame {
         final String name, filename; final long firstlineno; long line;
+        final LinkedHashMap<Object,Object> locals = new LinkedHashMap<>();
         ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}
     }
     private static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
@@ -1146,6 +1185,9 @@ public final class PyRuntime {
     }
     public static void popLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.pop();}
     public static void setCurrentLine(Object lineObj){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.peek().line=bigInt(lineObj).longValue();}
+    public static void frameSetLocal(Object nameObj,Object value){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);}
+    public static Object frameSetLocalValue(Object value,Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);return value;}
+    public static void frameDelLocal(Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.remove(nameObj);}
     private static ActiveFrame currentLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();return stack.isEmpty()?null:stack.peek();}
 
     public static final class PyCode {
@@ -1165,9 +1207,12 @@ public final class PyRuntime {
         @Override public String toString(){return "<traceback object>";}
     }
     private static PyTraceback prependTraceback(PyTraceback current,String name,String filename,long firstline,long line){
+        ActiveFrame active=currentLogicalFrame();
+        LinkedHashMap<Object,Object> locals = active!=null && active.name.equals(name) && active.filename.equals(filename)
+            ? active.locals : new LinkedHashMap<Object,Object>();
         if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
         PyCode code=new PyCode(name,filename,firstline);
-        return new PyTraceback(new PyFrame(code),line,current);
+        return new PyTraceback(new PyFrame(code,locals),line,current);
     }
     public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
         if(!(throwableObj instanceof PyException p)) return;
@@ -1307,6 +1352,11 @@ public final class PyRuntime {
         function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
         ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
     }
+    public static void classSetMethodAsync(Object cls,Object pyName) {
+        PyMethod method=((PyClass)cls).methods.get((String)pyName);
+        if(method==null || method.function==null) throw new PyException("RuntimeError","method metadata not found");
+        method.function.asyncMode=true;
+    }
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
         ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
     }
@@ -1351,6 +1401,14 @@ public final class PyRuntime {
             PyMethod method=cls.lookupMethod(name);
             if(method==null) throw new PyException("AttributeError","type object '"+cls.name+"' has no method '"+name+"'");
             return invokeOnClass(cls,method,args);
+        }
+        if (obj instanceof PyCoroutine coroutine) {
+            return switch(name) {
+                case "send" -> { requireArgs(name,args,1); yield coroutine.send(args[0]); }
+                case "close" -> { requireArgs(name,args,0); yield coroutine.close(); }
+                case "__await__" -> { requireArgs(name,args,0); yield coroutine.awaitIterator(); }
+                default -> throw new PyException("AttributeError","'coroutine' object has no attribute '"+name+"'");
+            };
         }
         if (obj instanceof PyGenerator gen) {
             return switch(name) {

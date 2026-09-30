@@ -33,6 +33,7 @@ class FunctionInfo:
     free_names: set[str]
     nonlocal_names: set[str]
     is_generator: bool = False
+    is_async: bool = False
 
     @property
     def positional(self) -> list[str]:
@@ -66,6 +67,7 @@ class MethodInfo:
     kw_defaults: dict[str, ast.expr]
     kind: str = "instance"
     firstlineno: int = 0
+    is_async: bool = False
 
     @property
     def positional(self) -> list[str]:
@@ -165,7 +167,7 @@ class Compiler:
         self.cf = ClassFile(self.class_name)
         self.functions: dict[str, FunctionInfo] = {}
         self.function_infos: dict[int, FunctionInfo] = {}
-        self.function_nodes: list[ast.FunctionDef] = []
+        self.function_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self.classes: dict[str, ClassInfo] = {}
         self.class_method_infos: dict[int, MethodInfo] = {}
         self.current_class: ClassInfo | None = None
@@ -186,9 +188,7 @@ class Compiler:
         tree = ast.parse(source, filename=filename, mode="exec", feature_version=(3, 15))
         self._register_module_globals(tree.body)
         for stmt in tree.body:
-            if isinstance(stmt, ast.AsyncFunctionDef):
-                raise CompileError("async def is not implemented yet")
-            if isinstance(stmt, ast.FunctionDef):
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._register_function_tree(stmt, [], top_level=True)
             elif isinstance(stmt, ast.ClassDef):
                 self._register_class(stmt)
@@ -274,7 +274,8 @@ class Compiler:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
-    def _store_name(self, name: str, b: CodeBuilder, scope: Scope) -> None:
+    def _store_name(self, name: str, b: CodeBuilder, scope: Scope, *, temp_scope: Scope | None = None) -> None:
+        b.ldc_string(name); b.invokestatic(RUNTIME, "frameSetLocalValue", f"({OBJ}{OBJ}){OBJ}")
         if scope.module or name in scope.global_decl:
             if name not in self.global_fields:
                 self.global_names.add(name)
@@ -283,7 +284,8 @@ class Compiler:
                 self.cf.add_field(Field(field_name))
             b.putstatic(self.class_name, self.global_fields[name], OBJ)
         elif scope.env_mode and scope.env_slot is not None:
-            value_slot = scope.temp(); b.astore(value_slot)
+            alloc_scope = temp_scope or scope
+            value_slot = alloc_scope.temp(); b.astore(value_slot)
             b.aload(scope.env_slot); b.ldc_string(name); b.aload(value_slot)
             method = "envSetNonlocal" if name in scope.nonlocal_decl else "envSetLocal"
             b.invokestatic(RUNTIME, method, f"({OBJ}{OBJ}{OBJ})V")
@@ -299,7 +301,7 @@ class Compiler:
         elif isinstance(target, ast.Starred): out.update(Compiler._target_names(target.value))
         return out
 
-    def _function_locals(self, node: ast.FunctionDef) -> tuple[set[str], set[str], set[str]]:
+    def _function_locals(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[set[str], set[str], set[str]]:
         locals_: set[str] = {a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs}
         if node.args.vararg: locals_.add(node.args.vararg.arg)
         if node.args.kwarg: locals_.add(node.args.kwarg.arg)
@@ -339,7 +341,7 @@ class Compiler:
         locals_.difference_update(globals_); locals_.difference_update(nonlocals)
         return locals_, globals_, nonlocals
 
-    def _referenced_names_shallow(self, node: ast.FunctionDef) -> set[str]:
+    def _referenced_names_shallow(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
         refs: set[str] = set()
         class Visitor(ast.NodeVisitor):
             def visit_Name(self, n: ast.Name) -> None:
@@ -353,13 +355,18 @@ class Compiler:
                         if d is not None: self.visit(d)
                     for st in n.body: self.visit(st)
                 # nested body is a separate scope
-            def visit_AsyncFunctionDef(self, n: ast.AsyncFunctionDef) -> None: return
+            def visit_AsyncFunctionDef(self, n: ast.AsyncFunctionDef) -> None:
+                if n is node:
+                    for d in n.args.defaults: self.visit(d)
+                    for d in n.args.kw_defaults:
+                        if d is not None: self.visit(d)
+                    for st in n.body: self.visit(st)
             def visit_ClassDef(self, n: ast.ClassDef) -> None: return
             def visit_Lambda(self, n: ast.Lambda) -> None: return
         Visitor().visit(node)
         return refs
 
-    def _register_function_tree(self, node: ast.FunctionDef, enclosing_locals: list[set[str]], *, top_level: bool = False) -> None:
+    def _register_function_tree(self, node: ast.FunctionDef | ast.AsyncFunctionDef, enclosing_locals: list[set[str]], *, top_level: bool = False) -> None:
         local_names, global_names, nonlocal_names = self._function_locals(node)
         refs = self._referenced_names_shallow(node)
         free_names = {name for name in refs if name not in local_names and name not in global_names and any(name in s for s in reversed(enclosing_locals))}
@@ -367,7 +374,7 @@ class Compiler:
             if not any(name in s for s in reversed(enclosing_locals)):
                 raise CompileError(f"no binding for nonlocal {name!r} found")
             free_names.add(name)
-        has_nested = any(isinstance(x, (ast.FunctionDef, ast.Lambda, ast.GeneratorExp)) for st in node.body for x in ast.walk(st) if x is not node)
+        has_nested = any(isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.GeneratorExp)) for st in node.body for x in ast.walk(st) if x is not node)
         class YieldFinder(ast.NodeVisitor):
             found = False
             def visit_Yield(self, n): self.found = True
@@ -375,10 +382,15 @@ class Compiler:
             def visit_FunctionDef(self, n):
                 if n is node:
                     for st in n.body: self.visit(st)
-            def visit_AsyncFunctionDef(self, n): return
+            def visit_AsyncFunctionDef(self, n):
+                if n is node:
+                    for st in n.body: self.visit(st)
             def visit_Lambda(self, n): return
         yf = YieldFinder(); yf.visit(node)
-        is_generator = yf.found
+        is_generator = yf.found and isinstance(node, ast.FunctionDef)
+        if isinstance(node, ast.AsyncFunctionDef) and yf.found:
+            raise CompileError("async generators are not implemented yet")
+        is_async = isinstance(node, ast.AsyncFunctionDef)
         env_mode = is_generator or bool(enclosing_locals) or has_nested or bool(nonlocal_names)
 
         posonly = [a.arg for a in node.args.posonlyargs]
@@ -397,20 +409,22 @@ class Compiler:
             node.args.vararg.arg if node.args.vararg else None,
             node.args.kwarg.arg if node.args.kwarg else None,
             defaults, kw_defaults, function_field, top_level, env_mode,
-            local_names, free_names, nonlocal_names, is_generator)
+            local_names, free_names, nonlocal_names, is_generator, is_async)
         self.function_infos[id(node)] = info
         self.function_nodes.append(node)
         if top_level: self.functions[node.name] = info
 
         new_enclosing = enclosing_locals + [local_names]
         for stmt in node.body:
-            if isinstance(stmt, ast.AsyncFunctionDef): raise CompileError("async def is not implemented yet")
-            if isinstance(stmt, ast.FunctionDef): self._register_function_tree(stmt, new_enclosing, top_level=False)
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._register_function_tree(stmt, new_enclosing, top_level=False)
 
 
     def _register_class(self, node: ast.ClassDef) -> None:
-        if node.decorator_list or node.keywords:
-            raise CompileError("class decorators and metaclass keywords are not implemented yet")
+        if node.keywords:
+            for kw in node.keywords:
+                if kw.arg != "metaclass" or not isinstance(kw.value, ast.Name) or kw.value.id != "type":
+                    raise CompileError("custom metaclasses are not implemented yet")
         bases: list[str] = []
         for base in node.bases:
             if not isinstance(base, ast.Name):
@@ -428,7 +442,7 @@ class Compiler:
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
                 attrs.append((item.target.id, item.value))
                 continue
-            if not isinstance(item, ast.FunctionDef):
+            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 raise CompileError("class bodies currently support methods and simple class attributes")
             posonly = [a.arg for a in item.args.posonlyargs]
             poskw = [a.arg for a in item.args.args]
@@ -449,7 +463,7 @@ class Compiler:
                 item.name, java_name, posonly, poskw, [a.arg for a in item.args.kwonlyargs],
                 item.args.vararg.arg if item.args.vararg else None,
                 item.args.kwarg.arg if item.args.kwarg else None,
-                defaults, kw_defaults, kind, item.lineno
+                defaults, kw_defaults, kind, item.lineno, isinstance(item, ast.AsyncFunctionDef)
             )
             self.class_method_infos[id(item)] = method
 
@@ -479,7 +493,7 @@ class Compiler:
         self.current_class = info
         try:
             for item in node.body:
-                if isinstance(item, ast.FunctionDef):
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     method = self.class_method_infos[id(item)]
                     b = CodeBuilder(self.cf.cp)
                     scope = Scope(method.bound_args, start_slot=0)
@@ -520,7 +534,7 @@ class Compiler:
         code = b.finish()
         self.cf.add_method(Method("main", "([Ljava/lang/String;)V", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
 
-    def _compile_function(self, node: ast.FunctionDef) -> None:
+    def _compile_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         info = self.function_infos[id(node)]
         saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
         self.current_frame_name,self.current_frame_firstlineno=info.name,node.lineno
@@ -954,7 +968,7 @@ class Compiler:
     def _emit_int(self, value: int, b: CodeBuilder) -> None:
         b.ldc_string(str(value)); b.invokestatic(RUNTIME, "pyInt", "(Ljava/lang/String;)Ljava/lang/Object;")
 
-    def _emit_function_definition(self, node: ast.FunctionDef, b: CodeBuilder, scope: Scope) -> None:
+    def _emit_function_definition(self, node: ast.FunctionDef | ast.AsyncFunctionDef, b: CodeBuilder, scope: Scope) -> None:
         info = self.function_infos[id(node)]
         # Python evaluates decorator expressions in source order in the enclosing
         # scope, then applies them from the bottom upward to the function object.
@@ -984,6 +998,8 @@ class Compiler:
         b.invokestatic(RUNTIME, "makeFunctionEx", f"({OBJ * 10}){OBJ}")
         b.dup(); b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
+        if info.is_async:
+            b.dup(); b.invokestatic(RUNTIME, "setFunctionAsync", f"({OBJ})V")
 
         if decorator_slots:
             fn_slot = scope.temp(); b.astore(fn_slot)
@@ -1021,7 +1037,7 @@ class Compiler:
         info=FunctionInfo("<lambda>", java_name, posonly,poskw,kwonly,
             args_obj.vararg.arg if args_obj.vararg else None,
             args_obj.kwarg.arg if args_obj.kwarg else None,
-            defaults,kw_defaults,None,False,bool(scope.env_mode),local_names,free_names,set(),False)
+            defaults,kw_defaults,None,False,bool(scope.env_mode),local_names,free_names,set(),False,False)
         self.function_infos[id(node)]=info
         self._compile_lambda_method(node, info)
         return info
@@ -1094,7 +1110,7 @@ class Compiler:
         refs={n.id for n in ast.walk(node) if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Load)}
         free_names={name for name in refs if name not in target_names and scope.has(name) and name not in scope.global_decl}
         info=FunctionInfo("<genexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
-                          target_names,free_names,set(),True)
+                          target_names,free_names,set(),True,False)
 
         body: list[ast.stmt]=[ast.Expr(value=ast.Yield(value=node.elt))]
         generators=list(node.generators)
@@ -1309,7 +1325,7 @@ class Compiler:
             case ast.Assign(targets=[ast.Attribute(value=obj, attr=attr)], value=value):
                 self._expr(obj, b, scope); b.ldc_string(attr); self._expr(value, b, scope)
                 b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
-            case ast.FunctionDef():
+            case ast.FunctionDef() | ast.AsyncFunctionDef():
                 self._emit_function_definition(node, b, scope)
             case ast.Import(names=names):
                 for alias in names:
@@ -1360,11 +1376,14 @@ class Compiler:
                         b.aload(module_slot); b.ldc_string(alias.name)
                         b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
                     self._store_name(alias.asname or alias.name, b, scope)
-            case ast.ClassDef(name=name):
+            case ast.ClassDef(name=name, decorator_list=decorators):
                 info = self.classes[name]
+                decorator_slots: list[int] = []
+                for decorator in decorators:
+                    self._expr(decorator, b, scope)
+                    slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
                 b.ldc_string(name)
                 b.invokestatic(RUNTIME, "class0", f"({OBJ}){OBJ}")
-                b.dup(); b.putstatic(self.class_name, info.class_field, OBJ)
                 class_slot = scope.temp(); b.astore(class_slot)
                 for base_name in info.bases:
                     b.aload(class_slot); self._load_name(base_name, b, scope)
@@ -1386,12 +1405,23 @@ class Compiler:
                     else: b.ldc_string(method.kwarg)
                     b.aload(defaults_slot); b.ldc_string(self.filename); self._emit_int(method.firstlineno, b)
                     b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 13})V")
+                    if method.is_async:
+                        b.aload(class_slot); b.ldc_string(method.py_name)
+                        b.invokestatic(RUNTIME, "classSetMethodAsync", f"({OBJ}{OBJ})V")
                 for prop in info.properties.values():
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
                     else: b.ldc_string(prop.setter.java_name)
                     b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
                 b.aload(class_slot); b.invokestatic(RUNTIME, "classFinalize", f"({OBJ})V")
+                for decorator_slot in reversed(decorator_slots):
+                    b.aload(decorator_slot)
+                    b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                    b.dup(); b.aload(class_slot); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                    b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    b.astore(class_slot)
+                b.aload(class_slot); b.putstatic(self.class_name, info.class_field, OBJ)
             case ast.AnnAssign(target=ast.Name(id=name), value=value):
                 if value is None: b.aconst_null()
                 else: self._expr(value, b, scope)
@@ -1512,13 +1542,16 @@ class Compiler:
             case ast.NamedExpr(target=ast.Name(id=name), value=value):
                 self._expr(value, b, scope); b.dup()
                 target_scope = getattr(scope, "comprehension_outer", None) or scope
-                self._store_name(name, b, target_scope)
+                self._store_name(name, b, target_scope, temp_scope=scope)
             case ast.Lambda():
                 self._emit_lambda(node, b, scope)
             case ast.ListComp() | ast.SetComp() | ast.DictComp():
                 self._emit_comprehension(node, b, scope)
             case ast.GeneratorExp():
                 self._emit_generator_expression(node, b, scope)
+            case ast.Await(value=value):
+                self._expr(value, b, scope)
+                b.invokestatic(RUNTIME, "awaitValue", f"({OBJ}){OBJ}")
             case ast.List(elts=elts):
                 b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
                 for elt in elts:

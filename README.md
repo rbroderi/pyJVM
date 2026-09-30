@@ -278,3 +278,26 @@ are both covered. Nested-function traceback order, first-line metadata, and acti
 numbers match the reference CPython cases in the focused differential corpus.
 
 The focused suite now contains 46 passing executable conformance programs.
+
+## 0.13 live frame locals, class decorators, and coroutine groundwork
+
+Version 0.13 makes traceback frame locals useful: compiled argument bindings and
+subsequent name assignments are mirrored into the active logical Python frame, and
+traceback `f_locals` retains the same mapping so updates made while handling an
+exception remain visible.
+
+General class decorators are evaluated in source order and applied bottom-to-top,
+matching function decorator ordering. Explicit `metaclass=type` is accepted as the
+first metaclass compatibility step; custom metaclass namespace/call semantics remain a
+future tranche.
+
+The compiler now accepts `async def` for top-level, nested, and user-defined instance
+methods. Calling an async function creates a lazy coroutine object; `.send(None)`,
+`close()`, `__await__()`, nested compiled `await`, return values, exceptions, keyword
+arguments, and async instance methods are supported. This first coroutine backend runs
+compiled awaits synchronously to completion; event-loop suspension, async generators,
+`async for`, and `async with` are intentionally not claimed yet.
+
+The focused differential corpus contains 51 executable cases and remains green in
+batched validation against the available CPython reference.
+
