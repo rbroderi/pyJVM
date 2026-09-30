@@ -1127,6 +1127,38 @@ public final class PyRuntime {
         @Override public String toString() { return "<function " + method + ">"; }
     }
 
+    public static final class PyCoroutine {
+        final PyFunction function; final Object[] bound; boolean started=false, finished=false, closed=false; Object result=null;
+        PyCoroutine(PyFunction function,Object[] bound){this.function=function;this.bound=bound;}
+        Object run(){
+            if(closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
+            if(finished) return result;
+            started=true; result=function.invokeStatic(bound); finished=true; return result;
+        }
+        Object send(Object value){
+            if(value!=null) throw new PyException("TypeError","can't send non-None value to a just-started coroutine");
+            if(finished || closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
+            Object out=run(); throw new PyException("StopIteration",out);
+        }
+        Object close(){closed=true;finished=true;return null;}
+        Object awaitIterator(){return new PyCoroutineAwaitIterator(this);}
+        @Override public String toString(){return "<coroutine object "+function.displayName+">";}
+    }
+    private static final class PyCoroutineAwaitIterator implements Iterator<Object>, Iterable<Object> {
+        final PyCoroutine coroutine; boolean done=false;
+        PyCoroutineAwaitIterator(PyCoroutine coroutine){this.coroutine=coroutine;}
+        public boolean hasNext(){return !done && !coroutine.finished && !coroutine.closed;}
+        public Object next(){if(done)throw new PyGeneratorEnd(coroutine.result);done=true;Object value=coroutine.run();throw new PyGeneratorEnd(value);}
+        public Iterator<Object> iterator(){return this;}
+    }
+    public static Object awaitValue(Object value){
+        if(value instanceof PyCoroutine coroutine) return coroutine.run();
+        if(value instanceof PyInstance instance && instance.cls.lookupMethod("__await__")!=null){
+            Object iterator=invoke(instance,instance.cls.lookupMethod("__await__"),new Object[0]);
+            while(true){try{next_(iterator);}catch(PyException e){if(e.typeName.equals("StopIteration"))return e.value;throw e;}}
+        }
+        throw new PyException("TypeError","object can't be used in 'await' expression");
+    }
 
     // ---------- Context managers ----------
     public static Object withEnter(Object manager) {
@@ -1320,6 +1352,11 @@ public final class PyRuntime {
         function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
         ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
     }
+    public static void classSetMethodAsync(Object cls,Object pyName) {
+        PyMethod method=((PyClass)cls).methods.get((String)pyName);
+        if(method==null || method.function==null) throw new PyException("RuntimeError","method metadata not found");
+        method.function.asyncMode=true;
+    }
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
         ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
     }
@@ -1364,6 +1401,14 @@ public final class PyRuntime {
             PyMethod method=cls.lookupMethod(name);
             if(method==null) throw new PyException("AttributeError","type object '"+cls.name+"' has no method '"+name+"'");
             return invokeOnClass(cls,method,args);
+        }
+        if (obj instanceof PyCoroutine coroutine) {
+            return switch(name) {
+                case "send" -> { requireArgs(name,args,1); yield coroutine.send(args[0]); }
+                case "close" -> { requireArgs(name,args,0); yield coroutine.close(); }
+                case "__await__" -> { requireArgs(name,args,0); yield coroutine.awaitIterator(); }
+                default -> throw new PyException("AttributeError","'coroutine' object has no attribute '"+name+"'");
+            };
         }
         if (obj instanceof PyGenerator gen) {
             return switch(name) {
