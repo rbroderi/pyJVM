@@ -988,6 +988,7 @@ public final class PyRuntime {
     public static void setFunctionMeta(Object functionObj,Object nameObj,Object filenameObj,Object firstlineObj) {
         PyFunction f=(PyFunction)functionObj; f.displayName=(String)nameObj; f.filename=(String)filenameObj; f.firstlineno=bigInt(firstlineObj).longValue();
     }
+    public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
 
     private static List<String> splitNames(String csv) {
         if (csv == null || csv.isEmpty()) return List.of();
@@ -1024,7 +1025,7 @@ public final class PyRuntime {
         final LinkedHashMap<String,Object> defaults;
         final PyEnv closure;
         final boolean envMode;
-        String displayName, filename; long firstlineno;
+        String displayName, filename; long firstlineno; boolean asyncMode=false;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -1087,11 +1088,16 @@ public final class PyRuntime {
             for (String name : kwonly) bound.add(assigned.get(name));
             if (vararg != null) { PyTuple tuple=new PyTuple(); tuple.items.addAll(extraPos); bound.add(tuple); }
             if (kwarg != null) bound.add(new LinkedHashMap<Object,Object>(extraKw));
-            return invokeStatic(bound.toArray());
+            Object[] boundArray=bound.toArray();
+            if(asyncMode) return new PyCoroutine(this,boundArray);
+            return invokeStatic(boundArray);
         }
 
         private Object invokeStatic(Object[] bound) {
             ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
+            if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
+            for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
             LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
@@ -1138,6 +1144,7 @@ public final class PyRuntime {
     // ---------- Python-visible code/frame/traceback objects ----------
     private static final class ActiveFrame {
         final String name, filename; final long firstlineno; long line;
+        final LinkedHashMap<Object,Object> locals = new LinkedHashMap<>();
         ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}
     }
     private static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
@@ -1146,6 +1153,9 @@ public final class PyRuntime {
     }
     public static void popLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.pop();}
     public static void setCurrentLine(Object lineObj){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.peek().line=bigInt(lineObj).longValue();}
+    public static void frameSetLocal(Object nameObj,Object value){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);}
+    public static Object frameSetLocalValue(Object value,Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);return value;}
+    public static void frameDelLocal(Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.remove(nameObj);}
     private static ActiveFrame currentLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();return stack.isEmpty()?null:stack.peek();}
 
     public static final class PyCode {
@@ -1165,9 +1175,12 @@ public final class PyRuntime {
         @Override public String toString(){return "<traceback object>";}
     }
     private static PyTraceback prependTraceback(PyTraceback current,String name,String filename,long firstline,long line){
+        ActiveFrame active=currentLogicalFrame();
+        LinkedHashMap<Object,Object> locals = active!=null && active.name.equals(name) && active.filename.equals(filename)
+            ? active.locals : new LinkedHashMap<Object,Object>();
         if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
         PyCode code=new PyCode(name,filename,firstline);
-        return new PyTraceback(new PyFrame(code),line,current);
+        return new PyTraceback(new PyFrame(code,locals),line,current);
     }
     public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
         if(!(throwableObj instanceof PyException p)) return;
