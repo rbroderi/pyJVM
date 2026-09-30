@@ -1,23 +1,19 @@
 {
-  "version": "0.11.0",
+  "version": "0.12.0",
   "reference_python": "current environment CPython (3.13.x); CPython 3.15 test sources used for feature prioritization",
-  "focused_conformance": {
-    "passed": 43,
-    "unsupported": 0,
-    "failed": 0
-  },
+  "focused_conformance": {"passed": 46, "unsupported": 0, "failed": 0},
   "new_features": [
-    "full Python argument binding for instance methods",
-    "keyword/default/varargs binding for classmethod and staticmethod",
-    "keyword-aware class construction through __init__",
-    "user-defined __get__/__set__/__delete__ descriptor protocol",
-    "__getattr__ fallback"
+    "Python-visible traceback chains",
+    "logical frame stack independent of JVM frames",
+    "tb_next/tb_frame/tb_lineno",
+    "f_code/f_locals and basic code metadata",
+    "per-statement source line tracking",
+    "generator traceback attachment"
   ],
   "next_focus": [
-    "traceback/frame objects",
-    "exception traceback attachment",
-    "richer class decorators and descriptors",
+    "richer f_locals/frame introspection",
+    "class decorators and metaclass groundwork",
     "async def/await",
-    "curated CPython 3.15 Lib/test execution"
+    "larger curated CPython 3.15 Lib/test slices"
   ]
 }

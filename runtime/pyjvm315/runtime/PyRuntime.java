@@ -1,6 +1,7 @@
 package pyjvm315.runtime;
 
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -793,14 +794,20 @@ public final class PyRuntime {
         boolean started = false;
         boolean buffered = false;
         Object bufferedValue = null;
+        String displayName, filename; long firstlineno;
 
         PyGenerator(String owner, String resumeMethod, PyEnv env) {
-            this.owner=owner; this.resumeMethod=resumeMethod; this.env=env;
+            this(owner,resumeMethod,env,resumeMethod,owner,0);
+        }
+        PyGenerator(String owner,String resumeMethod,PyEnv env,String displayName,String filename,long firstlineno) {
+            this.owner=owner; this.resumeMethod=resumeMethod; this.env=env; this.displayName=displayName; this.filename=filename; this.firstlineno=firstlineno;
         }
 
         private Object advance() {
             if (finished) throw new PyGeneratorEnd(returnValue);
             started = true;
+            ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
                 var reflected=cls.getDeclaredMethod(resumeMethod, Object.class);
@@ -812,13 +819,16 @@ public final class PyRuntime {
                 if (cause instanceof PyGeneratorEnd e) { finished=true; throw e; }
                 if (cause instanceof PyException p && p.typeName.equals("StopIteration")) {
                     finished=true;
-                    throw new PyException("RuntimeError", "generator raised StopIteration");
+                    PyException wrapped=new PyException("RuntimeError", "generator raised StopIteration"); wrapped.addFrame(displayName,filename,logical.firstlineno,logical.line); throw wrapped;
                 }
+                if (cause instanceof PyException p) { finished=true; p.addFrame(displayName,filename,logical.firstlineno,logical.line); throw p; }
                 if (cause instanceof RuntimeException r) { finished=true; throw r; }
                 if (cause instanceof Error e) { finished=true; throw e; }
                 throw new RuntimeException(cause);
             } catch (ReflectiveOperationException exc) {
                 throw new RuntimeException(exc);
+            } finally {
+                ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
             }
         }
 
@@ -868,6 +878,9 @@ public final class PyRuntime {
 
     public static Object makeGenerator(Object ownerObj, Object methodObj, Object envObj) {
         return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj);
+    }
+    public static Object makeGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
+        return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
     }
     public static Object generatorEnv(Object genObj) { return ((PyGenerator)genObj).env; }
     public static Object generatorState(Object genObj) { return ((PyGenerator)genObj).state; }
@@ -972,6 +985,10 @@ public final class PyRuntime {
         );
     }
 
+    public static void setFunctionMeta(Object functionObj,Object nameObj,Object filenameObj,Object firstlineObj) {
+        PyFunction f=(PyFunction)functionObj; f.displayName=(String)nameObj; f.filename=(String)filenameObj; f.firstlineno=bigInt(firstlineObj).longValue();
+    }
+
     private static List<String> splitNames(String csv) {
         if (csv == null || csv.isEmpty()) return List.of();
         return Arrays.asList(csv.split(",", -1));
@@ -1007,6 +1024,7 @@ public final class PyRuntime {
         final LinkedHashMap<String,Object> defaults;
         final PyEnv closure;
         final boolean envMode;
+        String displayName, filename; long firstlineno;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -1017,6 +1035,7 @@ public final class PyRuntime {
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults, PyEnv closure, boolean envMode) {
             this.owner=owner; this.method=method; this.posonly=posonly; this.poskw=poskw; this.kwonly=kwonly;
             this.vararg=vararg; this.kwarg=kwarg; this.defaults=defaults; this.closure=closure; this.envMode=envMode;
+            this.displayName=method; this.filename=owner; this.firstlineno=0;
         }
 
         Object call(List<Object> args, Map<Object,Object> kwargsRaw) {
@@ -1072,6 +1091,8 @@ public final class PyRuntime {
         }
 
         private Object invokeStatic(Object[] bound) {
+            ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
                 int hidden = envMode ? 1 : 0;
@@ -1086,11 +1107,14 @@ public final class PyRuntime {
                 return reflected.invoke(null, actual);
             } catch (java.lang.reflect.InvocationTargetException exc) {
                 Throwable cause=exc.getCause();
+                if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
                 if (cause instanceof RuntimeException r) throw r;
                 if (cause instanceof Error e) throw e;
                 throw new RuntimeException(cause);
             } catch (ReflectiveOperationException exc) {
                 throw new RuntimeException(exc);
+            } finally {
+                ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
             }
         }
 
@@ -1111,13 +1135,57 @@ public final class PyRuntime {
         return truth(result);
     }
 
+    // ---------- Python-visible code/frame/traceback objects ----------
+    private static final class ActiveFrame {
+        final String name, filename; final long firstlineno; long line;
+        ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}
+    }
+    private static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
+    public static void pushLogicalFrame(Object nameObj,Object filenameObj,Object firstlineObj){
+        LOGICAL_FRAMES.get().push(new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()));
+    }
+    public static void popLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.pop();}
+    public static void setCurrentLine(Object lineObj){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.peek().line=bigInt(lineObj).longValue();}
+    private static ActiveFrame currentLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();return stack.isEmpty()?null:stack.peek();}
+
+    public static final class PyCode {
+        final String coName, coFilename; final long coFirstlineno;
+        PyCode(String name,String filename,long firstlineno){this.coName=name;this.coFilename=filename;this.coFirstlineno=firstlineno;}
+        @Override public String toString(){return "<code object "+coName+">";}
+    }
+    public static final class PyFrame {
+        final PyCode code; final LinkedHashMap<Object,Object> locals;
+        PyFrame(PyCode code){this(code,new LinkedHashMap<Object,Object>());}
+        PyFrame(PyCode code,LinkedHashMap<Object,Object> locals){this.code=code;this.locals=locals;}
+        @Override public String toString(){return "<frame "+code.coName+">";}
+    }
+    public static final class PyTraceback {
+        final PyFrame frame; final long lineno; final PyTraceback next;
+        PyTraceback(PyFrame frame,long lineno,PyTraceback next){this.frame=frame;this.lineno=lineno;this.next=next;}
+        @Override public String toString(){return "<traceback object>";}
+    }
+    private static PyTraceback prependTraceback(PyTraceback current,String name,String filename,long firstline,long line){
+        if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
+        PyCode code=new PyCode(name,filename,firstline);
+        return new PyTraceback(new PyFrame(code),line,current);
+    }
+    public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
+        if(!(throwableObj instanceof PyException p)) return;
+        long line=bigInt(lineObj).longValue(); p.traceback=prependTraceback(p.traceback,(String)nameObj,(String)filenameObj,line,line);
+    }
+    public static void tracebackAddCurrentFrame(Object throwableObj){
+        if(!(throwableObj instanceof PyException p)) return;
+        ActiveFrame frame=currentLogicalFrame();
+        if(frame!=null) p.traceback=prependTraceback(p.traceback,frame.name,frame.filename,frame.firstlineno,frame.line);
+    }
+
     // ---------- Exceptions ----------
     public static Object makeException(Object typeObj, Object value) {
         return new PyExceptionValue((String)typeObj, value);
     }
 
     public static void raiseObject(Object value) {
-        if (value instanceof PyExceptionValue e) throw new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext);
+        if (value instanceof PyExceptionValue e) throw new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback);
         if (value instanceof PyException e) throw e;
         throw new PyException("TypeError", "exceptions must derive from BaseException");
     }
@@ -1129,7 +1197,7 @@ public final class PyRuntime {
     }
     public static void raiseObjectWithContext(Object value, Object contextObj) {
         PyException raised;
-        if (value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext);
+        if (value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback);
         else if (value instanceof PyException e) raised=e;
         else throw new PyException("TypeError", "exceptions must derive from BaseException");
         if(!raised.suppressContext && contextObj instanceof Throwable t) {
@@ -1176,7 +1244,7 @@ public final class PyRuntime {
     }
     public static Object exceptionInstance(Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        if (t instanceof PyException p) return new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext);
+        if (t instanceof PyException p) return new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext,p.traceback);
         return new PyExceptionValue(pythonExceptionType(t), exceptionValue(t));
     }
 
@@ -1198,16 +1266,20 @@ public final class PyRuntime {
     }
 
     public static final class PyExceptionValue {
-        final String typeName; final Object value; final Object cause; final Object context; final boolean suppressContext;
-        PyExceptionValue(String typeName, Object value) { this(typeName,value,null,null,false); }
-        PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; }
+        final String typeName; final Object value; final Object cause; final Object context; final boolean suppressContext; final PyTraceback traceback;
+        PyExceptionValue(String typeName, Object value) { this(typeName,value,null,null,false,null); }
+        PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
+        PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
         @Override public String toString() { return typeName + (value == null ? "" : "(" + pyRepr(value) + ")"); }
     }
 
     public static final class PyException extends RuntimeException {
-        final String typeName; final Object value; Object cause; Object context; boolean suppressContext;
-        PyException(String typeName, Object value) { this(typeName,value,null,null,false); }
-        PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext) { super(value == null ? null : pyStr(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; }
+        final String typeName; final Object value; Object cause; Object context; boolean suppressContext; PyTraceback traceback;
+        PyException(String typeName, Object value) { this(typeName,value,null,null,false,null); }
+        PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
+        PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { super(value == null ? null : pyStr(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
+        void addFrame(String name,String filename,long firstline,long line){traceback=prependTraceback(traceback,name,filename,firstline,line);}
+        void addFrame(String name,String filename,long line){addFrame(name,filename,line,line);}
         @Override public String toString() { return typeName + (value == null ? "" : ": " + pyStr(value)); }
     }
 
@@ -1225,13 +1297,14 @@ public final class PyRuntime {
     }
     public static void classAddMethodEx(Object cls, Object pyName, Object owner, Object javaName, Object kind,
                                         Object posonlyObj, Object poskwObj, Object kwonlyObj,
-                                        Object varargObj, Object kwargObj, Object defaultsObj) {
+                                        Object varargObj, Object kwargObj, Object defaultsObj, Object filenameObj, Object firstlineObj) {
         @SuppressWarnings("unchecked") Map<Object,Object> rawDefaults=(Map<Object,Object>)defaultsObj;
         LinkedHashMap<String,Object> defaults=new LinkedHashMap<>();
         for(var e:rawDefaults.entrySet()) defaults.put((String)e.getKey(),e.getValue());
         PyFunction function=new PyFunction((String)owner,(String)javaName,
             splitNames((String)posonlyObj),splitNames((String)poskwObj),splitNames((String)kwonlyObj),
             (String)varargObj,(String)kwargObj,defaults);
+        function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
         ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
     }
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
@@ -1433,7 +1506,17 @@ public final class PyRuntime {
             if (name.equals("__cause__")) return exc.cause;
             if (name.equals("__context__")) return exc.context;
             if (name.equals("__suppress_context__")) return exc.suppressContext;
+            if (name.equals("__traceback__")) return exc.traceback;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
+        }
+        if(obj instanceof PyTraceback tb) {
+            return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
+        }
+        if(obj instanceof PyFrame frame) {
+            return switch(name){case "f_code" -> frame.code; case "f_locals" -> frame.locals; default -> throw new PyException("AttributeError","frame has no attribute '"+name+"'");};
+        }
+        if(obj instanceof PyCode code) {
+            return switch(name){case "co_name" -> code.coName; case "co_filename" -> code.coFilename; case "co_firstlineno" -> code.coFirstlineno; default -> throw new PyException("AttributeError","code has no attribute '"+name+"'");};
         }
         if (obj instanceof PySuper sup) {
             PyProperty prop=sup.self.cls.lookupPropertyAfter(sup.currentClass,name);

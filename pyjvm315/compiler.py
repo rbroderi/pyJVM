@@ -65,6 +65,7 @@ class MethodInfo:
     defaults: dict[str, ast.expr]
     kw_defaults: dict[str, ast.expr]
     kind: str = "instance"
+    firstlineno: int = 0
 
     @property
     def positional(self) -> list[str]:
@@ -176,8 +177,12 @@ class Compiler:
         self.exception_stack: list[int] = []
         self.cleanup_stack: list[tuple[str, object]] = []
         self.finally_stack: list[FinallyContext] = []
+        self.filename = "<string>"
+        self.current_frame_name = "<module>"
+        self.current_frame_firstlineno = 1
 
     def compile(self, source: str, filename: str = "<string>") -> bytes:
+        self.filename = filename
         tree = ast.parse(source, filename=filename, mode="exec", feature_version=(3, 15))
         self._register_module_globals(tree.body)
         for stmt in tree.body:
@@ -444,7 +449,7 @@ class Compiler:
                 item.name, java_name, posonly, poskw, [a.arg for a in item.args.kwonlyargs],
                 item.args.vararg.arg if item.args.vararg else None,
                 item.args.kwarg.arg if item.args.kwarg else None,
-                defaults, kw_defaults, kind
+                defaults, kw_defaults, kind, item.lineno
             )
             self.class_method_infos[id(item)] = method
 
@@ -479,9 +484,12 @@ class Compiler:
                     b = CodeBuilder(self.cf.cp)
                     scope = Scope(method.bound_args, start_slot=0)
                     self.current_method_self = method.positional[0] if method.positional else None
+                    saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
+                    self.current_frame_name,self.current_frame_firstlineno=item.name,item.lineno
                     self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
                     for stmt in item.body:
                         self._stmt(stmt, b, scope, in_function=True)
+                    self.current_frame_name,self.current_frame_firstlineno=saved_frame
                     b.aconst_null(); b.areturn()
                     code = b.finish()
                     self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
@@ -497,21 +505,28 @@ class Compiler:
         self.cf.add_method(Method("<init>", "()V", code, max_stack=2, max_locals=1, access=0x0001, exception_table=b.exception_table))
 
     def _compile_main(self, body: list[ast.stmt]) -> None:
+        self.current_frame_name,self.current_frame_firstlineno="<module>",1
         b = CodeBuilder(self.cf.cp)
         scope = Scope(start_slot=1, module=True)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
+        b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         b.ldc_string(self.package_name); self._store_name("__package__", b, scope)
         for stmt in body:
             self._stmt(stmt, b, scope, in_function=False)
+        b.invokestatic(RUNTIME,"popLogicalFrame",f"()V")
         b.return_()
         code = b.finish()
         self.cf.add_method(Method("main", "([Ljava/lang/String;)V", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
 
     def _compile_function(self, node: ast.FunctionDef) -> None:
         info = self.function_infos[id(node)]
+        saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
+        self.current_frame_name,self.current_frame_firstlineno=info.name,node.lineno
         if info.is_generator:
             self._compile_generator_function(node, info)
+            self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         b = CodeBuilder(self.cf.cp)
         arg_start = 1 if info.env_mode else 0
@@ -532,6 +547,7 @@ class Compiler:
         code = b.finish()
         self.cf.add_method(Method(info.java_name, info.descriptor, code,
             max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
+        self.current_frame_name,self.current_frame_firstlineno=saved_frame
 
     @staticmethod
     def _contains_yield(node: ast.AST) -> bool:
@@ -574,7 +590,8 @@ class Compiler:
             b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
         resume_name=info.java_name+"$resume"
         b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
-        b.invokestatic(RUNTIME,"makeGenerator",f"({OBJ}{OBJ}{OBJ}){OBJ}"); b.areturn()
+        b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
+        b.invokestatic(RUNTIME,"makeGeneratorEx",f"({OBJ*6}){OBJ}"); b.areturn()
         code=b.finish()
         self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
         self._compile_generator_resume(node, info, resume_name)
@@ -965,6 +982,8 @@ class Compiler:
         else: b.aconst_null()
         self._boxed_bool(info.env_mode, b)
         b.invokestatic(RUNTIME, "makeFunctionEx", f"({OBJ * 10}){OBJ}")
+        b.dup(); b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
+        b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
 
         if decorator_slots:
             fn_slot = scope.temp(); b.astore(fn_slot)
@@ -1008,6 +1027,8 @@ class Compiler:
         return info
 
     def _compile_lambda_method(self, node: ast.Lambda, info: FunctionInfo) -> None:
+        saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
+        self.current_frame_name,self.current_frame_firstlineno="<lambda>",node.lineno
         b=CodeBuilder(self.cf.cp); arg_start=1 if info.env_mode else 0
         scope=Scope(info.bound_args,start_slot=arg_start,env_mode=info.env_mode,
                     local_names=info.local_names,free_names=info.free_names)
@@ -1021,6 +1042,7 @@ class Compiler:
         self._expr(node.body,b,scope); b.areturn()
         self.loop_stack,self.exception_stack,self.finally_stack=saved_loop,saved_exc,saved_finally
         code=b.finish(); self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
+        self.current_frame_name,self.current_frame_firstlineno=saved_frame
 
     def _emit_lambda(self, node: ast.Lambda, b: CodeBuilder, scope: Scope) -> None:
         info=self._lambda_info(node,scope)
@@ -1038,6 +1060,8 @@ class Compiler:
         else: b.aconst_null()
         self._boxed_bool(info.env_mode,b)
         b.invokestatic(RUNTIME,"makeFunctionEx",f"({OBJ*10}){OBJ}")
+        b.dup(); b.ldc_string("<lambda>"); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
+        b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
 
     def _emit_call_parts(self, args: list[ast.expr], keywords: list[ast.keyword], b: CodeBuilder, scope: Scope) -> None:
         b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -1261,6 +1285,8 @@ class Compiler:
         b.mark(done)
 
     def _stmt(self, node: ast.stmt, b: CodeBuilder, scope: Scope, in_function: bool) -> None:
+        if hasattr(node, "lineno"):
+            self._emit_int(node.lineno, b); b.invokestatic(RUNTIME,"setCurrentLine",f"({OBJ})V")
         match node:
             case ast.Pass():
                 return
@@ -1358,8 +1384,8 @@ class Compiler:
                     else: b.ldc_string(method.vararg)
                     if method.kwarg is None: b.aconst_null()
                     else: b.ldc_string(method.kwarg)
-                    b.aload(defaults_slot)
-                    b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 11})V")
+                    b.aload(defaults_slot); b.ldc_string(self.filename); self._emit_int(method.firstlineno, b)
+                    b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 13})V")
                 for prop in info.properties.values():
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
@@ -1670,6 +1696,7 @@ class Compiler:
         for stmt in orelse: self._stmt(stmt, b, scope, in_function)
         b.goto(done)
         b.mark(dispatch); b.astore(exc_slot)
+        b.aload(exc_slot); b.invokestatic(RUNTIME,"tracebackAddCurrentFrame",f"({OBJ})V")
         b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
         for handler in handlers:
             next_handler = b.label()
