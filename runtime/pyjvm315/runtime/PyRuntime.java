@@ -1011,6 +1011,7 @@ public final class PyRuntime {
     public static Object yieldFromReturnValue(Object iteratorObj) {
         if (iteratorObj instanceof PyGenerator gen) return gen.returnValue;
         if (iteratorObj instanceof PyCoroutineAwaitIterator awaiter) return awaiter.coroutine.result;
+        if (iteratorObj instanceof PyAsyncGenAwaitIterator awaiter) return awaiter.result;
         return null;
     }
 
@@ -1202,7 +1203,7 @@ public final class PyRuntime {
     }
 
     private static final class PyAsyncGenAwaitIterator implements Iterator<Object>, Iterable<Object> {
-        final PyAsyncGenAwaitable awaitable; boolean done=false;
+        final PyAsyncGenAwaitable awaitable; boolean done=false; Object result=null;
         PyAsyncGenAwaitIterator(PyAsyncGenAwaitable awaitable){this.awaitable=awaitable;}
         public boolean hasNext(){return !done;}
         public Object next(){
@@ -1216,9 +1217,10 @@ public final class PyRuntime {
                     case "close" -> { awaitable.generator.frame.close(); yield null; }
                     default -> throw new PyException("RuntimeError","unknown async generator operation");
                 };
+                result=item;
                 throw new PyGeneratorEnd(item);
             } catch(PyGeneratorEnd end) {
-                if(awaitable.action.equals("close")) throw new PyGeneratorEnd(null);
+                if(awaitable.action.equals("close")) { result=null; throw new PyGeneratorEnd(null); }
                 if(awaitable.generator.frame.finished && end.value==awaitable.generator.frame.returnValue)
                     throw new PyException("StopAsyncIteration",null);
                 throw end;
