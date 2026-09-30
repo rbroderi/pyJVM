@@ -11,7 +11,7 @@
     "fast no-suspension async path retained",
     "GitHub Actions Java 21 compatibility gate"
   ],
-  "conformance_cases": 60,
+  "conformance_cases": 61,
   "next_focus": [
     "async generator state machines",
     "full coroutine close/finally edge cases",
