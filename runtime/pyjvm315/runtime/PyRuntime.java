@@ -918,6 +918,12 @@ public final class PyRuntime {
         PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyCoroutine(frame,(String)nameObj);
     }
+    public static final class PyAsyncGeneratorYield {
+        final Object value;
+        PyAsyncGeneratorYield(Object value){this.value=value;}
+    }
+    public static Object asyncGeneratorYield(Object value){return new PyAsyncGeneratorYield(value);}
+
     public static Object makeAsyncGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
         PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyAsyncGenerator(frame,(String)nameObj);
@@ -991,10 +997,26 @@ public final class PyRuntime {
                     return new PyYieldFromResult(true,end.value);
                 }
             }
+            if(iteratorObj instanceof PyAsyncGenAwaitIterator awaiter) {
+                if(exceptionObjectIs(pending,"GeneratorExit")) {
+                    awaiter.close();
+                    raiseObject(pending);
+                    return null;
+                }
+                try {
+                    return new PyYieldFromResult(false,awaiter.throw_(pending));
+                } catch(PyGeneratorEnd end) {
+                    return new PyYieldFromResult(true,end.value);
+                }
+            }
             raiseObject(pending);
             return null;
         }
         if(iteratorObj instanceof PyCoroutineAwaitIterator awaiter) {
+            try { return new PyYieldFromResult(false,awaiter.send(parent.sentValue)); }
+            catch(PyGeneratorEnd end) { return new PyYieldFromResult(true,end.value); }
+        }
+        if(iteratorObj instanceof PyAsyncGenAwaitIterator awaiter) {
             try { return new PyYieldFromResult(false,awaiter.send(parent.sentValue)); }
             catch(PyGeneratorEnd end) { return new PyYieldFromResult(true,end.value); }
         }
@@ -1203,29 +1225,60 @@ public final class PyRuntime {
     }
 
     private static final class PyAsyncGenAwaitIterator implements Iterator<Object>, Iterable<Object> {
-        final PyAsyncGenAwaitable awaitable; boolean done=false; Object result=null;
+        final PyAsyncGenAwaitable awaitable;
+        boolean started=false, done=false; Object result=null;
         PyAsyncGenAwaitIterator(PyAsyncGenAwaitable awaitable){this.awaitable=awaitable;}
-        public boolean hasNext(){return !done;}
-        public Object next(){
-            if(done) throw new PyGeneratorEnd(null);
-            done=true;
+
+        Object send(Object sent){
+            if(done) throw new PyGeneratorEnd(result);
+            Object out;
             try {
-                Object item = switch(awaitable.action) {
-                    case "next" -> awaitable.generator.frame.send(null);
-                    case "send" -> awaitable.generator.frame.send(awaitable.value);
-                    case "throw" -> awaitable.generator.frame.throw_(awaitable.value);
-                    case "close" -> { awaitable.generator.frame.close(); yield null; }
-                    default -> throw new PyException("RuntimeError","unknown async generator operation");
-                };
-                result=item;
-                throw new PyGeneratorEnd(item);
-            } catch(PyGeneratorEnd end) {
+                if(!started) {
+                    started=true;
+                    out = switch(awaitable.action) {
+                        case "next" -> awaitable.generator.frame.send(null);
+                        case "send" -> awaitable.generator.frame.send(awaitable.value);
+                        case "throw" -> awaitable.generator.frame.throw_(awaitable.value);
+                        case "close" -> { awaitable.generator.frame.close(); yield null; }
+                        default -> throw new PyException("RuntimeError","unknown async generator operation");
+                    };
+                    if(awaitable.action.equals("close")) {
+                        done=true; result=null; throw new PyGeneratorEnd(null);
+                    }
+                } else {
+                    out=awaitable.generator.frame.send(sent);
+                }
+            } catch(PyGeneratorEnd exhausted) {
+                done=true;
                 if(awaitable.action.equals("close")) { result=null; throw new PyGeneratorEnd(null); }
-                if(awaitable.generator.frame.finished && end.value==awaitable.generator.frame.returnValue)
-                    throw new PyException("StopAsyncIteration",null);
-                throw end;
+                throw new PyException("StopAsyncIteration",null);
             }
+            if(out instanceof PyAsyncGeneratorYield item) {
+                done=true; result=item.value; throw new PyGeneratorEnd(result);
+            }
+            return out;
         }
+
+        Object throw_(Object thrown){
+            if(done){raiseObject(thrown);return null;}
+            if(!started) {
+                started=true;
+                try {
+                    Object out=awaitable.generator.frame.throw_(thrown);
+                    if(out instanceof PyAsyncGeneratorYield item) {done=true;result=item.value;throw new PyGeneratorEnd(result);}
+                    return out;
+                } catch(PyGeneratorEnd exhausted) {done=true;throw new PyException("StopAsyncIteration",null);}
+            }
+            try {
+                Object out=awaitable.generator.frame.throw_(thrown);
+                if(out instanceof PyAsyncGeneratorYield item) {done=true;result=item.value;throw new PyGeneratorEnd(result);}
+                return out;
+            } catch(PyGeneratorEnd exhausted) {done=true;throw new PyException("StopAsyncIteration",null);}
+        }
+
+        Object close(){done=true;return awaitable.generator.frame.close();}
+        public boolean hasNext(){return !done;}
+        public Object next(){return send(null);}
         public Iterator<Object> iterator(){return this;}
     }
 
