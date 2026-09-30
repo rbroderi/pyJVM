@@ -80,7 +80,7 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
         jvm = _run([java_exe, "-cp", str(out), "ConformanceMain"], cwd=source.parent)
 
     if _stdout(jvm) != _stdout(py):
-        return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}")
+        return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}\nJVM stderr: {jvm.stderr!r}")
 
     if py.returncode == 0:
         if jvm.returncode != 0:
@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             reasons = Counter(r.detail for r in results if r.status == "UNSUPPORTED")
             for reason, count in reasons.most_common():
                 print(f"  {count:4}  {reason}")
-    return 1 if failed else 0
+    return 1 if (failed or unsupported) else 0
 
 
 if __name__ == "__main__":

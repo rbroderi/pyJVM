@@ -1,22 +1,26 @@
 {
-  "version": "0.15.0",
+  "version": "0.16.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
+  "focused_conformance": {"passed": 65, "unsupported": 0, "failed": 0},
   "new_features": [
-    "suspendable explicit await points",
-    "outward yielded scheduling values from custom awaitables",
-    "resume values forwarded through coroutine send()",
-    "throw() forwarded into suspended awaits",
-    "nested suspendable coroutine delegation",
-    "fast no-suspension async path retained",
-    "GitHub Actions Java 21 compatibility gate"
+    "async generator objects distinct from coroutines",
+    "__aiter__ and __anext__ on compiled async generators",
+    "asend, athrow, and aclose operation awaitables",
+    "async-for consumption of compiled async generators",
+    "persistent partial-expression state across suspension",
+    "strict CI failure on unsupported focused cases"
   ],
-  "conformance_cases": 61,
+  "known_limits": [
+    "await inside async generator bodies",
+    "async generator expressions and async comprehensions",
+    "custom metaclass namespace/call protocol"
+  ],
   "next_focus": [
-    "async generator state machines",
-    "full coroutine close/finally edge cases",
-    "external scheduler/event-loop adapter",
-    "custom metaclass namespace/call protocol",
+    "tagged async-generator scheduler suspensions",
+    "await inside async generators",
+    "async generator expressions and async comprehensions",
+    "custom metaclasses",
     "larger CPython 3.15 Lib/test slices"
   ]
 }

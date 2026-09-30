@@ -336,3 +336,21 @@ conformance cases at this milestone. The compiler still parses source with the P
 3.15 AST feature level; a dedicated 3.15 CI lane will be added when setup-python exposes
 3.15 on the hosted runner.
 
+## 0.16 async generators and strict compatibility gating
+
+Version 0.16 adds a distinct async-generator runtime model backed by the existing
+persistent suspension frame machinery. Async generator functions now return async
+generator objects rather than coroutines, and support `__aiter__()`, `__anext__()`,
+`asend()`, `athrow()`, and `aclose()` through per-operation awaitable objects.
+
+The compiler also generalizes suspended expression lowering so partially evaluated
+binary operations and collection literals are persisted across JVM resumes rather than
+depending on the JVM operand stack. This closes previous gaps such as `return await x`,
+arithmetic around an await, and lists containing multiple await expressions.
+
+The focused compatibility gate is now strict: both semantic failures and unsupported
+cases fail CI. The 0.16 corpus passes 65/65 executable differential cases with
+0 unsupported and 0 failed. `await` inside an async generator remains explicitly
+unsupported until scheduler suspensions and user-visible async-generator yields are
+tagged separately.
+
