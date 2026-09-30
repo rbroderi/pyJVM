@@ -80,7 +80,7 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
         jvm = _run([java_exe, "-cp", str(out), "ConformanceMain"], cwd=source.parent)
 
     if _stdout(jvm) != _stdout(py):
-        return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}")
+        return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}\nJVM stderr: {jvm.stderr!r}")
 
     if py.returncode == 0:
         if jvm.returncode != 0:
