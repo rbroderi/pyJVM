@@ -1248,7 +1248,13 @@ public final class PyRuntime {
                 throw new PyException("TypeError","can't send non-None value to a just-started coroutine");
             started=true;
 
-            if(adopted!=null) return adopted.resume(value,thrown,closing);
+            if(adopted!=null) {
+                try { return adopted.resume(value,thrown,closing); }
+                catch(PyException e) {
+                    if(e.typeName.equals("StopIteration")) { finished=true; result=e.value; }
+                    throw e;
+                }
+            }
             if(frame!=null) {
                 try {
                     Object yielded;
