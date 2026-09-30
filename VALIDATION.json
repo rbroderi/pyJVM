@@ -1,27 +1,25 @@
 {
-  "version": "0.13.0",
+  "version": "0.14.0",
   "reference_python": "current environment CPython (3.13.x); Python 3.15 AST frontend and CPython 3.15 regression sources used for prioritization",
-  "focused_conformance": {"passed": 51, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 57, "unsupported": 0, "failed": 0},
   "new_features": [
-    "live logical-frame f_locals mappings retained by tracebacks",
-    "general class decorator evaluation and application order",
-    "explicit metaclass=type compatibility groundwork",
-    "lazy async def coroutine objects",
-    "nested compiled await",
-    "async instance methods with normal Python argument binding",
-    "coroutine return and exception propagation"
+    "async for with loop-else and normal break handling",
+    "async with including return cleanup and exception suppression",
+    "aiter()/anext() builtins",
+    "__aiter__/__anext__ protocol",
+    "__aenter__/__aexit__ protocol",
+    "StopAsyncIteration",
+    "augmented assignment for attributes and subscripts",
+    "raising exception classes directly"
   ],
   "known_async_limits": [
-    "external event-loop suspension/yielding awaitables",
+    "true event-loop suspension on externally yielding awaitables",
     "async generators",
-    "async for",
-    "async with",
     "custom metaclasses"
   ],
   "next_focus": [
-    "suspendable await protocol and event-loop integration primitives",
-    "async for and async with",
-    "async generators",
+    "suspendable await state machine",
+    "async generators and async generator expressions",
     "custom metaclass namespace/call protocol",
     "larger CPython 3.15 Lib/test slices"
   ]
