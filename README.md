@@ -354,3 +354,21 @@ cases fail CI. The 0.16 corpus passes 65/65 executable differential cases with
 unsupported until scheduler suspensions and user-visible async-generator yields are
 tagged separately.
 
+## 0.17 await inside async generators
+
+Version 0.17 separates the two kinds of suspension that occur inside an async generator.
+Source-level async-generator `yield` values are wrapped in an internal item tag, while
+values yielded by an internal `await` remain scheduler suspension tokens. The
+`__anext__` / `asend` / `athrow` operation awaitables therefore complete only when a
+tagged generator item appears; scheduler tokens are yielded outward and later resume
+values or injected exceptions are forwarded back into the suspended async-generator
+frame.
+
+This enables `await` inside compiled async-generator bodies without confusing scheduler
+coordination values with items produced to an `async for` consumer. The same persistent
+frame backend continues to own locals, program counters, cleanup state, and exception
+injection.
+
+The strict focused differential corpus passes 67/67 executable cases with 0 unsupported
+and 0 failed.
+
