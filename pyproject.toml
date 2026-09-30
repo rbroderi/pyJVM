@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyjvm315"
+version = "0.9.0"
+description = "Experimental Python 3.15 AST to JVM classfile transpiler"
+requires-python = ">=3.15"
+readme = "README.md"
+license = {text = "BSD-3-Clause"}
+authors = [{name = "OpenAI"}]
+dependencies = []
+
+[project.scripts]
+pyjvm315 = "pyjvm315.cli:main"
+pyjvm315-conformance = "pyjvm315.conformance:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
