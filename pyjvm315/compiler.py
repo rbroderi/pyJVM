@@ -35,6 +35,7 @@ class FunctionInfo:
     nonlocal_names: set[str]
     is_generator: bool = False
     is_async: bool = False
+    is_async_generator: bool = False
 
     @property
     def positional(self) -> list[str]:
@@ -390,9 +391,10 @@ class Compiler:
             def visit_Lambda(self, n): return
         yf = YieldFinder(); yf.visit(node)
         is_generator = yf.found and isinstance(node, ast.FunctionDef)
-        if isinstance(node, ast.AsyncFunctionDef) and yf.found:
-            raise CompileError("async generators are not implemented yet")
         is_async = isinstance(node, ast.AsyncFunctionDef)
+        is_async_generator = is_async and yf.found
+        if is_async_generator and self._contains_await(node):
+            raise CompileError("await inside async generators is not implemented yet")
         env_mode = is_generator or is_async or bool(enclosing_locals) or has_nested or bool(nonlocal_names)
 
         posonly = [a.arg for a in node.args.posonlyargs]
@@ -411,7 +413,7 @@ class Compiler:
             node.args.vararg.arg if node.args.vararg else None,
             node.args.kwarg.arg if node.args.kwarg else None,
             defaults, kw_defaults, function_field, top_level, env_mode,
-            local_names, free_names, nonlocal_names, is_generator, is_async)
+            local_names, free_names, nonlocal_names, is_generator, is_async, is_async_generator)
         self.function_infos[id(node)] = info
         self.function_nodes.append(node)
         if top_level: self.functions[node.name] = info
@@ -544,6 +546,10 @@ class Compiler:
             self._compile_generator_function(node, info)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
+        if info.is_async_generator:
+            self._compile_generator_function(node, info, as_async_generator=True)
+            self.current_frame_name,self.current_frame_firstlineno=saved_frame
+            return
         if info.is_async and self._contains_await(node):
             lowered = self._lower_async_function(node)
             self._compile_generator_function(lowered, info, as_coroutine=True)
@@ -625,7 +631,9 @@ class Compiler:
             def visit_Yield(self, n): self.found = True
             def visit_YieldFrom(self, n): self.found = True
             def visit_FunctionDef(self, n): return
-            def visit_AsyncFunctionDef(self, n): return
+            def visit_AsyncFunctionDef(self, n):
+                if n is node:
+                    for st in n.body: self.visit(st)
             def visit_Lambda(self, n): return
         v=V()
         if isinstance(node, ast.FunctionDef):
@@ -634,7 +642,7 @@ class Compiler:
             v.visit(node)
         return v.found
 
-    def _generator_yields(self, node: ast.FunctionDef) -> list[ast.Yield | ast.YieldFrom]:
+    def _generator_yields(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Yield | ast.YieldFrom]:
         out: list[ast.Yield | ast.YieldFrom] = []
         class V(ast.NodeVisitor):
             def visit_Yield(self, n): out.append(n)
@@ -647,7 +655,7 @@ class Compiler:
         V().visit(node)
         return out
 
-    def _compile_generator_function(self, node: ast.FunctionDef, info: FunctionInfo, *, as_coroutine: bool = False) -> None:
+    def _compile_generator_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef, info: FunctionInfo, *, as_coroutine: bool = False, as_async_generator: bool = False) -> None:
         # The callable body creates a persistent frame and returns immediately.
         b=CodeBuilder(self.cf.cp)
         scope=Scope(info.bound_args,start_slot=1,env_mode=True,local_names=info.local_names,
@@ -660,7 +668,7 @@ class Compiler:
         resume_name=info.java_name+"$resume"
         b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
         b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
-        maker = "makeSuspendableCoroutineEx" if as_coroutine else "makeGeneratorEx"
+        maker = "makeAsyncGeneratorEx" if as_async_generator else ("makeSuspendableCoroutineEx" if as_coroutine else "makeGeneratorEx")
         b.invokestatic(RUNTIME,maker,f"({OBJ*6}){OBJ}"); b.areturn()
         code=b.finish()
         self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
@@ -674,7 +682,7 @@ class Compiler:
         b.aload(scope.env_slot); b.ldc_string(name)
         b.invokestatic(RUNTIME,"envGet",f"({OBJ}{OBJ}){OBJ}")
 
-    def _compile_generator_resume(self, node: ast.FunctionDef, info: FunctionInfo, resume_name: str) -> None:
+    def _compile_generator_resume(self, node: ast.FunctionDef | ast.AsyncFunctionDef, info: FunctionInfo, resume_name: str) -> None:
         yields=self._generator_yields(node)
         state_for={id(y):i+1 for i,y in enumerate(yields)}
         labels={i:b_label for i,b_label in []}  # populated below
@@ -1054,7 +1062,9 @@ class Compiler:
         b.invokestatic(RUNTIME, "makeFunctionEx", f"({OBJ * 10}){OBJ}")
         b.dup(); b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
-        if info.is_async:
+        if info.is_async_generator:
+            b.dup(); b.invokestatic(RUNTIME, "setFunctionAsyncGenerator", f"({OBJ})V")
+        elif info.is_async:
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAsync", f"({OBJ})V")
 
         if decorator_slots:
