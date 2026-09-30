@@ -1,22 +1,24 @@
 {
-  "version": "0.9.0",
+  "version": "0.10.0",
   "reference_python": "current environment CPython (3.13.x)",
   "focused_conformance": {
-    "passed": 38,
+    "passed": 41,
     "unsupported": 0,
     "failed": 0
   },
   "new_features": [
-    "bare generator reraise after suspension",
-    "yield inside generator finally suites",
-    "generator with statements across suspension",
-    "with cleanup on return/break/continue",
-    "general function decorators",
-    "generator loop else",
-    "assignment expressions with comprehension containing-scope binding"
+    "class attributes",
+    "property getters/setters",
+    "zero-argument and explicit super",
+    "classmethod/staticmethod",
+    "special-method dispatch",
+    "CPython Lib/test compile probe"
   ],
-  "known_generator_limits": [
-    "return/break/continue through a yielding generator finally suite",
-    "remaining exact GeneratorExit edge cases"
+  "next_focus": [
+    "traceback/frame objects",
+    "method argument binding/defaults",
+    "richer descriptors",
+    "async def/await",
+    "real CPython 3.15 Lib/test execution"
   ]
 }

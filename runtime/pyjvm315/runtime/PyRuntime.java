@@ -78,6 +78,7 @@ public final class PyRuntime {
         if (value instanceof PyInstance i) return i.cls.name;
         if (value instanceof PyDictView) return "dict_view";
         if (value instanceof PyModule) return "module";
+        if (value instanceof PySuper) return "super";
         if (value instanceof PyExceptionValue e) return e.typeName;
         return value.getClass().getSimpleName();
     }
@@ -140,7 +141,7 @@ public final class PyRuntime {
         if(value instanceof PyInstance i) return i.cls;
         return new PyBuiltinType(typeName(value));
     }
-    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
+    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
 
     // ---------- Display / truth ----------
     public static Object print(Object value) {
@@ -157,6 +158,10 @@ public final class PyRuntime {
         if (value instanceof PyExceptionValue e) return e.value == null ? "" : pyStr(e.value);
         if (value instanceof PyException e) return e.getMessage() == null ? "" : e.getMessage();
         if (value instanceof Throwable t) return t.getMessage() == null ? "" : t.getMessage();
+        if (value instanceof PyInstance instance) {
+            PyMethod m=instance.cls.lookupMethod("__str__");
+            if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
+        }
         if (value instanceof List<?> xs) return seqRepr(xs, "[", "]");
         if (value instanceof Set<?> xs) {
             if (xs.isEmpty()) return "set()";
@@ -177,6 +182,7 @@ public final class PyRuntime {
 
     public static String pyRepr(Object value) {
         if (value instanceof String s) return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__repr__");if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}}
         return pyStr(value);
     }
 
@@ -202,11 +208,19 @@ public final class PyRuntime {
         if (value instanceof Map<?, ?> xs) return !xs.isEmpty();
         if (value instanceof Set<?> xs) return !xs.isEmpty();
         if (value instanceof PyTuple t) return !t.items.isEmpty();
+        if(value instanceof PyInstance instance){
+            PyMethod bm=instance.cls.lookupMethod("__bool__");
+            if(bm!=null){Object out=invoke(instance,bm,new Object[0]);if(!(out instanceof Boolean))throw new PyException("TypeError","__bool__ should return bool");return (Boolean)out;}
+            PyMethod lm=instance.cls.lookupMethod("__len__");
+            if(lm!=null){Object out=invoke(instance,lm,new Object[0]);BigInteger n=bigInt(out);if(n.signum()<0)throw new PyException("ValueError","__len__() should return >= 0");return n.signum()!=0;}
+        }
         return true;
     }
 
     // ---------- Arithmetic ----------
     public static Object add(Object a, Object b) {
+        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__add__");if(m!=null)return invoke(ia,m,new Object[]{b});}
+        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__radd__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (a instanceof String sa && b instanceof String sb) return sa + sb;
         if (a instanceof List<?> la && b instanceof List<?> lb) {
             ArrayList<Object> out = new ArrayList<>(la.size() + lb.size());
@@ -223,6 +237,8 @@ public final class PyRuntime {
     }
 
     public static Object sub(Object a, Object b) {
+        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__sub__");if(m!=null)return invoke(ia,m,new Object[]{b});}
+        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__rsub__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (isIntLike(a) && isIntLike(b)) {
             if (a instanceof Long x && b instanceof Long y) {
                 try { return Math.subtractExact(x, y); }
@@ -234,6 +250,8 @@ public final class PyRuntime {
     }
 
     public static Object mul(Object a, Object b) {
+        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__mul__");if(m!=null)return invoke(ia,m,new Object[]{b});}
+        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__rmul__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (a instanceof String sa && isIntLike(b)) return repeatString(sa, bigInt(b));
         if (b instanceof String sb && isIntLike(a)) return repeatString(sb, bigInt(a));
         if (a instanceof List<?> la && isIntLike(b)) return repeatList(la, bigInt(b));
@@ -328,6 +346,8 @@ public final class PyRuntime {
 
     // ---------- Equality / ordering ----------
     public static Object eq(Object a, Object b) {
+        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__eq__");if(m!=null)return invoke(ia,m,new Object[]{b});}
+        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__eq__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (isIntLike(a) && isIntLike(b)) return bigInt(a).equals(bigInt(b));
         if (a instanceof Number && b instanceof Number) return Double.compare(number(a), number(b)) == 0;
         return Objects.equals(a, b);
@@ -345,10 +365,15 @@ public final class PyRuntime {
         throw new IllegalArgumentException("comparison not supported between '" + typeName(a) + "' and '" + typeName(b) + "'");
     }
 
-    public static Object lt(Object a, Object b) { return cmp(a, b) < 0; }
-    public static Object le(Object a, Object b) { return cmp(a, b) <= 0; }
-    public static Object gt(Object a, Object b) { return cmp(a, b) > 0; }
-    public static Object ge(Object a, Object b) { return cmp(a, b) >= 0; }
+    private static Object richCompare(Object a,Object b,String left,String right,int fallback){
+        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod(left);if(m!=null)return invoke(ia,m,new Object[]{b});}
+        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod(right);if(m!=null)return invoke(ib,m,new Object[]{a});}
+        int c=cmp(a,b); return switch(fallback){case -2->c<0;case -1->c<=0;case 1->c>=0;default->c>0;};
+    }
+    public static Object lt(Object a, Object b) { return richCompare(a,b,"__lt__","__gt__",-2); }
+    public static Object le(Object a, Object b) { return richCompare(a,b,"__le__","__ge__",-1); }
+    public static Object gt(Object a, Object b) { return richCompare(a,b,"__gt__","__lt__",2); }
+    public static Object ge(Object a, Object b) { return richCompare(a,b,"__ge__","__le__",1); }
 
     public static Object bool_(Object value) { return truth(value); }
     public static Object str_(Object value) { return pyStr(value); }
@@ -478,11 +503,13 @@ public final class PyRuntime {
         else if (value instanceof Set<?> xs) n = xs.size();
         else if (value instanceof PyTuple t) n = t.items.size();
         else if (value instanceof PyRange r) return compact(r.length());
+        else if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__len__");if(m==null)throw typeError("object has no len()",value);Object out=invoke(instance,m,new Object[0]);BigInteger bi=bigInt(out);if(bi.signum()<0)throw new PyException("ValueError","__len__() should return >= 0");return compact(bi);}
         else throw typeError("object has no len()", value);
         return n;
     }
 
     public static Object getitem(Object value, Object key) {
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__getitem__");if(m!=null)return invoke(instance,m,new Object[]{key});}
         if (key instanceof PySlice sl) return sliceGet(value, sl);
         if (value instanceof Map<?, ?> m) {
             if (!m.containsKey(key)) throw new NoSuchElementException("key not found: " + pyRepr(key));
@@ -503,6 +530,7 @@ public final class PyRuntime {
 
     @SuppressWarnings("unchecked")
     public static void setitem(Object value, Object key, Object item) {
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__setitem__");if(m!=null){invoke(instance,m,new Object[]{key,item});return;}}
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
         int i = asIndex(key);
         if (value instanceof List<?> xs) { ((List<Object>)xs).set(normalizeIndex(i, xs.size()), item); return; }
@@ -510,6 +538,7 @@ public final class PyRuntime {
     }
     @SuppressWarnings("unchecked")
     public static void delitem(Object value, Object key) {
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__delitem__");if(m!=null){invoke(instance,m,new Object[]{key});return;}}
         if (value instanceof Map<?,?> m) { if(!m.containsKey(key)) throw new NoSuchElementException("key not found"); ((Map<Object,Object>)m).remove(key); return; }
         int i=asIndex(key);
         if (value instanceof List<?> xs) { ((List<Object>)xs).remove(normalizeIndex(i,xs.size())); return; }
@@ -517,6 +546,7 @@ public final class PyRuntime {
     }
 
     public static Object contains(Object container, Object needle) {
+        if(container instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__contains__");if(m!=null)return invoke(instance,m,new Object[]{needle});}
         if (container instanceof String s && needle instanceof String n) return s.contains(n);
         if (container instanceof Map<?, ?> m) return m.containsKey(needle);
         if (container instanceof Set<?> s) return s.contains(needle);
@@ -610,6 +640,7 @@ public final class PyRuntime {
         ArrayList<Object> out=new ArrayList<>(); for(Object x:iterable(value)) out.add(x); Collections.reverse(out); return out;
     }
     public static Object next_(Object iterator) {
+        if(iterator instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__next__");if(m==null)throw new PyException("TypeError","object is not an iterator");return invoke(instance,m,new Object[0]);}
         try { return ((Iterator<?>)iterator).next(); }
         catch(PyGeneratorEnd e) { throw new PyException("StopIteration",e.value); }
         catch(NoSuchElementException e) { throw new PyException("StopIteration",null); }
@@ -620,11 +651,25 @@ public final class PyRuntime {
     public static Object range2(Object start, Object stop) { return new PyRange(bigInt(start), bigInt(stop), BigInteger.ONE); }
     public static Object range3(Object start, Object stop, Object step) { return new PyRange(bigInt(start), bigInt(stop), bigInt(step)); }
 
-    public static Object iter(Object value) { return iterable(value).iterator(); }
+    public static Object iter(Object value) {
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__iter__");if(m!=null)return invoke(instance,m,new Object[0]);}
+        return iterable(value).iterator();
+    }
     public static boolean iterHasNext(Object iterator) { return ((Iterator<?>) iterator).hasNext(); }
     public static Object iterNext(Object iterator) { return ((Iterator<?>) iterator).next(); }
 
     private static Iterable<?> iterable(Object value) {
+        if(value instanceof PyInstance instance){
+            PyMethod m=instance.cls.lookupMethod("__iter__");
+            if(m!=null){
+                Object it=invoke(instance,m,new Object[0]);
+                return () -> new Iterator<Object>() {
+                    Object buffered=null; boolean hasBuffered=false,done=false;
+                    public boolean hasNext(){if(done)return false;if(hasBuffered)return true;try{buffered=next_(it);hasBuffered=true;return true;}catch(PyException e){if(e.typeName.equals("StopIteration")){done=true;return false;}throw e;}}
+                    public Object next(){if(!hasNext())throw new NoSuchElementException();Object out=buffered;buffered=null;hasBuffered=false;return out;}
+                };
+            }
+        }
         if (value instanceof Iterable<?> x) return x;
         if (value instanceof Map<?, ?> m) return m.keySet();
         if (value instanceof String s) {
@@ -940,6 +985,15 @@ public final class PyRuntime {
             if (!kwargs.isEmpty()) throw new PyException("TypeError", "method keyword arguments are not implemented yet");
             return callMethod(bm.self, bm.name, args.toArray());
         }
+        if (callable instanceof BoundSuperMethod bm) {
+            if (!kwargs.isEmpty()) throw new PyException("TypeError", "method keyword arguments are not implemented yet");
+            PyMethod method=bm.self.cls.lookupMethodAfter(bm.currentClass,bm.name);
+            if(method==null) throw new PyException("AttributeError","super attribute not found");
+            return invoke(bm.self,method,args.toArray());
+        }
+        if(callable instanceof BoundClassMethod bm){if(!kwargs.isEmpty())throw new PyException("TypeError","method keyword arguments are not implemented yet");PyMethod m=bm.cls.lookupMethod(bm.name);return invokeOnClass(bm.cls,m,args.toArray());}
+        if(callable instanceof BoundStaticMethod bm){if(!kwargs.isEmpty())throw new PyException("TypeError","method keyword arguments are not implemented yet");PyMethod m=bm.cls.lookupMethod(bm.name);return invokeOnClass(bm.cls,m,args.toArray());}
+        if(callable instanceof UnboundMethod bm){if(!kwargs.isEmpty())throw new PyException("TypeError","method keyword arguments are not implemented yet");PyMethod m=bm.cls.lookupMethod(bm.name);return invokeOnClass(bm.cls,m,args.toArray());}
         if (callable instanceof PyClass cls) {
             if (!kwargs.isEmpty()) throw new PyException("TypeError", "class keyword arguments are not implemented yet");
             return instantiate(cls, args.toArray());
@@ -1161,10 +1215,25 @@ public final class PyRuntime {
     // ---------- Python classes / instances ----------
     public static Object class0(Object name) { return new PyClass("__main__", (String) name); }
     public static void classAddBase(Object cls, Object base) { ((PyClass)cls).bases.add((PyClass)base); }
+    public static void classAddAttr(Object cls, Object pyName, Object value) {
+        ((PyClass)cls).attrs.put((String)pyName, value);
+    }
     public static void classAddMethod(Object cls, Object pyName, Object owner, Object javaName) {
-        ((PyClass)cls).methods.put((String)pyName, new PyMethod((String)owner, (String)javaName));
+        classAddMethodKind(cls,pyName,owner,javaName,"instance");
+    }
+    public static void classAddMethodKind(Object cls, Object pyName, Object owner, Object javaName, Object kind) {
+        ((PyClass)cls).methods.put((String)pyName, new PyMethod((String)owner, (String)javaName, (String)kind));
+    }
+    public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
+        ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
     }
     public static void classFinalize(Object cls) { ((PyClass)cls).computeMro(); }
+    public static Object makeSuper(Object currentClass, Object self) {
+        if (!(currentClass instanceof PyClass cls) || !(self instanceof PyInstance instance))
+            throw new PyException("TypeError", "super() arguments must be a class and instance");
+        if (!instance.cls.mro.contains(cls)) throw new PyException("TypeError", "super(type, obj): obj must be an instance or subtype of type");
+        return new PySuper(cls, instance);
+    }
 
     public static Object instantiate0(Object cls) { return instantiate((PyClass)cls, new Object[0]); }
     public static Object instantiate1(Object cls, Object a) { return instantiate((PyClass)cls, new Object[]{a}); }
@@ -1173,7 +1242,7 @@ public final class PyRuntime {
 
     private static Object instantiate(PyClass cls, Object[] args) {
         PyInstance instance = new PyInstance(cls);
-        PyMethod init = cls.lookup("__init__");
+        PyMethod init = cls.lookupMethod("__init__");
         if (init != null) invoke(instance, init, args);
         else if (args.length != 0) throw new IllegalArgumentException(cls.name + "() takes no arguments");
         return instance;
@@ -1187,6 +1256,16 @@ public final class PyRuntime {
     public static Object callMethod3(Object obj, Object name, Object a, Object b, Object c) { return callMethod(obj, (String)name, new Object[]{a,b,c}); }
 
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if (obj instanceof PySuper sup) {
+            PyMethod method = sup.self.cls.lookupMethodAfter(sup.currentClass, name);
+            if (method == null) throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
+            return invoke(sup.self, method, args);
+        }
+        if (obj instanceof PyClass cls) {
+            PyMethod method=cls.lookupMethod(name);
+            if(method==null) throw new PyException("AttributeError","type object '"+cls.name+"' has no method '"+name+"'");
+            return invokeOnClass(cls,method,args);
+        }
         if (obj instanceof PyGenerator gen) {
             return switch(name) {
                 case "send" -> { requireArgs(name,args,1); yield gen.send(args[0]); }
@@ -1261,20 +1340,17 @@ public final class PyRuntime {
             };
         }
         if (!(obj instanceof PyInstance instance)) throw typeError("method call on non-instance", obj);
-        PyMethod method = instance.cls.lookup(name);
-        if (method == null) throw new IllegalArgumentException("'" + instance.cls.name + "' object has no method '" + name + "'");
+        PyMethod method = instance.cls.lookupMethod(name);
+        if (method == null) throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no method '" + name + "'");
         return invoke(instance, method, args);
     }
 
-    private static Object invoke(PyInstance self, PyMethod method, Object[] args) {
+    private static Object invokeReflective(PyMethod method,Object[] actual) {
         try {
             Class<?> owner = Class.forName(method.owner);
-            Class<?>[] types = new Class<?>[args.length + 1];
+            Class<?>[] types = new Class<?>[actual.length];
             Arrays.fill(types, Object.class);
             var reflected = owner.getDeclaredMethod(method.javaName, types);
-            Object[] actual = new Object[args.length + 1];
-            actual[0] = self;
-            System.arraycopy(args, 0, actual, 1, args.length);
             return reflected.invoke(null, actual);
         } catch (java.lang.reflect.InvocationTargetException exc) {
             Throwable cause = exc.getCause();
@@ -1284,6 +1360,20 @@ public final class PyRuntime {
         } catch (ReflectiveOperationException exc) {
             throw new RuntimeException(exc);
         }
+    }
+
+    private static Object invoke(PyInstance self, PyMethod method, Object[] args) {
+        if(method.kind.equals("static")) return invokeReflective(method,args);
+        Object receiver = method.kind.equals("class") ? self.cls : self;
+        Object[] actual = new Object[args.length+1]; actual[0]=receiver; System.arraycopy(args,0,actual,1,args.length);
+        return invokeReflective(method,actual);
+    }
+
+    private static Object invokeOnClass(PyClass cls,PyMethod method,Object[] args) {
+        if(method.kind.equals("static")) return invokeReflective(method,args);
+        if(method.kind.equals("class")){Object[] actual=new Object[args.length+1];actual[0]=cls;System.arraycopy(args,0,actual,1,args.length);return invokeReflective(method,actual);}
+        if(args.length==0 || !(args[0] instanceof PyInstance self)) throw new PyException("TypeError","unbound method requires an instance as first argument");
+        Object[] rest=Arrays.copyOfRange(args,1,args.length); return invoke(self,method,rest);
     }
 
     public static Object getattr(Object obj, Object nameObj) {
@@ -1297,27 +1387,68 @@ public final class PyRuntime {
             if (name.equals("__suppress_context__")) return exc.suppressContext;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
         }
+        if (obj instanceof PySuper sup) {
+            PyProperty prop=sup.self.cls.lookupPropertyAfter(sup.currentClass,name);
+            if(prop!=null) return invoke(sup.self,new PyMethod(prop.owner,prop.getter),new Object[0]);
+            PyMethod method=sup.self.cls.lookupMethodAfter(sup.currentClass,name);
+            if(method!=null) return new BoundSuperMethod(sup.self,sup.currentClass,name);
+            Object attr=sup.self.cls.lookupAttrAfter(sup.currentClass,name);
+            if(attr!=MISSING) return attr;
+            throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
+        }
+        if (obj instanceof PyClass cls) {
+            Object attr=cls.lookupAttr(name);
+            if(attr!=MISSING) return attr;
+            PyProperty prop=cls.lookupProperty(name);
+            if(prop!=null) return prop;
+            PyMethod method=cls.lookupMethod(name);
+            if(method!=null){
+                if(method.kind.equals("class")) return new BoundClassMethod(cls,name);
+                if(method.kind.equals("static")) return new BoundStaticMethod(cls,name);
+                return new UnboundMethod(cls,name);
+            }
+            throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
+        }
         if (obj instanceof PyInstance instance) {
+            PyProperty prop=instance.cls.lookupProperty(name);
+            if(prop!=null) return invoke(instance,new PyMethod(prop.owner,prop.getter),new Object[0]);
             if (instance.fields.containsKey(name)) return instance.fields.get(name);
-            if (instance.cls.lookup(name) != null) return new BoundMethod(instance, name);
-            throw new IllegalArgumentException("'" + instance.cls.name + "' object has no attribute '" + name + "'");
+            PyMethod method=instance.cls.lookupMethod(name);
+            if (method != null) return new BoundMethod(instance, name);
+            Object attr=instance.cls.lookupAttr(name);
+            if(attr!=MISSING) return attr;
+            throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
         throw typeError("attribute access on unsupported object", obj);
     }
 
     public static Object getattrDefault(Object obj,Object nameObj,Object defaultValue) {
-        try { return getattr(obj,nameObj); } catch(RuntimeException e) { return defaultValue; }
+        try { return getattr(obj,nameObj); } catch(PyException e) { if(e.typeName.equals("AttributeError")) return defaultValue; throw e; }
     }
     public static Object hasattr(Object obj,Object nameObj) {
-        try { getattr(obj,nameObj); return true; } catch(RuntimeException e) { return false; }
+        try { getattr(obj,nameObj); return true; } catch(PyException e) { if(e.typeName.equals("AttributeError")) return false; throw e; }
     }
 
     public static void setattr(Object obj, Object nameObj, Object value) {
-        if (obj instanceof PyInstance instance) { instance.fields.put((String)nameObj, value); return; }
+        String name=(String)nameObj;
+        if (obj instanceof PyInstance instance) {
+            PyProperty prop=instance.cls.lookupProperty(name);
+            if(prop!=null) {
+                if(prop.setter==null) throw new PyException("AttributeError", "property '"+name+"' of '"+instance.cls.name+"' object has no setter");
+                invoke(instance,new PyMethod(prop.owner,prop.setter),new Object[]{value}); return;
+            }
+            instance.fields.put(name, value); return;
+        }
+        if(obj instanceof PyClass cls){cls.attrs.put(name,value);return;}
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
-        if(obj instanceof PyInstance instance) { String name=(String)nameObj; if(!instance.fields.containsKey(name)) throw new PyException("AttributeError","attribute not found"); instance.fields.remove(name); return; }
+        if(obj instanceof PyInstance instance) {
+            String name=(String)nameObj;
+            if(instance.cls.lookupProperty(name)!=null) throw new PyException("AttributeError","property '"+name+"' has no deleter");
+            if(!instance.fields.containsKey(name)) throw new PyException("AttributeError","attribute not found"); instance.fields.remove(name); return;
+        }
+        if(obj instanceof PyClass cls){String name=(String)nameObj;if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);return;}
         throw typeError("attribute deletion on unsupported object",obj);
     }
 
@@ -1358,8 +1489,15 @@ public final class PyRuntime {
         throw new PyException("TypeError","issubclass() arg 1 must be a class");
     }
 
-    private record PyMethod(String owner, String javaName) {}
+    private static final Object MISSING = new Object();
+    private record PyMethod(String owner, String javaName, String kind) { PyMethod(String owner,String javaName){this(owner,javaName,"instance");} }
+    private record PyProperty(String owner, String getter, String setter) {}
     private record BoundMethod(PyInstance self, String name) {}
+    private record BoundSuperMethod(PyInstance self, PyClass currentClass, String name) {}
+    private record BoundClassMethod(PyClass cls,String name) {}
+    private record BoundStaticMethod(PyClass cls,String name) {}
+    private record UnboundMethod(PyClass cls,String name) {}
+    private record PySuper(PyClass currentClass, PyInstance self) {}
 
     public static final class PyInstance {
         final PyClass cls;
@@ -1373,16 +1511,18 @@ public final class PyRuntime {
         final String name;
         final ArrayList<PyClass> bases = new ArrayList<>();
         final LinkedHashMap<String,PyMethod> methods = new LinkedHashMap<>();
+        final LinkedHashMap<String,PyProperty> properties = new LinkedHashMap<>();
+        final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
         List<PyClass> mro = List.of(this);
         PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; }
 
-        PyMethod lookup(String name) {
-            for (PyClass c : mro) {
-                PyMethod m = c.methods.get(name);
-                if (m != null) return m;
-            }
-            return null;
-        }
+        PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;} return null; }
+        PyProperty lookupProperty(String name) { for (PyClass c:mro){PyProperty p=c.properties.get(name);if(p!=null)return p;} return null; }
+        Object lookupAttr(String name) { for (PyClass c:mro) if(c.attrs.containsKey(name)) return c.attrs.get(name); return MISSING; }
+        int mroIndex(PyClass current){int i=mro.indexOf(current);if(i<0)throw new PyException("TypeError","super(type, obj): type is not in MRO");return i;}
+        PyMethod lookupMethodAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyMethod m=mro.get(i).methods.get(name);if(m!=null)return m;}return null;}
+        PyProperty lookupPropertyAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyProperty p=mro.get(i).properties.get(name);if(p!=null)return p;}return null;}
+        Object lookupAttrAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyClass c=mro.get(i);if(c.attrs.containsKey(name))return c.attrs.get(name);}return MISSING;}
 
         void computeMro() {
             if (bases.isEmpty()) { mro = List.of(this); return; }

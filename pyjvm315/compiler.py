@@ -58,6 +58,7 @@ class MethodInfo:
     py_name: str
     java_name: str
     args: list[str]
+    kind: str = "instance"
 
     @property
     def descriptor(self) -> str:
@@ -65,10 +66,19 @@ class MethodInfo:
 
 
 @dataclass
+class PropertyInfo:
+    name: str
+    getter: MethodInfo
+    setter: MethodInfo | None = None
+
+
+@dataclass
 class ClassInfo:
     name: str
     bases: list[str]
     methods: dict[str, MethodInfo]
+    properties: dict[str, PropertyInfo]
+    attrs: list[tuple[str, ast.expr]]
     class_field: str
 
 
@@ -137,6 +147,9 @@ class Compiler:
         self.function_infos: dict[int, FunctionInfo] = {}
         self.function_nodes: list[ast.FunctionDef] = []
         self.classes: dict[str, ClassInfo] = {}
+        self.class_method_infos: dict[int, MethodInfo] = {}
+        self.current_class: ClassInfo | None = None
+        self.current_method_self: str | None = None
         self.global_names: set[str] = set()
         self.global_fields: dict[str, str] = {}
         self._method_counter = 0
@@ -380,39 +393,72 @@ class Compiler:
                 raise CompileError("class bases must currently be simple names")
             bases.append(base.id)
         methods: dict[str, MethodInfo] = {}
+        properties: dict[str, PropertyInfo] = {}
+        attrs: list[tuple[str, ast.expr]] = []
         for item in node.body:
             if isinstance(item, ast.Pass):
                 continue
+            if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+                attrs.append((item.targets[0].id, item.value))
+                continue
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
+                attrs.append((item.target.id, item.value))
+                continue
             if not isinstance(item, ast.FunctionDef):
-                raise CompileError("class bodies currently support methods only")
-            if item.decorator_list:
-                raise CompileError("method decorators are not implemented yet")
+                raise CompileError("class bodies currently support methods and simple class attributes")
             if item.args.vararg or item.args.kwarg or item.args.kwonlyargs or item.args.defaults or item.args.kw_defaults:
                 raise CompileError("method varargs/defaults/keyword-only args are not implemented yet")
             args = [a.arg for a in item.args.posonlyargs + item.args.args]
-            if not args:
-                raise CompileError(f"method {item.name} must declare self")
+            kind = "instance"
+            if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
+                kind = item.decorator_list[0].id.removesuffix("method")
+            if kind != "static" and not args:
+                raise CompileError(f"method {item.name} must declare an implicit receiver argument")
             java_name = f"__py_method_{self._method_counter}"
             self._method_counter += 1
-            methods[item.name] = MethodInfo(item.name, java_name, args)
+            method = MethodInfo(item.name, java_name, args, kind)
+            self.class_method_infos[id(item)] = method
+
+            if not item.decorator_list or kind in {"class", "static"}:
+                methods[f"{item.name}#{len(methods)}"] = method
+                continue
+            if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id == "property":
+                properties[item.name] = PropertyInfo(item.name, method)
+                continue
+            if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Attribute):
+                dec = item.decorator_list[0]
+                if dec.attr == "setter" and isinstance(dec.value, ast.Name):
+                    prop_name = dec.value.id
+                    prop = properties.get(prop_name)
+                    if prop is None:
+                        raise CompileError(f"property setter {prop_name!r} appears before its property getter")
+                    prop.setter = method
+                    continue
+            raise CompileError("method decorators currently support @property and @name.setter")
         class_field = f"__py_class_{node.name}"
         self.cf.add_field(Field(class_field))
-        self.classes[node.name] = ClassInfo(node.name, bases, methods, class_field)
+        self.classes[node.name] = ClassInfo(node.name, bases, methods, properties, attrs, class_field)
 
     def _compile_class_methods(self, node: ast.ClassDef) -> None:
         info = self.classes[node.name]
-        by_name = {m.py_name: m for m in info.methods.values()}
-        for item in node.body:
-            if isinstance(item, ast.FunctionDef):
-                method = by_name[item.name]
-                b = CodeBuilder(self.cf.cp)
-                scope = Scope(method.args, start_slot=0)
-                self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
-                for stmt in item.body:
-                    self._stmt(stmt, b, scope, in_function=True)
-                b.aconst_null(); b.areturn()
-                code = b.finish()
-                self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
+        old_class, old_self = self.current_class, self.current_method_self
+        self.current_class = info
+        try:
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef):
+                    method = self.class_method_infos[id(item)]
+                    b = CodeBuilder(self.cf.cp)
+                    scope = Scope(method.args, start_slot=0)
+                    self.current_method_self = method.args[0]
+                    self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+                    for stmt in item.body:
+                        self._stmt(stmt, b, scope, in_function=True)
+                    b.aconst_null(); b.areturn()
+                    code = b.finish()
+                    self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
+        finally:
+            self.current_class, self.current_method_self = old_class, old_self
+
     def _add_constructor(self) -> None:
         b = CodeBuilder(self.cf.cp)
         b.aload(0)
@@ -1268,9 +1314,17 @@ class Compiler:
                 for base_name in info.bases:
                     b.aload(class_slot); self._load_name(base_name, b, scope)
                     b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
+                for attr_name, attr_value in info.attrs:
+                    b.aload(class_slot); b.ldc_string(attr_name); self._expr(attr_value, b, scope)
+                    b.invokestatic(RUNTIME, "classAddAttr", f"({OBJ}{OBJ}{OBJ})V")
                 for method in info.methods.values():
-                    b.aload(class_slot); b.ldc_string(method.py_name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(method.java_name)
-                    b.invokestatic(RUNTIME, "classAddMethod", f"({OBJ}{OBJ}{OBJ}{OBJ})V")
+                    b.aload(class_slot); b.ldc_string(method.py_name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(method.java_name); b.ldc_string(method.kind)
+                    b.invokestatic(RUNTIME, "classAddMethodKind", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
+                for prop in info.properties.values():
+                    b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
+                    if prop.setter is None: b.aconst_null()
+                    else: b.ldc_string(prop.setter.java_name)
+                    b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
                 b.aload(class_slot); b.invokestatic(RUNTIME, "classFinalize", f"({OBJ})V")
             case ast.AnnAssign(target=ast.Name(id=name), value=value):
                 if value is None: b.aconst_null()
@@ -1470,6 +1524,15 @@ class Compiler:
             case ast.BoolOp(op=ast.Or(), values=values): self._boolop(values, False, b, scope)
             case ast.Compare(left=left, ops=ops, comparators=comparators):
                 self._compare_chain(left, ops, comparators, b, scope)
+            case ast.Call(func=ast.Name(id="super"), args=[], keywords=[]):
+                if self.current_class is None or self.current_method_self is None:
+                    raise CompileError("zero-argument super() is only available inside compiled methods")
+                b.getstatic(self.class_name, self.current_class.class_field, OBJ)
+                self._load_name(self.current_method_self, b, scope)
+                b.invokestatic(RUNTIME, "makeSuper", f"({OBJ}{OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="super"), args=[cls, obj], keywords=[]):
+                self._expr(cls, b, scope); self._expr(obj, b, scope)
+                b.invokestatic(RUNTIME, "makeSuper", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="print"), args=args, keywords=keywords):
                 b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
                 for arg in args:
