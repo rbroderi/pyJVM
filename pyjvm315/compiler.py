@@ -57,12 +57,31 @@ class FunctionInfo:
 class MethodInfo:
     py_name: str
     java_name: str
-    args: list[str]
+    posonly: list[str]
+    poskw: list[str]
+    kwonly: list[str]
+    vararg: str | None
+    kwarg: str | None
+    defaults: dict[str, ast.expr]
+    kw_defaults: dict[str, ast.expr]
     kind: str = "instance"
 
     @property
+    def positional(self) -> list[str]:
+        return self.posonly + self.poskw
+
+    @property
+    def bound_args(self) -> list[str]:
+        out = self.positional + self.kwonly
+        if self.vararg is not None:
+            out.append(self.vararg)
+        if self.kwarg is not None:
+            out.append(self.kwarg)
+        return out
+
+    @property
     def descriptor(self) -> str:
-        return "(" + (OBJ * len(self.args)) + ")" + OBJ
+        return "(" + (OBJ * len(self.bound_args)) + ")" + OBJ
 
 
 @dataclass
@@ -406,17 +425,27 @@ class Compiler:
                 continue
             if not isinstance(item, ast.FunctionDef):
                 raise CompileError("class bodies currently support methods and simple class attributes")
-            if item.args.vararg or item.args.kwarg or item.args.kwonlyargs or item.args.defaults or item.args.kw_defaults:
-                raise CompileError("method varargs/defaults/keyword-only args are not implemented yet")
-            args = [a.arg for a in item.args.posonlyargs + item.args.args]
+            posonly = [a.arg for a in item.args.posonlyargs]
+            poskw = [a.arg for a in item.args.args]
+            positional = posonly + poskw
+            defaults: dict[str, ast.expr] = {}
+            if item.args.defaults:
+                for param, expr in zip(positional[-len(item.args.defaults):], item.args.defaults):
+                    defaults[param] = expr
+            kw_defaults = {a.arg: e for a, e in zip(item.args.kwonlyargs, item.args.kw_defaults) if e is not None}
             kind = "instance"
             if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
                 kind = item.decorator_list[0].id.removesuffix("method")
-            if kind != "static" and not args:
+            if kind != "static" and not positional:
                 raise CompileError(f"method {item.name} must declare an implicit receiver argument")
             java_name = f"__py_method_{self._method_counter}"
             self._method_counter += 1
-            method = MethodInfo(item.name, java_name, args, kind)
+            method = MethodInfo(
+                item.name, java_name, posonly, poskw, [a.arg for a in item.args.kwonlyargs],
+                item.args.vararg.arg if item.args.vararg else None,
+                item.args.kwarg.arg if item.args.kwarg else None,
+                defaults, kw_defaults, kind
+            )
             self.class_method_infos[id(item)] = method
 
             if not item.decorator_list or kind in {"class", "static"}:
@@ -448,8 +477,8 @@ class Compiler:
                 if isinstance(item, ast.FunctionDef):
                     method = self.class_method_infos[id(item)]
                     b = CodeBuilder(self.cf.cp)
-                    scope = Scope(method.args, start_slot=0)
-                    self.current_method_self = method.args[0]
+                    scope = Scope(method.bound_args, start_slot=0)
+                    self.current_method_self = method.positional[0] if method.positional else None
                     self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
                     for stmt in item.body:
                         self._stmt(stmt, b, scope, in_function=True)
@@ -1318,8 +1347,19 @@ class Compiler:
                     b.aload(class_slot); b.ldc_string(attr_name); self._expr(attr_value, b, scope)
                     b.invokestatic(RUNTIME, "classAddAttr", f"({OBJ}{OBJ}{OBJ})V")
                 for method in info.methods.values():
+                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                    defaults_slot = scope.temp(); b.astore(defaults_slot)
+                    for param, expr in [*method.defaults.items(), *method.kw_defaults.items()]:
+                        b.aload(defaults_slot); b.ldc_string(param); self._expr(expr, b, scope)
+                        b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
                     b.aload(class_slot); b.ldc_string(method.py_name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(method.java_name); b.ldc_string(method.kind)
-                    b.invokestatic(RUNTIME, "classAddMethodKind", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
+                    b.ldc_string(",".join(method.posonly)); b.ldc_string(",".join(method.poskw)); b.ldc_string(",".join(method.kwonly))
+                    if method.vararg is None: b.aconst_null()
+                    else: b.ldc_string(method.vararg)
+                    if method.kwarg is None: b.aconst_null()
+                    else: b.ldc_string(method.kwarg)
+                    b.aload(defaults_slot)
+                    b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 11})V")
                 for prop in info.properties.values():
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
