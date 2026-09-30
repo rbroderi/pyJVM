@@ -247,3 +247,19 @@ pyjvm315-probe /path/to/cpython/Lib/test --json > probe.json
 
 The bundled focused differential corpus is now 41/41 passing in the current
 development environment.
+
+## 0.11 method binding and descriptor protocol
+
+Version 0.11 unifies Python argument binding for compiled functions and user-defined
+methods. Instance methods, class methods, static methods, and `__init__` now support
+positional-only parameters, defaults, keyword-only parameters, `*args`, `**kwargs`,
+keyword calls, and ordered keyword mappings through the same runtime binder.
+
+The user-defined class runtime also implements the core descriptor protocol for class
+attributes whose values define `__get__`, `__set__`, or `__delete__`. Data descriptors
+precede instance fields, non-data descriptors can be shadowed by instance fields, class
+access invokes `__get__(None, owner)`, and missing instance attributes can fall back to
+`__getattr__`.
+
+The focused differential suite now contains 43 passing programs, including new cases
+derived from CPython's `test_call.py` method-binding behavior and descriptor semantics.
