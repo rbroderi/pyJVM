@@ -761,6 +761,13 @@ class Compiler:
             b.mark(done)
             self._gen_env_load(syn,b,scope); b.invokestatic(RUNTIME,"yieldFromReturnValue",f"({OBJ}){OBJ}")
 
+        synthetic_counter=[0]
+
+        def persist_gen_value(prefix: str) -> str:
+            name=f"${prefix}_{synthetic_counter[0]}"; synthetic_counter[0]+=1
+            slot=scope.temp(); b.astore(slot); self._gen_env_store(name,slot,b,scope)
+            return name
+
         def gen_value(expr: ast.expr):
             if isinstance(expr, ast.Yield):
                 emit_yield(expr); return
@@ -769,48 +776,39 @@ class Compiler:
             if not self._contains_yield(expr):
                 self._expr(expr,b,scope); return
             if isinstance(expr, ast.BinOp):
-                gen_value(expr.left); left_slot=scope.temp(); b.astore(left_slot)
+                gen_value(expr.left); left_name=persist_gen_value("expr_left")
                 gen_value(expr.right); right_slot=scope.temp(); b.astore(right_slot)
-                b.aload(left_slot); b.aload(right_slot); self._binary_runtime(expr.op,b); return
-            if isinstance(expr, ast.List):
-                b.invokestatic(RUNTIME,"list0",f"(){OBJ}")
+                self._gen_env_load(left_name,b,scope); b.aload(right_slot)
+                self._binary_runtime(expr.op,b); return
+            if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+                if isinstance(expr,ast.List): create,add,extend="list0","listAppend","listExtend"
+                elif isinstance(expr,ast.Tuple): create,add,extend="tuple0","tupleAppend","tupleExtend"
+                else: create,add,extend="set0","setAdd","setUpdate"
+                b.invokestatic(RUNTIME,create,f"(){OBJ}")
+                container=persist_gen_value("expr_container")
                 for elt in expr.elts:
-                    if isinstance(elt,ast.Starred):
-                        b.dup(); gen_value(elt.value); b.invokestatic(RUNTIME,"listExtend",f"({OBJ}{OBJ})V")
-                    else:
-                        b.dup(); gen_value(elt); b.invokestatic(RUNTIME,"listAppend",f"({OBJ}{OBJ})V")
-                return
-            if isinstance(expr, ast.Tuple):
-                b.invokestatic(RUNTIME,"tuple0",f"(){OBJ}")
-                for elt in expr.elts:
-                    if isinstance(elt,ast.Starred):
-                        b.dup(); gen_value(elt.value); b.invokestatic(RUNTIME,"tupleExtend",f"({OBJ}{OBJ})V")
-                    else:
-                        b.dup(); gen_value(elt); b.invokestatic(RUNTIME,"tupleAppend",f"({OBJ}{OBJ})V")
-                return
-            if isinstance(expr, ast.Set):
-                b.invokestatic(RUNTIME,"set0",f"(){OBJ}")
-                for elt in expr.elts:
-                    if isinstance(elt,ast.Starred):
-                        b.dup(); gen_value(elt.value); b.invokestatic(RUNTIME,"setUpdate",f"({OBJ}{OBJ})V")
-                    else:
-                        b.dup(); gen_value(elt); b.invokestatic(RUNTIME,"setAdd",f"({OBJ}{OBJ})V")
-                return
+                    target=elt.value if isinstance(elt,ast.Starred) else elt
+                    gen_value(target); value_slot=scope.temp(); b.astore(value_slot)
+                    self._gen_env_load(container,b,scope); b.aload(value_slot)
+                    b.invokestatic(RUNTIME,extend if isinstance(elt,ast.Starred) else add,f"({OBJ}{OBJ})V")
+                self._gen_env_load(container,b,scope); return
             if isinstance(expr, ast.Dict):
                 b.invokestatic(RUNTIME,"dict0",f"(){OBJ}")
+                container=persist_gen_value("expr_dict")
                 for key,value in zip(expr.keys,expr.values):
-                    b.dup()
                     if key is None:
-                        gen_value(value); b.invokestatic(RUNTIME,"dictUpdate",f"({OBJ}{OBJ})V")
+                        gen_value(value); value_slot=scope.temp(); b.astore(value_slot)
+                        self._gen_env_load(container,b,scope); b.aload(value_slot)
+                        b.invokestatic(RUNTIME,"dictUpdate",f"({OBJ}{OBJ})V")
                     else:
-                        gen_value(key); gen_value(value); b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
-                return
+                        gen_value(key); key_name=persist_gen_value("expr_key")
+                        gen_value(value); value_slot=scope.temp(); b.astore(value_slot)
+                        self._gen_env_load(container,b,scope); self._gen_env_load(key_name,b,scope); b.aload(value_slot)
+                        b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
+                self._gen_env_load(container,b,scope); return
             if isinstance(expr, ast.IfExp):
-                no,end=b.label(),b.label(); self._truthy(expr.test,b,scope); b.ifeq(no)
-                gen_value(expr.body); b.goto(end); b.mark(no); gen_value(expr.orelse); b.mark(end); return
+                raise CompileError("suspension inside conditional expressions is not implemented yet")
             raise CompileError(f"suspension inside {type(expr).__name__} is not implemented yet")
-
-        synthetic_counter=[0]
 
         def gen_try_except(body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt]):
             start, protected_end, dispatch, done = b.label(), b.label(), b.label(), b.label()
