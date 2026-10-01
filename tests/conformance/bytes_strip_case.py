@@ -1,0 +1,10 @@
+b = b"  AbC xyZ  "
+print(b.strip())
+print(b.lstrip())
+print(b.rstrip())
+print(b"xxhellox".strip(b"x"))
+print(b"AbC123".lower())
+print(b"AbC123".upper())
+print(b"hELLO wORLD".capitalize())
+print(b"hello world!x".title())
+print(b"AbC123".swapcase())
