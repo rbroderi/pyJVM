@@ -439,3 +439,23 @@ The runtime also exposes class/instance creation metadata including `__class__`,
 The strict focused differential corpus passes 80/80 executable cases with
 0 unsupported and 0 failed.
 
+## 0.22 custom metaclass protocol and class keywords
+
+Version 0.22 adds explicit and inherited custom metaclass selection, including
+`__prepare__`, metaclass `__new__`, `__init__`, and `__call__`. Prepared namespace
+mappings are populated with compiled class attributes/methods and handed to the
+metaclass creation hooks; namespace mutations made by metaclass `__new__` become
+attributes on the resulting class.
+
+`type.__new__`, `type.__init__`, and `type.__call__` are available to compiled
+metaclass implementations, and custom metaclasses are visible through `type(C)` /
+`C.__class__`. Metaclass selection propagates through inheritance and reports
+conflicts between incompatible metaclasses.
+
+Named class declaration keywords are now evaluated once and forwarded through
+`__prepare__`, metaclass `__new__` / `__init__`, and the default
+`__init_subclass__` path.
+
+The strict focused differential corpus passes 83/83 executable cases with
+0 unsupported and 0 failed.
+
