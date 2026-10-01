@@ -8,7 +8,7 @@ import ast
 import json
 import re
 
-LINE_SUFFIX = re.compile(r" at line \d+$")
+from .compiler import CompileError, compile_source
 
 
 LINE_SUFFIX = re.compile(r" at line \\d+$")
