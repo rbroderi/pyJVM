@@ -97,7 +97,39 @@ def discover_cases(path: Path) -> tuple[ast.Module, list[tuple[str, ast.Function
     return tree, cases
 
 
+def _contains_local_class(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    class Visitor(ast.NodeVisitor):
+        found = False
+        root = None
+
+        def visit_ClassDef(self, n: ast.ClassDef) -> None:
+            self.found = True
+
+        def visit_FunctionDef(self, n: ast.FunctionDef) -> None:
+            if n is self.root:
+                for stmt in n.body:
+                    self.visit(stmt)
+
+        def visit_AsyncFunctionDef(self, n: ast.AsyncFunctionDef) -> None:
+            if n is self.root:
+                for stmt in n.body:
+                    self.visit(stmt)
+
+        def visit_Lambda(self, n: ast.Lambda) -> None:
+            return
+
+    visitor = Visitor()
+    visitor.root = node
+    visitor.visit(node)
+    return visitor.found
+
+
 def probe_case(path: Path, tree: ast.Module, qualname: str, node: ast.FunctionDef | ast.AsyncFunctionDef) -> CaseResult:
+    if _contains_local_class(node):
+        return CaseResult(
+            str(path), qualname, getattr(node, "lineno", 0),
+            "UNSUPPORTED", "nested/local class definitions are not implemented",
+        )
     prelude = _placeholder_prelude(tree)
     synthetic = ast.Module(body=[*prelude, _case_function(node, qualname)], type_ignores=[])
     ast.fix_missing_locations(synthetic)
