@@ -510,3 +510,23 @@ an explicit compile-time limitation rather than silently using incorrect exports
 The strict focused differential corpus passes 100/100 executable cases with
 0 unsupported and 0 failed.
 
+## 0.26 bytes, bytearray, and memoryview basics
+
+Version 0.26 adds a shared binary-sequence runtime model for immutable `bytes`, mutable
+`bytearray`, and basic `memoryview` objects. Bytes literals are emitted directly from
+the Python AST, and the three builtin constructors participate in normal Python type
+introspection.
+
+Binary sequences integrate with the existing generic protocols: `len`, iteration,
+integer indexing, slicing, containment, equality, truth testing, concatenation, and
+repetition. Bytearray and writable memoryview support integer item assignment, and a
+memoryview over bytearray writes through to the original storage.
+
+The initial method surface includes string `encode`, bytes/bytearray `decode` and
+`hex`, bytearray `append` / `extend`, and memoryview `tobytes`, `tolist`, and
+`readonly`. Full slice assignment and the complete buffer-format/casting API remain
+future work.
+
+The strict focused differential corpus passes 105/105 executable cases with
+0 unsupported and 0 failed.
+
