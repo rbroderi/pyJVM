@@ -104,6 +104,8 @@ class ClassInfo:
     properties: dict[str, PropertyInfo]
     attrs: list[tuple[str, ast.expr]]
     class_field: str
+    metaclass: str | None = None
+    keywords: list[tuple[str, ast.expr]] | None = None
 
 
 @dataclass
@@ -426,10 +428,17 @@ class Compiler:
 
 
     def _register_class(self, node: ast.ClassDef) -> None:
-        if node.keywords:
-            for kw in node.keywords:
-                if kw.arg != "metaclass" or not isinstance(kw.value, ast.Name) or kw.value.id != "type":
-                    raise CompileError("custom metaclasses are not implemented yet")
+        metaclass: str | None = None
+        class_keywords: list[tuple[str, ast.expr]] = []
+        for kw in node.keywords:
+            if kw.arg is None:
+                raise CompileError("** class keyword expansion is not implemented yet")
+            if kw.arg == "metaclass":
+                if not isinstance(kw.value, ast.Name):
+                    raise CompileError("metaclass must currently be a simple name")
+                metaclass = kw.value.id
+            else:
+                class_keywords.append((kw.arg, kw.value))
         bases: list[str] = []
         for base in node.bases:
             if not isinstance(base, ast.Name):
@@ -495,7 +504,7 @@ class Compiler:
             raise CompileError("method decorators currently support @property and @name.setter")
         class_field = f"__py_class_{node.name}"
         self.cf.add_field(Field(class_field))
-        self.classes[node.name] = ClassInfo(node.name, bases, methods, properties, attrs, class_field)
+        self.classes[node.name] = ClassInfo(node.name, bases, methods, properties, attrs, class_field, metaclass, class_keywords)
 
     def _compile_class_methods(self, node: ast.ClassDef) -> None:
         info = self.classes[node.name]
@@ -1938,9 +1947,26 @@ class Compiler:
                 for base_name in info.bases:
                     b.aload(class_slot); self._load_name(base_name, b, scope)
                     b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
+
+                b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                class_kw_slot = scope.temp(); b.astore(class_kw_slot)
+                for kw_name, kw_value in (info.keywords or []):
+                    b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
+                    b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
+
+                b.aload(class_slot)
+                if info.metaclass is None: b.aconst_null()
+                else: self._load_name(info.metaclass, b, scope)
+                b.aload(class_kw_slot)
+                b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                namespace_slot = scope.temp(); b.astore(namespace_slot)
                 for attr_name, attr_value in info.attrs:
-                    b.aload(class_slot); b.ldc_string(attr_name); self._expr(attr_value, b, scope)
+                    self._expr(attr_value, b, scope)
+                    attr_slot=scope.temp(); b.astore(attr_slot)
+                    b.aload(class_slot); b.ldc_string(attr_name); b.aload(attr_slot)
                     b.invokestatic(RUNTIME, "classAddAttr", f"({OBJ}{OBJ}{OBJ})V")
+                    b.aload(namespace_slot); b.ldc_string(attr_name); b.aload(attr_slot)
+                    b.invokestatic(RUNTIME, "classNamespacePut", f"({OBJ}{OBJ}{OBJ})V")
                 for method in info.methods.values():
                     b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
                     defaults_slot = scope.temp(); b.astore(defaults_slot)
@@ -1958,12 +1984,22 @@ class Compiler:
                     if method.is_async:
                         b.aload(class_slot); b.ldc_string(method.py_name)
                         b.invokestatic(RUNTIME, "classSetMethodAsync", f"({OBJ}{OBJ})V")
+                    b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(method.py_name)
+                    b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
                 for prop in info.properties.values():
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
                     else: b.ldc_string(prop.setter.java_name)
                     b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
-                b.aload(class_slot); b.invokestatic(RUNTIME, "classFinalize", f"({OBJ})V")
+                    b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(prop.name)
+                    b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
+
+                b.aload(class_slot)
+                if info.metaclass is None: b.aconst_null()
+                else: self._load_name(info.metaclass, b, scope)
+                b.aload(namespace_slot); b.aload(class_kw_slot)
+                b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
+                b.astore(class_slot)
                 for decorator_slot in reversed(decorator_slots):
                     b.aload(decorator_slot)
                     b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -2293,7 +2329,7 @@ class Compiler:
             case ast.Call(func=ast.Name(id="issubclass"), args=[sub, cls], keywords=[]):
                 self._expr(sub, b, scope); self._expr(cls, b, scope); b.invokestatic(RUNTIME, "isSubclass", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Attribute(value=obj, attr=attr), args=args, keywords=[]):
-                if len(args) > 3: raise CompileError("dynamic method calls currently support up to 3 arguments")
+                if len(args) > 4: raise CompileError("dynamic method calls currently support up to 4 arguments")
                 self._expr(obj, b, scope); b.ldc_string(attr)
                 for arg in args: self._expr(arg, b, scope)
                 b.invokestatic(RUNTIME, f"callMethod{len(args)}", f"({OBJ * (2 + len(args))}){OBJ}")
