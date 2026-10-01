@@ -1,25 +1,25 @@
 {
-  "version": "0.25.0",
+  "version": "0.26.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 100, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 105, "unsupported": 0, "failed": 0},
   "new_features": [
-    "from module import * for local compiled modules",
-    "literal __all__ export semantics",
-    "default public-name module exports",
-    "recursive public star re-exports",
-    "relative package star imports",
-    "pre-registration of import bindings for compiled functions"
+    "bytes literals and constructors",
+    "bytearray constructors and mutation",
+    "basic memoryview with write-through bytearray storage",
+    "binary sequence len/index/slice/iteration/containment",
+    "bytes and bytearray concatenation/repetition",
+    "encode/decode/hex/tobytes/tolist basics"
   ],
   "known_limits": [
-    "dynamic/non-literal __all__ for star-imported modules",
-    "namespace packages and import hooks/loaders",
-    "external/native Python extension imports"
+    "binary slice assignment",
+    "complete bytes/bytearray method APIs",
+    "memoryview formats, casts, multidimensional views, release semantics"
   ],
   "next_focus": [
-    "bytes and bytearray builtin coverage",
-    "memoryview basics",
     "stronger module metadata/import protocol",
-    "larger CPython 3.15 import and bytes test slices"
+    "additional bytes/bytearray APIs driven by CPython tests",
+    "larger CPython 3.15 import/bytes/test_descr slices",
+    "modern JVM class targets and stack maps"
   ]
 }
