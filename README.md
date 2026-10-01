@@ -574,3 +574,17 @@ and empty-pop errors.
 The strict focused differential corpus passes 120/120 executable cases with
 0 unsupported and 0 failed.
 
+## 0.30 CPython-driven binary text API
+
+Version 0.30 continues to follow method frequencies in CPython 3.15's
+`Lib/test/test_bytes.py`. Bytes and bytearray now support `translate` with optional
+deletion, and `bytes.maketrans` / `bytearray.maketrans` produce 256-byte translation
+tables through normal builtin-type method dispatch.
+
+Both binary types also support `strip`, `lstrip`, `rstrip`, and ASCII
+`lower`, `upper`, `capitalize`, `title`, and `swapcase`, while preserving the
+receiver's immutable or mutable result type.
+
+The strict focused differential corpus passes 126/126 executable cases with
+0 unsupported and 0 failed.
+

@@ -1,0 +1,5 @@
+table = bytes.maketrans(b"ab", b"AB")
+b = bytearray(b"abracadabra")
+print(b.translate(table))
+print(type(b.translate(table)))
+print(b.translate(None, b"ra"))
