@@ -11,7 +11,7 @@ import re
 from .compiler import CompileError, compile_source
 
 
-LINE_SUFFIX = re.compile(r" at line \\d+$")
+LINE_SUFFIX = re.compile(r" at line \d+$")
 
 
 @dataclass
