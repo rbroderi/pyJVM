@@ -1,19 +1,19 @@
 {
-  "version": "0.27.0",
+  "version": "0.28.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 109, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 113, "unsupported": 0, "failed": 0},
   "new_features": [
-    "generated __file__, __loader__, and __spec__ module globals",
-    "compiled loader and ModuleSpec-like metadata objects",
-    "package spec parent/origin/search-location metadata",
-    "Python-visible module __dict__",
-    "CPython-compatible direct-file __main__.__package__ and __spec__ semantics"
+    "bytes/bytearray find and count",
+    "bytes/bytearray startswith and endswith",
+    "bytes/bytearray replace, split, and join",
+    "resizing bytearray contiguous slice assignment",
+    "fixed-size extended bytearray slice assignment"
   ],
   "next_focus": [
-    "additional import protocol metadata and package behavior",
-    "larger CPython 3.15 import test slices",
-    "binary slice assignment and more bytes/bytearray APIs",
-    "modern JVM class targets and stack maps"
+    "more CPython bytes/bytearray API slices",
+    "memoryview slice assignment and release/cast semantics",
+    "larger import and binary stdlib slices",
+    "modern JVM class targets and StackMapTable generation"
   ]
 }

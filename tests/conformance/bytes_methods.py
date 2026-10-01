@@ -1,0 +1,12 @@
+b = b"abracadabra"
+print(b.find(b"ra"))
+print(b.find(b"ra", 3))
+print(b.count(b"a"))
+print(b.count(97))
+print(b.startswith(b"abra"))
+print(b.startswith(b"bra", 1))
+print(b.endswith(b"bra"))
+print(b.replace(b"a", b"X", 2))
+print(b.split(b"a"))
+print(b",".join([b"a", b"b", b"c"]))
+print(type(b.replace(b"a", b"x")))
