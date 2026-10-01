@@ -1,0 +1,12 @@
+b = b"ABC\x00"
+print(b)
+print(len(b))
+print(b[0], b[-1])
+print(b[1:3])
+print(list(b))
+print(65 in b)
+print(b"A" in b)
+print(b + b"Z")
+print(b"ab" * 3)
+print(type(b))
+print(isinstance(b, bytes))

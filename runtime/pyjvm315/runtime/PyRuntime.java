@@ -1,6 +1,7 @@
 package pyjvm315.runtime;
 
 import java.math.BigInteger;
+import java.nio.charset.Charset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,6 +69,9 @@ public final class PyRuntime {
         if (value instanceof Double) return "float";
         if (value instanceof Boolean) return "bool";
         if (value instanceof String) return "str";
+        if (value instanceof PyBytes) return "bytes";
+        if (value instanceof PyByteArray) return "bytearray";
+        if (value instanceof PyMemoryView) return "memoryview";
         if (value instanceof PyTuple) return "tuple";
         if (value instanceof List) return "list";
         if (value instanceof Map) return "dict";
@@ -157,6 +161,9 @@ public final class PyRuntime {
         if (value == null) return "None";
         if (value instanceof Boolean b) return b ? "True" : "False";
         if (value instanceof String s) return s;
+        if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
+        if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
+        if (value instanceof PyMemoryView view) return view.toString();
         if (value instanceof PyTuple t) return t.pyRepr();
         if (value instanceof PyDictView v) return v.pyRepr();
         if (value instanceof PyExceptionValue e) return e.value == null ? "" : pyStr(e.value);
@@ -186,6 +193,8 @@ public final class PyRuntime {
 
     public static String pyRepr(Object value) {
         if (value instanceof String s) return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
+        if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
+        if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__repr__");if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}}
         return pyStr(value);
     }
@@ -208,6 +217,7 @@ public final class PyRuntime {
         if (value instanceof BigInteger n) return n.signum() != 0;
         if (value instanceof Double n) return n != 0.0;
         if (value instanceof String s) return !s.isEmpty();
+        if (value instanceof PyByteSequence seq) return seq.byteSize()!=0;
         if (value instanceof List<?> xs) return !xs.isEmpty();
         if (value instanceof Map<?, ?> xs) return !xs.isEmpty();
         if (value instanceof Set<?> xs) return !xs.isEmpty();
@@ -226,6 +236,16 @@ public final class PyRuntime {
         if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__add__");if(m!=null)return invoke(ia,m,new Object[]{b});}
         if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__radd__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (a instanceof String sa && b instanceof String sb) return sa + sb;
+        if(a instanceof PyBytes ba && b instanceof PyBytes bb) {
+            byte[] out=new byte[ba.data.length+bb.data.length];
+            System.arraycopy(ba.data,0,out,0,ba.data.length); System.arraycopy(bb.data,0,out,ba.data.length,bb.data.length);
+            return new PyBytes(out);
+        }
+        if(a instanceof PyByteArray ba && b instanceof PyByteArray bb) {
+            byte[] x=ba.toByteArray(),y=bb.toByteArray(),out=new byte[x.length+y.length];
+            System.arraycopy(x,0,out,0,x.length); System.arraycopy(y,0,out,x.length,y.length);
+            return new PyByteArray(out);
+        }
         if (a instanceof List<?> la && b instanceof List<?> lb) {
             ArrayList<Object> out = new ArrayList<>(la.size() + lb.size());
             out.addAll(la); out.addAll(lb); return out;
@@ -258,6 +278,10 @@ public final class PyRuntime {
         if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__rmul__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (a instanceof String sa && isIntLike(b)) return repeatString(sa, bigInt(b));
         if (b instanceof String sb && isIntLike(a)) return repeatString(sb, bigInt(a));
+        if(a instanceof PyBytes bytes && isIntLike(b)) return repeatBytes(bytes,bigInt(b),false);
+        if(b instanceof PyBytes bytes && isIntLike(a)) return repeatBytes(bytes,bigInt(a),false);
+        if(a instanceof PyByteArray bytes && isIntLike(b)) return repeatBytes(bytes,bigInt(b),true);
+        if(b instanceof PyByteArray bytes && isIntLike(a)) return repeatBytes(bytes,bigInt(a),true);
         if (a instanceof List<?> la && isIntLike(b)) return repeatList(la, bigInt(b));
         if (b instanceof List<?> lb && isIntLike(a)) return repeatList(lb, bigInt(a));
         if (isIntLike(a) && isIntLike(b)) {
@@ -268,6 +292,18 @@ public final class PyRuntime {
             return compact(bigInt(a).multiply(bigInt(b)));
         }
         return number(a) * number(b);
+    }
+
+    private static Object repeatBytes(PyByteSequence seq,BigInteger count,boolean mutable){
+        if(count.signum()<=0) return mutable?new PyByteArray():new PyBytes(new byte[0]);
+        int n;
+        try{n=count.intValueExact();}catch(ArithmeticException e){throw new PyException("OverflowError","repeated bytes are too long");}
+        byte[] src=seq.toByteArray();
+        int total;
+        try{total=Math.multiplyExact(src.length,n);}catch(ArithmeticException e){throw new PyException("OverflowError","repeated bytes are too long");}
+        byte[] out=new byte[total];
+        for(int i=0;i<n;i++)System.arraycopy(src,0,out,i*src.length,src.length);
+        return mutable?new PyByteArray(out):new PyBytes(out);
     }
 
     public static Object truediv(Object a, Object b) {
@@ -502,6 +538,7 @@ public final class PyRuntime {
     public static Object len(Object value) {
         long n;
         if (value instanceof String s) n = s.codePointCount(0, s.length());
+        else if (value instanceof PyByteSequence seq) n = seq.byteSize();
         else if (value instanceof List<?> xs) n = xs.size();
         else if (value instanceof Map<?, ?> xs) n = xs.size();
         else if (value instanceof Set<?> xs) n = xs.size();
@@ -515,6 +552,9 @@ public final class PyRuntime {
     public static Object getitem(Object value, Object key) {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__getitem__");if(m!=null)return invoke(instance,m,new Object[]{key});}
         if (key instanceof PySlice sl) return sliceGet(value, sl);
+        if (value instanceof PyByteSequence seq) {
+            int i=asIndex(key); return (long)seq.unsignedAt(normalizeIndex(i,seq.byteSize()));
+        }
         if (value instanceof Map<?, ?> m) {
             if (!m.containsKey(key)) throw new NoSuchElementException("key not found: " + pyRepr(key));
             return m.get(key);
@@ -537,6 +577,8 @@ public final class PyRuntime {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__setitem__");if(m!=null){invoke(instance,m,new Object[]{key,item});return;}}
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
         int i = asIndex(key);
+        if(value instanceof PyByteArray array){array.setUnsigned(normalizeIndex(i,array.byteSize()),byteValue(item));return;}
+        if(value instanceof PyMemoryView view){view.setUnsigned(normalizeIndex(i,view.byteSize()),byteValue(item));return;}
         if (value instanceof List<?> xs) { ((List<Object>)xs).set(normalizeIndex(i, xs.size()), item); return; }
         throw typeError("object does not support item assignment", value);
     }
@@ -552,6 +594,17 @@ public final class PyRuntime {
     public static Object contains(Object container, Object needle) {
         if(container instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__contains__");if(m!=null)return invoke(instance,m,new Object[]{needle});}
         if (container instanceof String s && needle instanceof String n) return s.contains(n);
+        if(container instanceof PyByteSequence seq) {
+            if(isIntLike(needle)) {
+                int v=byteValue(needle); for(int i=0;i<seq.byteSize();i++) if(seq.unsignedAt(i)==v)return true; return false;
+            }
+            if(needle instanceof PyByteSequence sub) {
+                byte[] hay=seq.toByteArray(), nd=sub.toByteArray();
+                if(nd.length==0)return true;
+                outer: for(int i=0;i+nd.length<=hay.length;i++){for(int j=0;j<nd.length;j++)if(hay[i+j]!=nd[j])continue outer;return true;}return false;
+            }
+            throw new PyException("TypeError","a bytes-like object is required");
+        }
         if (container instanceof Map<?, ?> m) return m.containsKey(needle);
         if (container instanceof Set<?> s) return s.contains(needle);
         if (container instanceof List<?> xs) return xs.contains(needle);
@@ -574,6 +627,7 @@ public final class PyRuntime {
 
     public static Object slice(Object start, Object stop, Object step) { return new PySlice(start, stop, step); }
     private static Object sliceGet(Object value, PySlice sl) {
+        if(value instanceof PyByteSequence seq) return binarySlice(seq,sl,true);
         int size;
         if (value instanceof List<?> xs) size = xs.size();
         else if (value instanceof PyTuple t) size = t.items.size();
@@ -771,6 +825,154 @@ public final class PyRuntime {
         @Override public String toString() { return "range(" + start + ", " + stop + ", " + step + ")"; }
     }
 
+
+    // ---------- Binary sequence types ----------
+    private interface PyByteSequence extends Iterable<Object> {
+        int byteSize();
+        int unsignedAt(int index);
+        byte[] toByteArray();
+    }
+
+    public static final class PyBytes implements PyByteSequence {
+        final byte[] data;
+        PyBytes(byte[] data){this.data=Arrays.copyOf(data,data.length);}
+        public int byteSize(){return data.length;}
+        public int unsignedAt(int index){return data[index] & 0xff;}
+        public byte[] toByteArray(){return Arrays.copyOf(data,data.length);}
+        public Iterator<Object> iterator(){
+            return new Iterator<>() {
+                int i=0;
+                public boolean hasNext(){return i<data.length;}
+                public Object next(){if(!hasNext())throw new NoSuchElementException();return (long)(data[i++]&0xff);}
+            };
+        }
+        @Override public boolean equals(Object other){return other instanceof PyByteSequence seq && Arrays.equals(data,seq.toByteArray());}
+        @Override public int hashCode(){return Arrays.hashCode(data);}
+        @Override public String toString(){return bytesRepr(data);}
+    }
+
+    public static final class PyByteArray implements PyByteSequence {
+        final ArrayList<Byte> data=new ArrayList<>();
+        PyByteArray(){}
+        PyByteArray(byte[] raw){for(byte b:raw)data.add(b);}
+        public int byteSize(){return data.size();}
+        public int unsignedAt(int index){return data.get(index)&0xff;}
+        public byte[] toByteArray(){byte[] out=new byte[data.size()];for(int i=0;i<data.size();i++)out[i]=data.get(i);return out;}
+        void setUnsigned(int index,int value){checkByte(value);data.set(index,(byte)value);}
+        void appendUnsigned(int value){checkByte(value);data.add((byte)value);}
+        public Iterator<Object> iterator(){
+            Iterator<Byte> it=data.iterator();
+            return new Iterator<>() {
+                public boolean hasNext(){return it.hasNext();}
+                public Object next(){return (long)(it.next()&0xff);}
+            };
+        }
+        @Override public boolean equals(Object other){return other instanceof PyByteSequence seq && Arrays.equals(toByteArray(),seq.toByteArray());}
+        @Override public int hashCode(){return Arrays.hashCode(toByteArray());}
+        @Override public String toString(){return "bytearray("+bytesRepr(toByteArray())+")";}
+    }
+
+    public static final class PyMemoryView implements PyByteSequence {
+        final PyByteSequence source;
+        final int start, length;
+        PyMemoryView(PyByteSequence source){this(source,0,source.byteSize());}
+        PyMemoryView(PyByteSequence source,int start,int length){this.source=source;this.start=start;this.length=length;}
+        public int byteSize(){return length;}
+        public int unsignedAt(int index){return source.unsignedAt(start+index);}
+        public byte[] toByteArray(){byte[] out=new byte[length];for(int i=0;i<length;i++)out[i]=(byte)unsignedAt(i);return out;}
+        void setUnsigned(int index,int value){
+            if(!(source instanceof PyByteArray array)) throw new PyException("TypeError","cannot modify read-only memory");
+            array.setUnsigned(start+index,value);
+        }
+        boolean readonly(){return !(source instanceof PyByteArray);}
+        public Iterator<Object> iterator(){
+            return new Iterator<>() {
+                int i=0;
+                public boolean hasNext(){return i<length;}
+                public Object next(){if(!hasNext())throw new NoSuchElementException();return (long)unsignedAt(i++);}
+            };
+        }
+        @Override public String toString(){return "<memory at 0x0>";}
+    }
+
+    private static int byteValue(Object value){
+        BigInteger n=bigInt(value);
+        if(n.signum()<0 || n.compareTo(BigInteger.valueOf(255))>0)
+            throw new PyException("ValueError","bytes must be in range(0, 256)");
+        return n.intValue();
+    }
+    private static void checkByte(int value){
+        if(value<0 || value>255) throw new PyException("ValueError","byte must be in range(0, 256)");
+    }
+    private static byte[] bytesFromIterable(Object value){
+        ArrayList<Byte> out=new ArrayList<>();
+        for(Object item:iterable(value)) out.add((byte)byteValue(item));
+        byte[] raw=new byte[out.size()]; for(int i=0;i<out.size();i++) raw[i]=out.get(i); return raw;
+    }
+    private static byte[] bytesFromObject(Object value){
+        if(value instanceof PyByteSequence seq) return seq.toByteArray();
+        if(isIntLike(value)) {
+            int n=asIndex(value); if(n<0) throw new PyException("ValueError","negative count");
+            return new byte[n];
+        }
+        return bytesFromIterable(value);
+    }
+    public static Object bytes0(){return new PyBytes(new byte[0]);}
+    public static Object bytes1(Object value){return new PyBytes(bytesFromObject(value));}
+    public static Object bytes2(Object value,Object encoding){
+        if(!(value instanceof String text) || !(encoding instanceof String enc))
+            throw new PyException("TypeError","encoding without a string argument");
+        return new PyBytes(text.getBytes(Charset.forName(enc)));
+    }
+    public static Object bytearray0(){return new PyByteArray();}
+    public static Object bytearray1(Object value){return new PyByteArray(bytesFromObject(value));}
+    public static Object bytearray2(Object value,Object encoding){
+        return new PyByteArray(((PyBytes)bytes2(value,encoding)).data);
+    }
+    public static Object memoryview1(Object value){
+        if(value instanceof PyMemoryView view) return new PyMemoryView(view.source,view.start,view.length);
+        if(value instanceof PyByteSequence seq) return new PyMemoryView(seq);
+        throw new PyException("TypeError","memoryview: a bytes-like object is required");
+    }
+    public static Object bytesFromHexLiteral(Object hexObj){
+        String hex=(String)hexObj; byte[] out=new byte[hex.length()/2];
+        for(int i=0;i<out.length;i++) out[i]=(byte)Integer.parseInt(hex.substring(i*2,i*2+2),16);
+        return new PyBytes(out);
+    }
+    private static String bytesHex(byte[] raw){
+        StringBuilder out=new StringBuilder(raw.length*2);
+        for(byte b:raw)out.append(String.format("%02x",b&0xff));
+        return out.toString();
+    }
+    private static String bytesRepr(byte[] raw){
+        StringBuilder out=new StringBuilder("b'");
+        for(byte bb:raw){
+            int v=bb&0xff;
+            if(v=='\\' || v=='\'') out.append('\\').append((char)v);
+            else if(v>=32 && v<127) out.append((char)v);
+            else switch(v){
+                case 9 -> out.append("\\t");
+                case 10 -> out.append("\\n");
+                case 13 -> out.append("\\r");
+                default -> out.append(String.format("\\x%02x",v));
+            }
+        }
+        return out.append('\'').toString();
+    }
+    private static Object binarySlice(PyByteSequence seq,PySlice sl,boolean asView){
+        int size=seq.byteSize();
+        int step=sl.step==null?1:asIndex(sl.step);
+        if(step==0) throw new PyException("ValueError","slice step cannot be zero");
+        int start=sl.start==null?(step>0?0:size-1):normalizeSliceIndex(asIndex(sl.start),size,step>0);
+        int stop=sl.stop==null?(step>0?size:-1):normalizeSliceStop(asIndex(sl.stop),size,step>0);
+        ArrayList<Byte> vals=new ArrayList<>();
+        for(int i=start;step>0?i<stop:i>stop;i+=step) if(i>=0&&i<size) vals.add((byte)seq.unsignedAt(i));
+        byte[] raw=new byte[vals.size()];for(int i=0;i<vals.size();i++)raw[i]=vals.get(i);
+        if(asView && step==1 && seq instanceof PyMemoryView mv) return new PyMemoryView(mv.source,mv.start+start,raw.length);
+        if(seq instanceof PyByteArray) return new PyByteArray(raw);
+        if(seq instanceof PyMemoryView) return new PyMemoryView(new PyBytes(raw));
+        return new PyBytes(raw);
+    }
 
     // ---------- Lexical environments / closure cells ----------
     public static final class PyEnv {
@@ -1965,6 +2167,40 @@ public final class PyRuntime {
             ArrayList<Object> positional=new ArrayList<>(Arrays.asList(args));
             return callFunction(callable,positional,new LinkedHashMap<Object,Object>());
         }
+        if (obj instanceof PyBytes bytes) {
+            return switch(name) {
+                case "decode" -> {
+                    if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");
+                    String enc=args.length==0?"utf-8":(String)args[0];
+                    yield new String(bytes.data,Charset.forName(enc));
+                }
+                case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.data); }
+                default -> throw new PyException("AttributeError","'bytes' object has no attribute '"+name+"'");
+            };
+        }
+        if (obj instanceof PyByteArray bytes) {
+            return switch(name) {
+                case "append" -> { requireArgs(name,args,1); bytes.appendUnsigned(byteValue(args[0])); yield null; }
+                case "extend" -> { requireArgs(name,args,1); for(Object x:iterable(args[0])) bytes.appendUnsigned(byteValue(x)); yield null; }
+                case "decode" -> {
+                    if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");
+                    String enc=args.length==0?"utf-8":(String)args[0];
+                    yield new String(bytes.toByteArray(),Charset.forName(enc));
+                }
+                case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.toByteArray()); }
+                default -> throw new PyException("AttributeError","'bytearray' object has no attribute '"+name+"'");
+            };
+        }
+        if (obj instanceof PyMemoryView view) {
+            return switch(name) {
+                case "tobytes" -> { requireArgs(name,args,0); yield new PyBytes(view.toByteArray()); }
+                case "tolist" -> {
+                    requireArgs(name,args,0); ArrayList<Object> out=new ArrayList<>();
+                    for(Object x:view)out.add(x); yield out;
+                }
+                default -> throw new PyException("AttributeError","'memoryview' object has no attribute '"+name+"'");
+            };
+        }
         if (obj instanceof String str) {
             return switch(name) {
                 case "upper" -> { requireArgs(name,args,0); yield str.toUpperCase(Locale.ROOT); }
@@ -1982,6 +2218,11 @@ public final class PyRuntime {
                 case "join" -> { requireArgs(name,args,1); ArrayList<String> parts=new ArrayList<>(); for(Object x:iterable(args[0])) parts.add((String)x); yield String.join(str,parts); }
                 case "find" -> { requireArgs(name,args,1); yield (long)str.indexOf((String)args[0]); }
                 case "count" -> { requireArgs(name,args,1); String sub=(String)args[0]; if(sub.isEmpty()) yield (long)(str.length()+1); long n=0; for(int i=0;(i=str.indexOf(sub,i))>=0;i+=sub.length())n++; yield n; }
+                case "encode" -> {
+                    if(args.length>1) throw new PyException("TypeError","encode() takes at most 1 argument");
+                    String enc=args.length==0?"utf-8":(String)args[0];
+                    yield new PyBytes(str.getBytes(Charset.forName(enc)));
+                }
                 default -> throw new PyException("AttributeError","'str' object has no attribute '"+name+"'");
             };
         }
@@ -2116,6 +2357,9 @@ public final class PyRuntime {
             if (name.equals("__suppress_context__")) return exc.suppressContext;
             if (name.equals("__traceback__")) return exc.traceback;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
+        }
+        if(obj instanceof PyMemoryView view) {
+            if(name.equals("readonly")) return view.readonly();
         }
         if(obj instanceof PyTraceback tb) {
             return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
@@ -2256,6 +2500,9 @@ public final class PyRuntime {
                 case "bool" -> obj instanceof Boolean;
                 case "float" -> obj instanceof Double;
                 case "str" -> obj instanceof String;
+                case "bytes" -> obj instanceof PyBytes;
+                case "bytearray" -> obj instanceof PyByteArray;
+                case "memoryview" -> obj instanceof PyMemoryView;
                 case "list" -> obj instanceof List<?>;
                 case "tuple" -> obj instanceof PyTuple;
                 case "dict" -> obj instanceof Map<?,?>;
