@@ -91,6 +91,28 @@ public final class PyRuntime {
     }
 
     // ---------- Python module loading ----------
+    public static final class PyCompiledLoader {
+        final String name,path;
+        PyCompiledLoader(String name,String path){this.name=name;this.path=path;}
+        @Override public String toString(){return "<pyjvm315 loader for '"+name+"'>";}
+    }
+    public static final class PyModuleSpec {
+        final String name,origin,parent;
+        final Object loader;
+        final Object submoduleSearchLocations;
+        PyModuleSpec(String name,String origin,String parent,boolean isPackage,Object loader){
+            this.name=name;this.origin=origin;this.parent=parent;this.loader=loader;
+            this.submoduleSearchLocations=isPackage?new ArrayList<Object>():null;
+        }
+        @Override public String toString(){return "ModuleSpec(name='"+name+"', origin='"+origin+"')";}
+    }
+    public static Object makeModuleLoader(Object nameObj,Object pathObj){
+        return new PyCompiledLoader((String)nameObj,(String)pathObj);
+    }
+    public static Object makeModuleSpec(Object nameObj,Object originObj,Object parentObj,Object packageObj,Object loaderObj){
+        return new PyModuleSpec((String)nameObj,(String)originObj,(String)parentObj,(Boolean)packageObj,loaderObj);
+    }
+
     private static final LinkedHashMap<String,PyModule> MODULE_CACHE = new LinkedHashMap<>();
     public static final class PyModule {
         final String name, className;
@@ -122,8 +144,24 @@ public final class PyRuntime {
             MODULE_CACHE.remove(name); throw new PyException("ImportError","cannot import module '"+name+"': "+exc.getMessage());
         }
     }
+    private static Object moduleDict(PyModule module) {
+        LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
+        out.putAll(module.attrs);
+        try {
+            Class<?> cls=Class.forName(module.className);
+            for(var field:cls.getFields()) {
+                String fieldName=field.getName(), pyName=null;
+                if(fieldName.startsWith("__py_global_")) pyName=fieldName.substring("__py_global_".length());
+                else if(fieldName.startsWith("__py_function_")) pyName=fieldName.substring("__py_function_".length());
+                else if(fieldName.startsWith("__py_class_")) pyName=fieldName.substring("__py_class_".length());
+                if(pyName!=null) out.put(pyName,field.get(null));
+            }
+        } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
+        return out;
+    }
     public static Object moduleGetattr(Object moduleObj,Object nameObj) {
         PyModule module=(PyModule)moduleObj; String name=(String)nameObj;
+        if(name.equals("__dict__")) return moduleDict(module);
         if(module.attrs.containsKey(name)) return module.attrs.get(name);
         String[] fields={"__py_global_"+name,"__py_function_"+name,"__py_class_"+name};
         try {
@@ -2360,6 +2398,23 @@ public final class PyRuntime {
         }
         if(obj instanceof PyMemoryView view) {
             if(name.equals("readonly")) return view.readonly();
+        }
+        if(obj instanceof PyModuleSpec spec) {
+            return switch(name) {
+                case "name" -> spec.name;
+                case "origin" -> spec.origin;
+                case "parent" -> spec.parent;
+                case "loader" -> spec.loader;
+                case "submodule_search_locations" -> spec.submoduleSearchLocations;
+                default -> throw new PyException("AttributeError","ModuleSpec has no attribute '"+name+"'");
+            };
+        }
+        if(obj instanceof PyCompiledLoader loader) {
+            return switch(name) {
+                case "name" -> loader.name;
+                case "path" -> loader.path;
+                default -> throw new PyException("AttributeError","loader has no attribute '"+name+"'");
+            };
         }
         if(obj instanceof PyTraceback tb) {
             return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
