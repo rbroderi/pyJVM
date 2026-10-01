@@ -893,6 +893,7 @@ class Compiler:
         b.mark(labels[0])
         self.loop_stack=[]; self.exception_stack=[]; self.cleanup_stack=[]; self.finally_stack=[]
         gen_finally_stack: list[list[ast.stmt]] = []
+        gen_cleanup_order: list[tuple[str, object]] = []
         gen_active_exception_env: list[str] = []
         gen_finally_counter = [0]
 
@@ -906,6 +907,48 @@ class Compiler:
                 for cleanup_stmt in finalbody:
                     gen_stmt(cleanup_stmt)
             gen_finally_stack[:] = original
+
+        def _store_env_literal(name: str, value: str):
+            b.ldc_string(value); slot=scope.temp(); b.astore(slot)
+            self._gen_env_store(name,slot,b,scope)
+
+        def _route_return(ret_slot: int):
+            if gen_cleanup_order:
+                kind,payload=gen_cleanup_order.pop()
+                try:
+                    if kind == "inline":
+                        for cleanup_stmt in payload: gen_stmt(cleanup_stmt)
+                        _route_return(ret_slot)
+                    else:
+                        ctx=payload
+                        self._gen_env_store(ctx["value_env"],ret_slot,b,scope)
+                        _store_env_literal(ctx["kind_env"],"return")
+                        b.goto(ctx["final_entry"])
+                finally:
+                    gen_cleanup_order.append((kind,payload))
+                return
+            b.aload(gen_slot); b.aload(ret_slot)
+            b.invokestatic(RUNTIME,"generatorFinish",f"({OBJ}{OBJ}){OBJ}"); b.areturn()
+
+        def _route_branch(target):
+            if gen_cleanup_order:
+                kind,payload=gen_cleanup_order.pop()
+                try:
+                    if kind == "inline":
+                        for cleanup_stmt in payload: gen_stmt(cleanup_stmt)
+                        _route_branch(target)
+                    else:
+                        ctx=payload
+                        branch_kind=ctx["branches"].get(target)
+                        if branch_kind is None:
+                            branch_kind=f"branch_{len(ctx['branches'])}"
+                            ctx["branches"][target]=branch_kind
+                        _store_env_literal(ctx["kind_env"],branch_kind)
+                        b.goto(ctx["final_entry"])
+                finally:
+                    gen_cleanup_order.append((kind,payload))
+                return
+            b.goto(target)
 
         def emit_yield(y: ast.Yield):
             value_slot=scope.temp()
@@ -1145,19 +1188,15 @@ class Compiler:
                 if stmt.value is None: b.aconst_null()
                 else: gen_value(stmt.value)
                 ret=scope.temp(); b.astore(ret)
-                if gen_finally_stack: emit_generator_cleanups()
-                b.aload(gen_slot); b.aload(ret)
-                b.invokestatic(RUNTIME,"generatorFinish",f"({OBJ}{OBJ}){OBJ}"); b.areturn(); return
+                _route_return(ret); return
             if isinstance(stmt,ast.Break):
                 if not self.loop_stack: raise CompileError("break outside loop")
                 target=self.loop_stack[-1][1]
-                if gen_finally_stack: emit_generator_cleanups()
-                b.goto(target); return
+                _route_branch(target); return
             if isinstance(stmt,ast.Continue):
                 if not self.loop_stack: raise CompileError("continue outside loop")
                 target=self.loop_stack[-1][0]
-                if gen_finally_stack: emit_generator_cleanups()
-                b.goto(target); return
+                _route_branch(target); return
             if isinstance(stmt,ast.For):
                 syn=f"$gen_iter_{synthetic_counter[0]}"; synthetic_counter[0]+=1
                 self._expr(stmt.iter,b,scope); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
@@ -1268,10 +1307,12 @@ class Compiler:
                         outer_exc = scope.temp()
                         b.mark(outer_start)
                         gen_finally_stack.append(stmt.finalbody)
+                        gen_cleanup_order.append(("inline",stmt.finalbody))
                         if stmt.handlers:
                             gen_try_except(stmt.body, stmt.handlers, stmt.orelse)
                         else:
                             for x in stmt.body: gen_stmt(x)
+                        gen_cleanup_order.pop()
                         gen_finally_stack.pop()
                         b.mark(outer_end)
                         for x in stmt.finalbody: gen_stmt(x)
