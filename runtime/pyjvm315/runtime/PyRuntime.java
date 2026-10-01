@@ -1636,6 +1636,18 @@ public final class PyRuntime {
 
     private static void requireArgs(String name,Object[] args,int count) { if(args.length!=count) throw new PyException("TypeError",name+"() takes "+count+" arguments"); }
 
+    public static Object callMethodDynamic(Object obj,Object nameObj,Object argsObj,Object kwargsObj) {
+        @SuppressWarnings("unchecked") List<Object> args=(List<Object>)argsObj;
+        @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
+        String name=(String)nameObj;
+        if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
+        if(obj instanceof PyInstance || obj instanceof PyClass || obj instanceof PySuper) {
+            Object callable=getattr(obj,name);
+            return callFunction(callable,args,kwargs);
+        }
+        throw new PyException("TypeError",name+"() does not accept keyword arguments");
+    }
+
     public static Object callMethod0(Object obj, Object name) { return callMethod(obj, (String)name, new Object[0]); }
     public static Object callMethod1(Object obj, Object name, Object a) { return callMethod(obj, (String)name, new Object[]{a}); }
     public static Object callMethod2(Object obj, Object name, Object a, Object b) { return callMethod(obj, (String)name, new Object[]{a,b}); }
