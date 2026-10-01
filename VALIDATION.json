@@ -1,25 +1,19 @@
 {
-  "version": "0.26.0",
+  "version": "0.27.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 105, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 109, "unsupported": 0, "failed": 0},
   "new_features": [
-    "bytes literals and constructors",
-    "bytearray constructors and mutation",
-    "basic memoryview with write-through bytearray storage",
-    "binary sequence len/index/slice/iteration/containment",
-    "bytes and bytearray concatenation/repetition",
-    "encode/decode/hex/tobytes/tolist basics"
-  ],
-  "known_limits": [
-    "binary slice assignment",
-    "complete bytes/bytearray method APIs",
-    "memoryview formats, casts, multidimensional views, release semantics"
+    "generated __file__, __loader__, and __spec__ module globals",
+    "compiled loader and ModuleSpec-like metadata objects",
+    "package spec parent/origin/search-location metadata",
+    "Python-visible module __dict__",
+    "CPython-compatible direct-file __main__.__package__ and __spec__ semantics"
   ],
   "next_focus": [
-    "stronger module metadata/import protocol",
-    "additional bytes/bytearray APIs driven by CPython tests",
-    "larger CPython 3.15 import/bytes/test_descr slices",
+    "additional import protocol metadata and package behavior",
+    "larger CPython 3.15 import test slices",
+    "binary slice assignment and more bytes/bytearray APIs",
     "modern JVM class targets and stack maps"
   ]
 }
