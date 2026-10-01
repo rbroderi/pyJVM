@@ -530,3 +530,20 @@ future work.
 The strict focused differential corpus passes 105/105 executable cases with
 0 unsupported and 0 failed.
 
+## 0.27 Python-visible module metadata
+
+Version 0.27 makes compiled local modules expose normal Python-facing metadata instead
+of requiring callers to know about generated JVM classes. Imported modules now receive
+generated `__file__`, `__loader__`, and `__spec__` globals alongside `__name__`
+and `__package__`. A lightweight compiled loader and ModuleSpec-like object expose
+`name`, `parent`, `origin`, `loader`, and package
+`submodule_search_locations`.
+
+Module wrappers also expose a Python-visible `__dict__` containing generated globals,
+functions, classes, and package child modules. Direct-file `__main__` execution now
+matches CPython's `__package__ is None` and `__spec__ is None` behavior while retaining
+a real `__file__`.
+
+The strict focused differential corpus passes 109/109 executable cases with
+0 unsupported and 0 failed.
+
