@@ -1,6 +1,7 @@
 package pyjvm315.runtime;
 
 import java.math.BigInteger;
+import java.nio.charset.Charset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -771,6 +772,149 @@ public final class PyRuntime {
         @Override public String toString() { return "range(" + start + ", " + stop + ", " + step + ")"; }
     }
 
+
+    // ---------- Binary sequence types ----------
+    private interface PyByteSequence extends Iterable<Object> {
+        int byteSize();
+        int unsignedAt(int index);
+        byte[] toByteArray();
+    }
+
+    public static final class PyBytes implements PyByteSequence {
+        final byte[] data;
+        PyBytes(byte[] data){this.data=Arrays.copyOf(data,data.length);}
+        public int byteSize(){return data.length;}
+        public int unsignedAt(int index){return data[index] & 0xff;}
+        public byte[] toByteArray(){return Arrays.copyOf(data,data.length);}
+        public Iterator<Object> iterator(){
+            return new Iterator<>() {
+                int i=0;
+                public boolean hasNext(){return i<data.length;}
+                public Object next(){if(!hasNext())throw new NoSuchElementException();return (long)(data[i++]&0xff);}
+            };
+        }
+        @Override public boolean equals(Object other){return other instanceof PyByteSequence seq && Arrays.equals(data,seq.toByteArray());}
+        @Override public int hashCode(){return Arrays.hashCode(data);}
+        @Override public String toString(){return bytesRepr(data);}
+    }
+
+    public static final class PyByteArray implements PyByteSequence {
+        final ArrayList<Byte> data=new ArrayList<>();
+        PyByteArray(){}
+        PyByteArray(byte[] raw){for(byte b:raw)data.add(b);}
+        public int byteSize(){return data.size();}
+        public int unsignedAt(int index){return data.get(index)&0xff;}
+        public byte[] toByteArray(){byte[] out=new byte[data.size()];for(int i=0;i<data.size();i++)out[i]=data.get(i);return out;}
+        void setUnsigned(int index,int value){checkByte(value);data.set(index,(byte)value);}
+        void appendUnsigned(int value){checkByte(value);data.add((byte)value);}
+        public Iterator<Object> iterator(){
+            Iterator<Byte> it=data.iterator();
+            return new Iterator<>() {
+                public boolean hasNext(){return it.hasNext();}
+                public Object next(){return (long)(it.next()&0xff);}
+            };
+        }
+        @Override public boolean equals(Object other){return other instanceof PyByteSequence seq && Arrays.equals(toByteArray(),seq.toByteArray());}
+        @Override public int hashCode(){return Arrays.hashCode(toByteArray());}
+        @Override public String toString(){return "bytearray("+bytesRepr(toByteArray())+")";}
+    }
+
+    public static final class PyMemoryView implements PyByteSequence {
+        final PyByteSequence source;
+        final int start, length;
+        PyMemoryView(PyByteSequence source){this(source,0,source.byteSize());}
+        PyMemoryView(PyByteSequence source,int start,int length){this.source=source;this.start=start;this.length=length;}
+        public int byteSize(){return length;}
+        public int unsignedAt(int index){return source.unsignedAt(start+index);}
+        public byte[] toByteArray(){byte[] out=new byte[length];for(int i=0;i<length;i++)out[i]=(byte)unsignedAt(i);return out;}
+        void setUnsigned(int index,int value){
+            if(!(source instanceof PyByteArray array)) throw new PyException("TypeError","cannot modify read-only memory");
+            array.setUnsigned(start+index,value);
+        }
+        boolean readonly(){return !(source instanceof PyByteArray);}
+        public Iterator<Object> iterator(){
+            return new Iterator<>() {
+                int i=0;
+                public boolean hasNext(){return i<length;}
+                public Object next(){if(!hasNext())throw new NoSuchElementException();return (long)unsignedAt(i++);}
+            };
+        }
+        @Override public String toString(){return "<memory at 0x0>";}
+    }
+
+    private static int byteValue(Object value){
+        BigInteger n=bigInt(value);
+        if(n.signum()<0 || n.compareTo(BigInteger.valueOf(255))>0)
+            throw new PyException("ValueError","bytes must be in range(0, 256)");
+        return n.intValue();
+    }
+    private static void checkByte(int value){
+        if(value<0 || value>255) throw new PyException("ValueError","byte must be in range(0, 256)");
+    }
+    private static byte[] bytesFromIterable(Object value){
+        ArrayList<Byte> out=new ArrayList<>();
+        for(Object item:iterable(value)) out.add((byte)byteValue(item));
+        byte[] raw=new byte[out.size()]; for(int i=0;i<out.size();i++) raw[i]=out.get(i); return raw;
+    }
+    private static byte[] bytesFromObject(Object value){
+        if(value instanceof PyByteSequence seq) return seq.toByteArray();
+        if(isIntLike(value)) {
+            int n=asIndex(value); if(n<0) throw new PyException("ValueError","negative count");
+            return new byte[n];
+        }
+        return bytesFromIterable(value);
+    }
+    public static Object bytes0(){return new PyBytes(new byte[0]);}
+    public static Object bytes1(Object value){return new PyBytes(bytesFromObject(value));}
+    public static Object bytes2(Object value,Object encoding){
+        if(!(value instanceof String text) || !(encoding instanceof String enc))
+            throw new PyException("TypeError","encoding without a string argument");
+        return new PyBytes(text.getBytes(Charset.forName(enc)));
+    }
+    public static Object bytearray0(){return new PyByteArray();}
+    public static Object bytearray1(Object value){return new PyByteArray(bytesFromObject(value));}
+    public static Object bytearray2(Object value,Object encoding){
+        return new PyByteArray(((PyBytes)bytes2(value,encoding)).data);
+    }
+    public static Object memoryview1(Object value){
+        if(value instanceof PyMemoryView view) return new PyMemoryView(view.source,view.start,view.length);
+        if(value instanceof PyByteSequence seq) return new PyMemoryView(seq);
+        throw new PyException("TypeError","memoryview: a bytes-like object is required");
+    }
+    public static Object bytesFromHexLiteral(Object hexObj){
+        String hex=(String)hexObj; byte[] out=new byte[hex.length()/2];
+        for(int i=0;i<out.length;i++) out[i]=(byte)Integer.parseInt(hex.substring(i*2,i*2+2),16);
+        return new PyBytes(out);
+    }
+    private static String bytesRepr(byte[] raw){
+        StringBuilder out=new StringBuilder("b'");
+        for(byte bb:raw){
+            int v=bb&0xff;
+            if(v=='\\' || v=='\'') out.append('\\').append((char)v);
+            else if(v>=32 && v<127) out.append((char)v);
+            else switch(v){
+                case 9 -> out.append("\\t");
+                case 10 -> out.append("\\n");
+                case 13 -> out.append("\\r");
+                default -> out.append(String.format("\\x%02x",v));
+            }
+        }
+        return out.append('\'').toString();
+    }
+    private static Object binarySlice(PyByteSequence seq,PySlice sl,boolean asView){
+        int size=seq.byteSize();
+        int step=sl.step==null?1:asIndex(sl.step);
+        if(step==0) throw new PyException("ValueError","slice step cannot be zero");
+        int start=sl.start==null?(step>0?0:size-1):normalizeSliceIndex(asIndex(sl.start),size,step>0);
+        int stop=sl.stop==null?(step>0?size:-1):normalizeSliceStop(asIndex(sl.stop),size,step>0);
+        ArrayList<Byte> vals=new ArrayList<>();
+        for(int i=start;step>0?i<stop:i>stop;i+=step) if(i>=0&&i<size) vals.add((byte)seq.unsignedAt(i));
+        byte[] raw=new byte[vals.size()];for(int i=0;i<vals.size();i++)raw[i]=vals.get(i);
+        if(asView && step==1 && seq instanceof PyMemoryView mv) return new PyMemoryView(mv.source,mv.start+start,raw.length);
+        if(seq instanceof PyByteArray) return new PyByteArray(raw);
+        if(seq instanceof PyMemoryView) return new PyMemoryView(new PyBytes(raw));
+        return new PyBytes(raw);
+    }
 
     // ---------- Lexical environments / closure cells ----------
     public static final class PyEnv {
