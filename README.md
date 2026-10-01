@@ -459,3 +459,21 @@ Named class declaration keywords are now evaluated once and forwarded through
 The strict focused differential corpus passes 83/83 executable cases with
 0 unsupported and 0 failed.
 
+## 0.23 __slots__ and member descriptors
+
+Version 0.23 implements class slot layouts during class finalization. Declared slot
+names become data descriptors in the class dictionary and instance slot values are
+stored separately from the ordinary instance dictionary.
+
+Classes with `__slots__` and no `__dict__` reject undeclared instance attributes and
+do not expose `instance.__dict__`. Uninitialized and deleted slots raise
+`AttributeError`; explicit `"__dict__"` in `__slots__` restores dynamic attributes.
+
+Slot descriptors participate in normal MRO/data-descriptor lookup. Slotted base-class
+members remain available in subclasses, while a subclass that omits `__slots__`
+receives a normal instance dictionary as in CPython. Slot/class-variable conflicts are
+detected during class creation.
+
+The strict focused differential corpus passes 88/88 executable cases with
+0 unsupported and 0 failed.
+
