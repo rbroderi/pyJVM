@@ -561,3 +561,16 @@ raise `ValueError` when the replacement size does not match the selected positio
 The strict focused differential corpus passes 113/113 executable cases with
 0 unsupported and 0 failed.
 
+## 0.29 CPython-driven binary search and bytearray mutators
+
+Version 0.29 is prioritized directly from method frequencies in CPython 3.15's
+`Lib/test/test_bytes.py`. Bytes and bytearray now support reverse search/indexing and
+partitioning through `rfind`, `index`, `rindex`, `partition`, and `rpartition`.
+
+Bytearray gains the high-frequency mutable-sequence operations `clear`, `copy`,
+`insert`, `pop`, `remove`, and `reverse`, including Python-compatible missing-value
+and empty-pop errors.
+
+The strict focused differential corpus passes 120/120 executable cases with
+0 unsupported and 0 failed.
+
