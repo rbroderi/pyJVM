@@ -209,6 +209,7 @@ public final class PyRuntime {
         if (value instanceof BigInteger n) return n.signum() != 0;
         if (value instanceof Double n) return n != 0.0;
         if (value instanceof String s) return !s.isEmpty();
+        if (value instanceof PyByteSequence seq) return seq.byteSize()!=0;
         if (value instanceof List<?> xs) return !xs.isEmpty();
         if (value instanceof Map<?, ?> xs) return !xs.isEmpty();
         if (value instanceof Set<?> xs) return !xs.isEmpty();
@@ -503,6 +504,7 @@ public final class PyRuntime {
     public static Object len(Object value) {
         long n;
         if (value instanceof String s) n = s.codePointCount(0, s.length());
+        else if (value instanceof PyByteSequence seq) n = seq.byteSize();
         else if (value instanceof List<?> xs) n = xs.size();
         else if (value instanceof Map<?, ?> xs) n = xs.size();
         else if (value instanceof Set<?> xs) n = xs.size();
@@ -516,6 +518,9 @@ public final class PyRuntime {
     public static Object getitem(Object value, Object key) {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__getitem__");if(m!=null)return invoke(instance,m,new Object[]{key});}
         if (key instanceof PySlice sl) return sliceGet(value, sl);
+        if (value instanceof PyByteSequence seq) {
+            int i=asIndex(key); return (long)seq.unsignedAt(normalizeIndex(i,seq.byteSize()));
+        }
         if (value instanceof Map<?, ?> m) {
             if (!m.containsKey(key)) throw new NoSuchElementException("key not found: " + pyRepr(key));
             return m.get(key);
@@ -538,6 +543,8 @@ public final class PyRuntime {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__setitem__");if(m!=null){invoke(instance,m,new Object[]{key,item});return;}}
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
         int i = asIndex(key);
+        if(value instanceof PyByteArray array){array.setUnsigned(normalizeIndex(i,array.byteSize()),byteValue(item));return;}
+        if(value instanceof PyMemoryView view){view.setUnsigned(normalizeIndex(i,view.byteSize()),byteValue(item));return;}
         if (value instanceof List<?> xs) { ((List<Object>)xs).set(normalizeIndex(i, xs.size()), item); return; }
         throw typeError("object does not support item assignment", value);
     }
@@ -553,6 +560,17 @@ public final class PyRuntime {
     public static Object contains(Object container, Object needle) {
         if(container instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__contains__");if(m!=null)return invoke(instance,m,new Object[]{needle});}
         if (container instanceof String s && needle instanceof String n) return s.contains(n);
+        if(container instanceof PyByteSequence seq) {
+            if(isIntLike(needle)) {
+                int v=byteValue(needle); for(int i=0;i<seq.byteSize();i++) if(seq.unsignedAt(i)==v)return true; return false;
+            }
+            if(needle instanceof PyByteSequence sub) {
+                byte[] hay=seq.toByteArray(), nd=sub.toByteArray();
+                if(nd.length==0)return true;
+                outer: for(int i=0;i+nd.length<=hay.length;i++){for(int j=0;j<nd.length;j++)if(hay[i+j]!=nd[j])continue outer;return true;}return false;
+            }
+            throw new PyException("TypeError","a bytes-like object is required");
+        }
         if (container instanceof Map<?, ?> m) return m.containsKey(needle);
         if (container instanceof Set<?> s) return s.contains(needle);
         if (container instanceof List<?> xs) return xs.contains(needle);
@@ -575,6 +593,7 @@ public final class PyRuntime {
 
     public static Object slice(Object start, Object stop, Object step) { return new PySlice(start, stop, step); }
     private static Object sliceGet(Object value, PySlice sl) {
+        if(value instanceof PyByteSequence seq) return binarySlice(seq,sl,true);
         int size;
         if (value instanceof List<?> xs) size = xs.size();
         else if (value instanceof PyTuple t) size = t.items.size();
