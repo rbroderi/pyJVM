@@ -477,3 +477,19 @@ detected during class creation.
 The strict focused differential corpus passes 88/88 executable cases with
 0 unsupported and 0 failed.
 
+## 0.24 private name mangling and slot validation
+
+Version 0.24 aligns compiler-side class-private name mangling with the slot runtime.
+Private class attributes, methods, properties, and syntactic attribute references such
+as `self.__value` now use the same mangled key as private `__slots__` descriptors.
+Leading underscores in class names follow CPython's rule, including the all-underscore
+class-name case where mangling is suppressed.
+
+Slot declarations now validate names as identifiers in addition to requiring strings.
+Invalid names such as whitespace-containing strings are rejected with `TypeError`,
+while single-string slot declarations continue to represent one slot rather than a
+sequence of characters.
+
+The strict focused differential corpus passes 95/95 executable cases with
+0 unsupported and 0 failed.
+
