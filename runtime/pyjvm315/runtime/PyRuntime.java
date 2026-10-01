@@ -1019,6 +1019,48 @@ public final class PyRuntime {
         }
         return -1;
     }
+    private static int binaryLastIndexOf(byte[] hay,byte[] needle,int start,int end){
+        start=Math.max(0,Math.min(hay.length,start)); end=Math.max(start,Math.min(hay.length,end));
+        if(needle.length==0)return end;
+        outer: for(int i=end-needle.length;i>=start;i--){
+            for(int j=0;j<needle.length;j++)if(hay[i+j]!=needle[j])continue outer;
+            return i;
+        }
+        return -1;
+    }
+    private static Object binarySearch(PyByteSequence seq,Object[] args,boolean reverse,boolean raising){
+        if(args.length<1||args.length>3)throw new PyException("TypeError",(reverse?(raising?"rindex":"rfind"):(raising?"index":"find"))+"() takes from 1 to 3 arguments");
+        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
+        int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
+        int found=reverse?binaryLastIndexOf(hay,needle,start,end):binaryIndexOf(hay,needle,start,end);
+        if(raising&&found<0)throw new PyException("ValueError","subsection not found");
+        return (long)found;
+    }
+    private static Object binaryPartition(PyByteSequence seq,Object[] args,boolean reverse){
+        requireArgs(reverse?"rpartition":"partition",args,1);
+        byte[] src=seq.toByteArray(), sep=requireBytesLike(args[0]);
+        if(sep.length==0)throw new PyException("ValueError","empty separator");
+        int found=reverse?binaryLastIndexOf(src,sep,0,src.length):binaryIndexOf(src,sep,0,src.length);
+        PyTuple out=new PyTuple();
+        if(found<0){
+            if(reverse){
+                out.items.add(binaryResult(seq,new byte[0]));
+                out.items.add(binaryResult(seq,new byte[0]));
+                out.items.add(binaryResult(seq,src));
+            } else {
+                out.items.add(binaryResult(seq,src));
+                out.items.add(binaryResult(seq,new byte[0]));
+                out.items.add(binaryResult(seq,new byte[0]));
+            }
+            return out;
+        }
+        out.items.add(binaryResult(seq,Arrays.copyOfRange(src,0,found)));
+        out.items.add(binaryResult(seq,sep));
+        out.items.add(binaryResult(seq,Arrays.copyOfRange(src,found+sep.length,src.length)));
+        return out;
+    }
+
     private static Object binaryFind(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>3)throw new PyException("TypeError","find() takes from 1 to 3 arguments");
         byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
@@ -2351,6 +2393,11 @@ public final class PyRuntime {
                 }
                 case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.data); }
                 case "find" -> binaryFind(bytes,args);
+                case "rfind" -> binarySearch(bytes,args,true,false);
+                case "index" -> binarySearch(bytes,args,false,true);
+                case "rindex" -> binarySearch(bytes,args,true,true);
+                case "partition" -> binaryPartition(bytes,args,false);
+                case "rpartition" -> binaryPartition(bytes,args,true);
                 case "count" -> binaryCount(bytes,args);
                 case "startswith" -> binaryStartsEnds(bytes,args,true);
                 case "endswith" -> binaryStartsEnds(bytes,args,false);
@@ -2364,6 +2411,27 @@ public final class PyRuntime {
             return switch(name) {
                 case "append" -> { requireArgs(name,args,1); bytes.appendUnsigned(byteValue(args[0])); yield null; }
                 case "extend" -> { requireArgs(name,args,1); for(Object x:iterable(args[0])) bytes.appendUnsigned(byteValue(x)); yield null; }
+                case "clear" -> { requireArgs(name,args,0); bytes.data.clear(); yield null; }
+                case "copy" -> { requireArgs(name,args,0); yield new PyByteArray(bytes.toByteArray()); }
+                case "reverse" -> { requireArgs(name,args,0); Collections.reverse(bytes.data); yield null; }
+                case "pop" -> {
+                    if(args.length>1)throw new PyException("TypeError","pop expected at most 1 argument");
+                    if(bytes.data.isEmpty())throw new PyException("IndexError","pop from empty bytearray");
+                    int index=args.length==0?bytes.data.size()-1:normalizeIndex(asIndex(args[0]),bytes.data.size());
+                    yield (long)(bytes.data.remove(index)&0xff);
+                }
+                case "remove" -> {
+                    requireArgs(name,args,1); int value=byteValue(args[0]); int found=-1;
+                    for(int i=0;i<bytes.data.size();i++)if((bytes.data.get(i)&0xff)==value){found=i;break;}
+                    if(found<0)throw new PyException("ValueError","value not found in bytearray");
+                    bytes.data.remove(found); yield null;
+                }
+                case "insert" -> {
+                    requireArgs(name,args,2); int index=asIndex(args[0]); int size=bytes.data.size();
+                    if(index<0)index=Math.max(0,index+size);
+                    else index=Math.min(index,size);
+                    bytes.data.add(index,(byte)byteValue(args[1])); yield null;
+                }
                 case "decode" -> {
                     if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");
                     String enc=args.length==0?"utf-8":(String)args[0];
@@ -2371,6 +2439,11 @@ public final class PyRuntime {
                 }
                 case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.toByteArray()); }
                 case "find" -> binaryFind(bytes,args);
+                case "rfind" -> binarySearch(bytes,args,true,false);
+                case "index" -> binarySearch(bytes,args,false,true);
+                case "rindex" -> binarySearch(bytes,args,true,true);
+                case "partition" -> binaryPartition(bytes,args,false);
+                case "rpartition" -> binaryPartition(bytes,args,true);
                 case "count" -> binaryCount(bytes,args);
                 case "startswith" -> binaryStartsEnds(bytes,args,true);
                 case "endswith" -> binaryStartsEnds(bytes,args,false);

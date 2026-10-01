@@ -1,0 +1,7 @@
+b = bytearray(b"ab--cd--ef")
+print(b.rfind(b"--"))
+print(b.index(b"cd"))
+print(b.rindex(b"--"))
+print(b.partition(b"--"))
+print(b.rpartition(b"--"))
+print(type(b.partition(b"--")[0]))
