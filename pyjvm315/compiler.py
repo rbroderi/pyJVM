@@ -215,7 +215,7 @@ class Compiler:
         return self.cf.to_bytes()
 
     def _register_module_globals(self, body: list[ast.stmt]) -> None:
-        names: set[str] = {"__name__", "__package__"}
+        names: set[str] = {"__name__", "__package__", "__file__", "__loader__", "__spec__"}
 
         def bind_target(target: ast.expr) -> None:
             if isinstance(target, ast.Name):
@@ -613,6 +613,20 @@ class Compiler:
         b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         b.ldc_string(self.package_name); self._store_name("__package__", b, scope)
+        b.ldc_string(self.filename); self._store_name("__file__", b, scope)
+        if self.module_name == "__main__":
+            b.aconst_null(); self._store_name("__loader__", b, scope)
+            b.aconst_null(); self._store_name("__spec__", b, scope)
+        else:
+            b.ldc_string(self.module_name); b.ldc_string(self.filename)
+            b.invokestatic(RUNTIME, "makeModuleLoader", f"({OBJ}{OBJ}){OBJ}")
+            loader_slot=scope.temp(); b.astore(loader_slot)
+            b.aload(loader_slot); self._store_name("__loader__", b, scope)
+            b.ldc_string(self.module_name); b.ldc_string(self.filename); b.ldc_string(self.package_name)
+            self._boxed_bool(self.module_name == self.package_name, b)
+            b.aload(loader_slot)
+            b.invokestatic(RUNTIME, "makeModuleSpec", f"({OBJ*5}){OBJ}")
+            self._store_name("__spec__", b, scope)
         for stmt in body:
             self._stmt(stmt, b, scope, in_function=False)
         b.invokestatic(RUNTIME,"popLogicalFrame",f"()V")
