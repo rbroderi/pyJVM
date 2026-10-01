@@ -497,18 +497,48 @@ class Compiler:
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     method = self.class_method_infos[id(item)]
-                    b = CodeBuilder(self.cf.cp)
-                    scope = Scope(method.bound_args, start_slot=0)
                     self.current_method_self = method.positional[0] if method.positional else None
                     saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
                     self.current_frame_name,self.current_frame_firstlineno=item.name,item.lineno
-                    self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
-                    for stmt in item.body:
-                        self._stmt(stmt, b, scope, in_function=True)
+
+                    suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
+                        self._contains_await(item) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(item))
+                    )
+                    if suspendable_async:
+                        lowered=self._lower_async_function(item)
+                        local_names,_,nonlocal_names=self._function_locals(lowered)
+                        local_names.update(method.bound_args)
+                        resume_info=FunctionInfo(
+                            item.name,method.java_name,
+                            method.posonly,method.poskw,method.kwonly,
+                            method.vararg,method.kwarg,method.defaults,method.kw_defaults,
+                            None,False,True,local_names,set(),nonlocal_names,False,True,False,
+                        )
+                        creator=CodeBuilder(self.cf.cp)
+                        creator_scope=Scope(method.bound_args,start_slot=0)
+                        creator.aconst_null(); creator.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
+                        env_slot=creator_scope.temp(); creator.astore(env_slot)
+                        for arg_name in method.bound_args:
+                            creator.aload(env_slot); creator.ldc_string(arg_name); creator.aload(creator_scope.get(arg_name))
+                            creator.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
+                        resume_name=method.java_name+"$resume"
+                        creator.ldc_string(self.class_name.replace('/','.')); creator.ldc_string(resume_name); creator.aload(env_slot)
+                        creator.ldc_string(item.name); creator.ldc_string(self.filename); self._emit_int(item.lineno,creator)
+                        creator.invokestatic(RUNTIME,"makeSuspendableCoroutineEx",f"({OBJ*6}){OBJ}"); creator.areturn()
+                        creator_code=creator.finish()
+                        self.cf.add_method(Method(method.java_name,method.descriptor,creator_code,max_locals=max(8,creator_scope.next_slot+2),exception_table=creator.exception_table))
+                        self._compile_generator_resume(lowered,resume_info,resume_name)
+                    else:
+                        b = CodeBuilder(self.cf.cp)
+                        scope = Scope(method.bound_args, start_slot=0)
+                        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+                        for stmt in item.body:
+                            self._stmt(stmt, b, scope, in_function=True)
+                        b.aconst_null(); b.areturn()
+                        code = b.finish()
+                        self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
+
                     self.current_frame_name,self.current_frame_firstlineno=saved_frame
-                    b.aconst_null(); b.areturn()
-                    code = b.finish()
-                    self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
         finally:
             self.current_class, self.current_method_self = old_class, old_self
 
@@ -545,12 +575,17 @@ class Compiler:
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         if info.is_async_generator:
-            lowered = self._lower_async_function(node) if self._contains_await(node) else node
+            lowered = self._lower_async_function(node) if (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))) else node
+            if lowered is not node:
+                lowered_locals,_,_=self._function_locals(lowered)
+                info.local_names.update(lowered_locals)
             self._compile_generator_function(lowered, info, as_async_generator=True)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
-        if info.is_async and self._contains_await(node):
+        if info.is_async and (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))):
             lowered = self._lower_async_function(node)
+            lowered_locals,_,_=self._function_locals(lowered)
+            info.local_names.update(lowered_locals)
             self._compile_generator_function(lowered, info, as_coroutine=True)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
@@ -596,6 +631,11 @@ class Compiler:
         class Lower(ast.NodeTransformer):
             def __init__(self, root):
                 self.root=root
+                self.counter=0
+            def temp(self, prefix: str) -> str:
+                name=f"$async_{prefix}_{self.counter}"
+                self.counter += 1
+                return name
             def visit_FunctionDef(self, n):
                 if n is self.root:
                     return self.generic_visit(n)
@@ -610,8 +650,40 @@ class Compiler:
                 awaited=self.visit(n.value)
                 call=ast.Call(func=ast.Name(id="__py_await_iter_internal",ctx=ast.Load()),args=[awaited],keywords=[])
                 return ast.copy_location(ast.YieldFrom(value=call),n)
+            def visit_AsyncFor(self, n: ast.AsyncFor):
+                iterator_name=self.temp("iter")
+                exhausted_name=self.temp("exhausted")
+                iterator_target=ast.Name(id=iterator_name,ctx=ast.Store())
+                iterator_load=ast.Name(id=iterator_name,ctx=ast.Load())
+                exhausted_target=ast.Name(id=exhausted_name,ctx=ast.Store())
+                exhausted_load=ast.Name(id=exhausted_name,ctx=ast.Load())
+                setup_iter=ast.Assign(
+                    targets=[iterator_target],
+                    value=ast.Call(func=ast.Name(id="aiter",ctx=ast.Load()),args=[self.visit(n.iter)],keywords=[]),
+                )
+                setup_exhausted=ast.Assign(targets=[exhausted_target],value=ast.Constant(False))
+                next_value=ast.Await(value=ast.Call(func=ast.Name(id="anext",ctx=ast.Load()),args=[iterator_load],keywords=[]))
+                assign_next=ast.Assign(targets=[self.visit(n.target)],value=self.visit(next_value))
+                except_body=[
+                    ast.Assign(targets=[ast.Name(id=exhausted_name,ctx=ast.Store())],value=ast.Constant(True)),
+                    ast.Break(),
+                ]
+                try_next=ast.Try(
+                    body=[assign_next],
+                    handlers=[ast.ExceptHandler(type=ast.Name(id="StopAsyncIteration",ctx=ast.Load()),name=None,body=except_body)],
+                    orelse=[],
+                    finalbody=[],
+                )
+                body=[try_next] + [self.visit(st) for st in n.body]
+                loop=ast.While(test=ast.Constant(True),body=body,orelse=[])
+                tail=[]
+                if n.orelse:
+                    tail=[ast.If(test=exhausted_load,body=[self.visit(st) for st in n.orelse],orelse=[])]
+                out=[setup_iter,setup_exhausted,loop,*tail]
+                for st in out: ast.copy_location(st,n)
+                return out
 
-        lowered_async=Lower(original).visit(original)
+        lowered_async=ast.fix_missing_locations(Lower(original).visit(original))
         lowered=ast.FunctionDef(
             name=lowered_async.name,
             args=lowered_async.args,
@@ -1228,8 +1300,7 @@ class Compiler:
         b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
 
     def _emit_generator_expression(self, node: ast.GeneratorExp, b: CodeBuilder, scope: Scope) -> None:
-        if any(gen.is_async for gen in node.generators):
-            raise CompileError("async generator expressions are not implemented yet")
+        is_async = any(gen.is_async for gen in node.generators)
         # Python evaluates the outermost iterable expression immediately when the
         # generator expression is created. The actual iteration remains lazy.
         outer_name=f"$genexpr_outer_{self._method_counter}"
@@ -1238,8 +1309,6 @@ class Compiler:
         for gen in node.generators: target_names.update(self._target_names(gen.target))
         refs={n.id for n in ast.walk(node) if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Load)}
         free_names={name for name in refs if name not in target_names and scope.has(name) and name not in scope.global_decl}
-        info=FunctionInfo("<genexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
-                          target_names,free_names,set(),True,False)
 
         body: list[ast.stmt]=[ast.Expr(value=ast.Yield(value=node.elt))]
         generators=list(node.generators)
@@ -1248,12 +1317,38 @@ class Compiler:
             inner=body
             for cond in reversed(gen.ifs): inner=[ast.If(test=cond,body=inner,orelse=[])]
             iterable=ast.Name(id=outer_name,ctx=ast.Load()) if index==0 else gen.iter
-            body=[ast.For(target=gen.target,iter=iterable,body=inner,orelse=[])]
-        synthetic=ast.FunctionDef(name="<genexpr>",args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
-                                  body=body,decorator_list=[])
-        self.function_infos[id(synthetic)]=info
-        resume_name=java_name+"$resume"
-        self._compile_generator_resume(synthetic,info,resume_name)
+            if gen.is_async:
+                body=[ast.AsyncFor(target=gen.target,iter=iterable,body=inner,orelse=[])]
+            else:
+                body=[ast.For(target=gen.target,iter=iterable,body=inner,orelse=[])]
+
+        if is_async:
+            synthetic_async=ast.AsyncFunctionDef(
+                name="<asyncgenexpr>",
+                args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
+                body=body,decorator_list=[],
+            )
+            synthetic_async=ast.fix_missing_locations(synthetic_async)
+            lowered=self._lower_async_function(synthetic_async)
+            local_names,_,_=self._function_locals(lowered)
+            local_names.update(target_names)
+            info=FunctionInfo("<asyncgenexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
+                              local_names,free_names,set(),False,True,True)
+            self.function_infos[id(lowered)]=info
+            resume_name=java_name+"$resume"
+            self._compile_generator_resume(lowered,info,resume_name,async_generator_mode=True)
+        else:
+            info=FunctionInfo("<genexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
+                              target_names,free_names,set(),True,False,False)
+            synthetic=ast.FunctionDef(
+                name="<genexpr>",
+                args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
+                body=body,decorator_list=[],
+            )
+            synthetic=ast.fix_missing_locations(synthetic)
+            self.function_infos[id(synthetic)]=info
+            resume_name=java_name+"$resume"
+            self._compile_generator_resume(synthetic,info,resume_name)
 
         if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
         else: b.aconst_null()
@@ -1264,7 +1359,11 @@ class Compiler:
         b.aload(env_slot); b.ldc_string(outer_name); b.aload(value_slot)
         b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
         b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
-        b.invokestatic(RUNTIME,"makeGenerator",f"({OBJ}{OBJ}{OBJ}){OBJ}")
+        if is_async:
+            b.ldc_string("<asyncgenexpr>"); b.ldc_string(self.filename); self._emit_int(getattr(node,"lineno",1),b)
+            b.invokestatic(RUNTIME,"makeAsyncGeneratorEx",f"({OBJ*6}){OBJ}")
+        else:
+            b.invokestatic(RUNTIME,"makeGenerator",f"({OBJ}{OBJ}{OBJ}){OBJ}")
 
     def _emit_comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp, b: CodeBuilder, scope: Scope) -> None:
         if any(gen.is_async for gen in node.generators):
