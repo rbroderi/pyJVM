@@ -389,3 +389,18 @@ evaluation of the outer iterable expression and lazy asynchronous element produc
 The strict focused differential corpus passes 69/69 executable cases with
 0 unsupported and 0 failed.
 
+## 0.19 suspendable async comprehensions
+
+Version 0.19 adds list, set, and dict async comprehensions using synthetic suspendable
+helper coroutines. The helpers capture the enclosing lexical environment, execute mixed
+sync/async comprehension clauses through the ordinary async-for lowering, and return the
+completed container through normal coroutine completion.
+
+Suspension is supported both in the asynchronous iterator protocol and in call
+expressions within comprehension elements. Suspended method calls now persist the bound
+object, positional argument list, and keyword mapping across resumes and invoke through
+the runtime's dynamic method-dispatch path.
+
+The strict focused differential corpus passes 71/71 executable cases with
+0 unsupported and 0 failed.
+
