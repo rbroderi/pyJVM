@@ -164,9 +164,12 @@ class Scope:
 
 
 class Compiler:
-    def __init__(self, class_name: str, import_map: dict[str, str] | None = None, *, module_name: str = "__main__", package_name: str | None = None) -> None:
+    def __init__(self, class_name: str, import_map: dict[str, str] | None = None,
+                 import_exports: dict[str, list[str] | None] | None = None, *,
+                 module_name: str = "__main__", package_name: str | None = None) -> None:
         self.class_name = class_name.replace(".", "/")
         self.import_map = dict(import_map or {})
+        self.import_exports = dict(import_exports or {})
         self.module_name = module_name
         self.package_name = module_name.rpartition(".")[0] if package_name is None else package_name
         self.cf = ClassFile(self.class_name)
@@ -228,6 +231,22 @@ class Compiler:
                 bind_target(stmt.target)
             elif isinstance(stmt, ast.AugAssign):
                 bind_target(stmt.target)
+            elif isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    names.add(alias.asname or alias.name.split('.')[0])
+            elif isinstance(stmt, ast.ImportFrom):
+                resolved=_resolve_import_name(
+                    self.module_name, self.package_name == self.module_name,
+                    stmt.module, stmt.level
+                )
+                for alias in stmt.names:
+                    if alias.name == '*':
+                        exports=self.import_exports.get(resolved or "")
+                        if exports is None:
+                            raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
+                        names.update(exports)
+                    else:
+                        names.add(alias.asname or alias.name)
             elif isinstance(stmt, (ast.For, ast.AsyncFor)):
                 bind_target(stmt.target)
                 for child in stmt.body + stmt.orelse: visit_stmt(child)
@@ -1941,7 +1960,15 @@ class Compiler:
                 b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
                 module_slot = scope.temp(); b.astore(module_slot)
                 for alias in names:
-                    if alias.name == '*': raise CompileError("star imports are not implemented yet")
+                    if alias.name == '*':
+                        exports = self.import_exports.get(resolved)
+                        if exports is None:
+                            raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
+                        for export_name in exports:
+                            b.aload(module_slot); b.ldc_string(export_name)
+                            b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
+                            self._store_name(export_name, b, scope)
+                        continue
                     submodule = resolved + '.' + alias.name
                     sub_jvm = self.import_map.get(submodule)
                     if sub_jvm is not None:
@@ -2436,8 +2463,12 @@ class Compiler:
         b.mark(end)
 
 
-def compile_source(source: str, class_name: str = "Main", filename: str = "<string>", import_map: dict[str,str] | None = None, module_name: str = "__main__", package_name: str | None = None) -> bytes:
-    return Compiler(class_name, import_map=import_map, module_name=module_name, package_name=package_name).compile(source, filename)
+def compile_source(source: str, class_name: str = "Main", filename: str = "<string>",
+                   import_map: dict[str,str] | None = None,
+                   import_exports: dict[str, list[str] | None] | None = None,
+                   module_name: str = "__main__", package_name: str | None = None) -> bytes:
+    return Compiler(class_name, import_map=import_map, import_exports=import_exports,
+                    module_name=module_name, package_name=package_name).compile(source, filename)
 
 
 def _module_context(path: Path, root: Path) -> tuple[str, bool]:
@@ -2488,6 +2519,112 @@ def _scan_local_imports(source_path: Path, root: Path, found: dict[str, Path], m
                 _scan_local_imports(path,root,found,child_name,child_is_pkg)
 
 
+def _static_module_export_info(path: Path, module_name: str, is_package: bool) -> tuple[list[str] | None | str, set[str], list[str]]:
+    tree=ast.parse(path.read_text(encoding="utf-8"),filename=str(path),mode="exec")
+    own: set[str]=set()
+    star_deps: list[str]=[]
+    explicit_all: list[str] | None | str = None
+
+    def bind_target(target: ast.expr) -> None:
+        if isinstance(target,ast.Name):
+            own.add(target.id)
+        elif isinstance(target,(ast.Tuple,ast.List)):
+            for elt in target.elts: bind_target(elt)
+
+    def literal_all(value: ast.expr) -> list[str] | None:
+        if not isinstance(value,(ast.List,ast.Tuple,ast.Set)):
+            return None
+        out=[]
+        for elt in value.elts:
+            if not isinstance(elt,ast.Constant) or not isinstance(elt.value,str):
+                return None
+            out.append(elt.value)
+        return out
+
+    def visit(stmt: ast.stmt) -> None:
+        nonlocal explicit_all
+        if isinstance(stmt,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)):
+            own.add(stmt.name); return
+        if isinstance(stmt,ast.Assign):
+            for target in stmt.targets: bind_target(target)
+            if any(isinstance(t,ast.Name) and t.id=="__all__" for t in stmt.targets):
+                parsed=literal_all(stmt.value); explicit_all=parsed if parsed is not None else "dynamic"
+            return
+        if isinstance(stmt,ast.AnnAssign):
+            bind_target(stmt.target)
+            if isinstance(stmt.target,ast.Name) and stmt.target.id=="__all__" and stmt.value is not None:
+                parsed=literal_all(stmt.value); explicit_all=parsed if parsed is not None else "dynamic"
+            return
+        if isinstance(stmt,ast.AugAssign):
+            bind_target(stmt.target)
+            if isinstance(stmt.target,ast.Name) and stmt.target.id=="__all__":
+                explicit_all="dynamic"
+            return
+        if isinstance(stmt,ast.Import):
+            for alias in stmt.names:
+                own.add(alias.asname or alias.name.split('.')[0])
+            return
+        if isinstance(stmt,ast.ImportFrom):
+            resolved=_resolve_import_name(module_name,is_package,stmt.module,stmt.level)
+            for alias in stmt.names:
+                if alias.name=="*":
+                    if resolved: star_deps.append(resolved)
+                else:
+                    own.add(alias.asname or alias.name)
+            return
+        if isinstance(stmt,(ast.If,ast.While,ast.For,ast.AsyncFor)):
+            if isinstance(stmt,(ast.For,ast.AsyncFor)): bind_target(stmt.target)
+            for child in stmt.body + stmt.orelse: visit(child)
+            return
+        if isinstance(stmt,ast.Try):
+            for child in stmt.body + stmt.orelse + stmt.finalbody: visit(child)
+            for handler in stmt.handlers:
+                if handler.name: own.add(handler.name)
+                for child in handler.body: visit(child)
+            return
+        if isinstance(stmt,(ast.With,ast.AsyncWith)):
+            for item in stmt.items:
+                if item.optional_vars is not None: bind_target(item.optional_vars)
+            for child in stmt.body: visit(child)
+
+    for stmt in tree.body: visit(stmt)
+    return explicit_all, own, star_deps
+
+
+def _build_import_exports(modules: dict[str, Path]) -> dict[str, list[str] | None]:
+    info: dict[str, tuple[list[str] | None | str, set[str], list[str]]] = {}
+    for name,path in modules.items():
+        info[name]=_static_module_export_info(path,name,path.name=="__init__.py")
+
+    cache: dict[str, list[str] | None]={}
+    visiting: set[str]=set()
+
+    def exports(name: str) -> list[str] | None:
+        if name in cache: return cache[name]
+        if name in visiting:
+            return []
+        details=info.get(name)
+        if details is None: return []
+        explicit,own,star_deps=details
+        if explicit=="dynamic":
+            cache[name]=None; return None
+        if isinstance(explicit,list):
+            cache[name]=list(explicit); return cache[name]
+        visiting.add(name)
+        names=set(own)
+        for dep in star_deps:
+            dep_exports=exports(dep)
+            if dep_exports is None:
+                cache[name]=None; visiting.remove(name); return None
+            names.update(n for n in dep_exports if not n.startswith("_"))
+        visiting.remove(name)
+        cache[name]=sorted(n for n in names if not n.startswith("_"))
+        return cache[name]
+
+    for name in modules: exports(name)
+    return cache
+
+
 def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None) -> Path:
     source_path=Path(source_path); output_dir=Path(output_dir)
     class_name=class_name or source_path.stem.title().replace("_","")
@@ -2507,11 +2644,14 @@ def compile_file(source_path: str | Path, output_dir: str | Path, class_name: st
             path=_find_module(root,parent)
             if path is not None: modules.setdefault(parent,path)
     import_map={name:"pyjvm315/imports/"+name.replace('.','/') for name in modules}
+    import_exports=_build_import_exports(modules)
 
     def emit(path:Path,jvm_name:str,module_name:str)->Path:
         is_pkg = path.name == "__init__.py"
         package_name = module_name if is_pkg else module_name.rpartition('.')[0]
-        data=compile_source(path.read_text(encoding="utf-8"),jvm_name,str(path),import_map=import_map,module_name=module_name,package_name=package_name)
+        data=compile_source(path.read_text(encoding="utf-8"),jvm_name,str(path),
+                            import_map=import_map,import_exports=import_exports,
+                            module_name=module_name,package_name=package_name)
         rel=Path(*jvm_name.replace('/','.').split('.')); out=output_dir/rel.with_suffix('.class')
         out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data); return out
 
