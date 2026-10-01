@@ -69,6 +69,9 @@ public final class PyRuntime {
         if (value instanceof Double) return "float";
         if (value instanceof Boolean) return "bool";
         if (value instanceof String) return "str";
+        if (value instanceof PyBytes) return "bytes";
+        if (value instanceof PyByteArray) return "bytearray";
+        if (value instanceof PyMemoryView) return "memoryview";
         if (value instanceof PyTuple) return "tuple";
         if (value instanceof List) return "list";
         if (value instanceof Map) return "dict";
@@ -158,6 +161,9 @@ public final class PyRuntime {
         if (value == null) return "None";
         if (value instanceof Boolean b) return b ? "True" : "False";
         if (value instanceof String s) return s;
+        if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
+        if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
+        if (value instanceof PyMemoryView view) return view.toString();
         if (value instanceof PyTuple t) return t.pyRepr();
         if (value instanceof PyDictView v) return v.pyRepr();
         if (value instanceof PyExceptionValue e) return e.value == null ? "" : pyStr(e.value);
@@ -187,6 +193,8 @@ public final class PyRuntime {
 
     public static String pyRepr(Object value) {
         if (value instanceof String s) return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
+        if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
+        if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__repr__");if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}}
         return pyStr(value);
     }
@@ -228,6 +236,16 @@ public final class PyRuntime {
         if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__add__");if(m!=null)return invoke(ia,m,new Object[]{b});}
         if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__radd__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (a instanceof String sa && b instanceof String sb) return sa + sb;
+        if(a instanceof PyBytes ba && b instanceof PyBytes bb) {
+            byte[] out=new byte[ba.data.length+bb.data.length];
+            System.arraycopy(ba.data,0,out,0,ba.data.length); System.arraycopy(bb.data,0,out,ba.data.length,bb.data.length);
+            return new PyBytes(out);
+        }
+        if(a instanceof PyByteArray ba && b instanceof PyByteArray bb) {
+            byte[] x=ba.toByteArray(),y=bb.toByteArray(),out=new byte[x.length+y.length];
+            System.arraycopy(x,0,out,0,x.length); System.arraycopy(y,0,out,x.length,y.length);
+            return new PyByteArray(out);
+        }
         if (a instanceof List<?> la && b instanceof List<?> lb) {
             ArrayList<Object> out = new ArrayList<>(la.size() + lb.size());
             out.addAll(la); out.addAll(lb); return out;
@@ -260,6 +278,10 @@ public final class PyRuntime {
         if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__rmul__");if(m!=null)return invoke(ib,m,new Object[]{a});}
         if (a instanceof String sa && isIntLike(b)) return repeatString(sa, bigInt(b));
         if (b instanceof String sb && isIntLike(a)) return repeatString(sb, bigInt(a));
+        if(a instanceof PyBytes bytes && isIntLike(b)) return repeatBytes(bytes,bigInt(b),false);
+        if(b instanceof PyBytes bytes && isIntLike(a)) return repeatBytes(bytes,bigInt(a),false);
+        if(a instanceof PyByteArray bytes && isIntLike(b)) return repeatBytes(bytes,bigInt(b),true);
+        if(b instanceof PyByteArray bytes && isIntLike(a)) return repeatBytes(bytes,bigInt(a),true);
         if (a instanceof List<?> la && isIntLike(b)) return repeatList(la, bigInt(b));
         if (b instanceof List<?> lb && isIntLike(a)) return repeatList(lb, bigInt(a));
         if (isIntLike(a) && isIntLike(b)) {
@@ -270,6 +292,18 @@ public final class PyRuntime {
             return compact(bigInt(a).multiply(bigInt(b)));
         }
         return number(a) * number(b);
+    }
+
+    private static Object repeatBytes(PyByteSequence seq,BigInteger count,boolean mutable){
+        if(count.signum()<=0) return mutable?new PyByteArray():new PyBytes(new byte[0]);
+        int n;
+        try{n=count.intValueExact();}catch(ArithmeticException e){throw new PyException("OverflowError","repeated bytes are too long");}
+        byte[] src=seq.toByteArray();
+        int total;
+        try{total=Math.multiplyExact(src.length,n);}catch(ArithmeticException e){throw new PyException("OverflowError","repeated bytes are too long");}
+        byte[] out=new byte[total];
+        for(int i=0;i<n;i++)System.arraycopy(src,0,out,i*src.length,src.length);
+        return mutable?new PyByteArray(out):new PyBytes(out);
     }
 
     public static Object truediv(Object a, Object b) {
@@ -2419,6 +2453,9 @@ public final class PyRuntime {
                 case "bool" -> obj instanceof Boolean;
                 case "float" -> obj instanceof Double;
                 case "str" -> obj instanceof String;
+                case "bytes" -> obj instanceof PyBytes;
+                case "bytearray" -> obj instanceof PyByteArray;
+                case "memoryview" -> obj instanceof PyMemoryView;
                 case "list" -> obj instanceof List<?>;
                 case "tuple" -> obj instanceof PyTuple;
                 case "dict" -> obj instanceof Map<?,?>;
