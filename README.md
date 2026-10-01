@@ -547,3 +547,17 @@ a real `__file__`.
 The strict focused differential corpus passes 109/109 executable cases with
 0 unsupported and 0 failed.
 
+## 0.28 binary sequence API and bytearray slice assignment
+
+Version 0.28 expands the shared bytes/bytearray implementation using one common binary
+search/splitting layer. Both types now support `find`, `count`, `startswith`,
+`endswith`, `replace`, `split`, and `join`, while preserving the receiver's
+immutable or mutable result type where Python does.
+
+Bytearray now supports slice assignment. Contiguous slice replacement may resize the
+array, including insertion through an empty slice. Extended slices preserve length and
+raise `ValueError` when the replacement size does not match the selected positions.
+
+The strict focused differential corpus passes 113/113 executable cases with
+0 unsupported and 0 failed.
+
