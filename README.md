@@ -372,3 +372,20 @@ injection.
 The strict focused differential corpus passes 67/67 executable cases with 0 unsupported
 and 0 failed.
 
+## 0.18 suspendable async-for and async generator expressions
+
+Version 0.18 lowers `async for` into explicit suspendable `await anext(...)` states
+instead of synchronously draining the asynchronous iterator protocol. Loop `else`
+continues to distinguish normal iterator exhaustion from a user `break` through a
+persisted exhaustion flag.
+
+Async instance/class/static methods that can suspend now use the same persistent
+coroutine-frame backend as top-level async functions. This closes the previous gap where
+an async method such as `__anext__` could accidentally drain an internal await
+synchronously.
+
+Async generator expressions are compiled as real async-generator frames with eager
+evaluation of the outer iterable expression and lazy asynchronous element production.
+The strict focused differential corpus passes 69/69 executable cases with
+0 unsupported and 0 failed.
+
