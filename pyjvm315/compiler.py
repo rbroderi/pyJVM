@@ -770,10 +770,16 @@ class Compiler:
                         ],
                         keywords=[],
                     )
+                    suppress_name=self.temp("with_suppress")
                     suppress=self.awaited(exit_exc_call,n)
                     handler_body=[
                         ast.Assign(targets=[ast.Name(id=exc,ctx=ast.Store())],value=caught_load),
-                        ast.If(test=ast.UnaryOp(op=ast.Not(),operand=suppress),body=[ast.Raise(exc=None,cause=None)],orelse=[]),
+                        ast.Assign(targets=[ast.Name(id=suppress_name,ctx=ast.Store())],value=suppress),
+                        ast.If(
+                            test=ast.UnaryOp(op=ast.Not(),operand=ast.Name(id=suppress_name,ctx=ast.Load())),
+                            body=[ast.Raise(exc=None,cause=None)],
+                            orelse=[],
+                        ),
                     ]
                     handler=ast.ExceptHandler(
                         type=ast.Name(id="BaseException",ctx=ast.Load()),
