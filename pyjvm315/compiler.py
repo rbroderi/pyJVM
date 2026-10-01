@@ -178,6 +178,9 @@ class Compiler:
         self.global_names: set[str] = set()
         self.global_fields: dict[str, str] = {}
         self._method_counter = 0
+        self._async_comp_counter = 0
+        self._async_comp_nodes: dict[int, ast.ListComp | ast.SetComp | ast.DictComp] = {}
+        self._async_comp_compiled: dict[int, str] = {}
         self.loop_stack: list[tuple[object, object]] = []  # (continue, break)
         self.exception_stack: list[int] = []
         self.cleanup_stack: list[tuple[str, object]] = []
@@ -628,6 +631,7 @@ class Compiler:
     def _lower_async_function(self, node: ast.AsyncFunctionDef) -> ast.FunctionDef:
         original = copy.deepcopy(node)
 
+        compiler=self
         class Lower(ast.NodeTransformer):
             def __init__(self, root):
                 self.root=root
@@ -650,6 +654,21 @@ class Compiler:
                 awaited=self.visit(n.value)
                 call=ast.Call(func=ast.Name(id="__py_await_iter_internal",ctx=ast.Load()),args=[awaited],keywords=[])
                 return ast.copy_location(ast.YieldFrom(value=call),n)
+            def _async_comp(self, n):
+                if not any(gen.is_async for gen in n.generators):
+                    return self.generic_visit(n)
+                token=compiler._async_comp_counter
+                compiler._async_comp_counter += 1
+                compiler._async_comp_nodes[token]=copy.deepcopy(n)
+                helper=ast.Call(
+                    func=ast.Name(id="__py_async_comp_internal",ctx=ast.Load()),
+                    args=[ast.Constant(token)],
+                    keywords=[],
+                )
+                return self.visit_Await(ast.copy_location(ast.Await(value=helper),n))
+            def visit_ListComp(self, n): return self._async_comp(n)
+            def visit_SetComp(self, n): return self._async_comp(n)
+            def visit_DictComp(self, n): return self._async_comp(n)
             def visit_AsyncFor(self, n: ast.AsyncFor):
                 iterator_name=self.temp("iter")
                 exhausted_name=self.temp("exhausted")
@@ -1365,6 +1384,76 @@ class Compiler:
         else:
             b.invokestatic(RUNTIME,"makeGenerator",f"({OBJ}{OBJ}{OBJ}){OBJ}")
 
+    def _emit_async_comprehension_coroutine(self, token: int, b: CodeBuilder, scope: Scope) -> None:
+        node=self._async_comp_nodes[token]
+        java_name=self._async_comp_compiled.get(token)
+        if java_name is None:
+            java_name=f"__py_asynccomp_{self._method_counter}"; self._method_counter += 1
+            self._async_comp_compiled[token]=java_name
+            out_name=f"$asynccomp_out_{token}"
+            targets={out_name}
+            for gen in node.generators: targets.update(self._target_names(gen.target))
+            refs={n.id for n in ast.walk(node) if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Load)}
+            free_names={name for name in refs if name not in targets and scope.has(name) and name not in scope.global_decl}
+
+            if isinstance(node, ast.ListComp):
+                init_expr=ast.List(elts=[],ctx=ast.Load())
+                action: ast.stmt=ast.Expr(value=ast.Call(
+                    func=ast.Attribute(value=ast.Name(id=out_name,ctx=ast.Load()),attr="append",ctx=ast.Load()),
+                    args=[node.elt],keywords=[],
+                ))
+            elif isinstance(node, ast.SetComp):
+                init_expr=ast.Call(func=ast.Name(id="set",ctx=ast.Load()),args=[],keywords=[])
+                action=ast.Expr(value=ast.Call(
+                    func=ast.Attribute(value=ast.Name(id=out_name,ctx=ast.Load()),attr="add",ctx=ast.Load()),
+                    args=[node.elt],keywords=[],
+                ))
+            else:
+                init_expr=ast.Dict(keys=[],values=[])
+                action=ast.Assign(
+                    targets=[ast.Subscript(value=ast.Name(id=out_name,ctx=ast.Load()),slice=node.key,ctx=ast.Store())],
+                    value=node.value,
+                )
+
+            body: list[ast.stmt]=[action]
+            for gen in reversed(node.generators):
+                inner=body
+                for cond in reversed(gen.ifs):
+                    inner=[ast.If(test=cond,body=inner,orelse=[])]
+                loop_cls=ast.AsyncFor if gen.is_async else ast.For
+                body=[loop_cls(target=gen.target,iter=gen.iter,body=inner,orelse=[])]
+            synthetic=ast.AsyncFunctionDef(
+                name="<asynccomp>",
+                args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
+                body=[
+                    ast.Assign(targets=[ast.Name(id=out_name,ctx=ast.Store())],value=init_expr),
+                    *body,
+                    ast.Return(value=ast.Name(id=out_name,ctx=ast.Load())),
+                ],
+                decorator_list=[],
+            )
+            synthetic=ast.fix_missing_locations(synthetic)
+            lowered=self._lower_async_function(synthetic)
+            local_names,_,_=self._function_locals(lowered)
+            local_names.update(targets)
+            info=FunctionInfo(
+                "<asynccomp>",java_name,[],[],[],None,None,{}, {},None,False,True,
+                local_names,free_names,set(),False,True,False,
+            )
+            self.function_infos[id(lowered)]=info
+            resume_name=java_name+"$resume"
+            self._compile_generator_resume(lowered,info,resume_name)
+        else:
+            resume_name=java_name+"$resume"
+
+        if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
+        else: b.aconst_null()
+        b.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
+        env_slot=scope.temp(); b.astore(env_slot)
+        b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
+        b.ldc_string("<asynccomp>"); b.ldc_string(self.filename); self._emit_int(getattr(node,"lineno",1),b)
+        b.invokestatic(RUNTIME,"makeSuspendableCoroutineEx",f"({OBJ*6}){OBJ}")
+
     def _emit_comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp, b: CodeBuilder, scope: Scope) -> None:
         if any(gen.is_async for gen in node.generators):
             raise CompileError("async comprehensions are not implemented yet")
@@ -1929,6 +2018,8 @@ class Compiler:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, name, f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="__py_async_comp_internal"), args=[ast.Constant(value=int() as token)], keywords=[]):
+                self._emit_async_comprehension_coroutine(token, b, scope)
             case ast.Call(func=ast.Name(id="aiter"), args=[arg], keywords=[]):
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="anext"), args=[arg], keywords=[]):
