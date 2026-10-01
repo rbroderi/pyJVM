@@ -1,19 +1,25 @@
 {
-  "version": "0.24.0",
+  "version": "0.25.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 95, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 100, "unsupported": 0, "failed": 0},
   "new_features": [
-    "compiler-side class-private name mangling",
-    "private methods/properties/class attributes share CPython mangled keys",
-    "private __slots__ references resolve through mangled descriptors",
-    "leading-underscore/all-underscore class-name mangling rules",
-    "slot identifier validation"
+    "from module import * for local compiled modules",
+    "literal __all__ export semantics",
+    "default public-name module exports",
+    "recursive public star re-exports",
+    "relative package star imports",
+    "pre-registration of import bindings for compiled functions"
+  ],
+  "known_limits": [
+    "dynamic/non-literal __all__ for star-imported modules",
+    "namespace packages and import hooks/loaders",
+    "external/native Python extension imports"
   ],
   "next_focus": [
-    "star imports and __all__ semantics",
-    "stronger package/import metadata",
-    "bytes/bytearray/memoryview builtin coverage",
-    "larger CPython 3.15 test_descr/import slices"
+    "bytes and bytearray builtin coverage",
+    "memoryview basics",
+    "stronger module metadata/import protocol",
+    "larger CPython 3.15 import and bytes test slices"
   ]
 }
