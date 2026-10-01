@@ -1,0 +1,15 @@
+import helper
+
+print(helper.__name__)
+print(helper.__package__)
+print(helper.__file__.endswith("helper.py"))
+print(helper.__loader__ is not None)
+print(helper.__spec__ is not None)
+print(helper.__spec__.name)
+print(helper.__spec__.parent)
+print(helper.__spec__.origin.endswith("helper.py"))
+print(helper.__spec__.loader is helper.__loader__)
+print("VALUE" in helper.__dict__)
+print("func" in helper.__dict__)
+print("Thing" in helper.__dict__)
+print(helper.__dict__["VALUE"])
