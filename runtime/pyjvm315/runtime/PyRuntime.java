@@ -1753,6 +1753,7 @@ public final class PyRuntime {
         LinkedHashSet<String> names=new LinkedHashSet<>();
         for(Object raw:rawNames) {
             if(!(raw instanceof String name)) throw new PyException("TypeError","__slots__ items must be strings");
+            if(!isPythonIdentifier(name)) throw new PyException("TypeError","__slots__ must be identifiers");
             if(name.equals("__dict__")) { cls.instanceDictAllowed=true; continue; }
             if(name.equals("__weakref__")) continue;
             String slotName=mangleSlotName(cls.name,name);
@@ -1768,9 +1769,24 @@ public final class PyRuntime {
         }
     }
 
+    private static boolean isPythonIdentifier(String name) {
+        if(name.isEmpty()) return false;
+        int offset=0;
+        int cp=name.codePointAt(offset);
+        if(!(cp=='_' || Character.isUnicodeIdentifierStart(cp))) return false;
+        offset+=Character.charCount(cp);
+        while(offset<name.length()) {
+            cp=name.codePointAt(offset);
+            if(!(cp=='_' || Character.isUnicodeIdentifierPart(cp))) return false;
+            offset+=Character.charCount(cp);
+        }
+        return true;
+    }
+
     private static String mangleSlotName(String className,String name) {
         if(name.startsWith("__") && !name.endsWith("__")) {
             String stripped=className.replaceFirst("^_+","");
+            if(stripped.isEmpty()) return name;
             return "_"+stripped+name;
         }
         return name;

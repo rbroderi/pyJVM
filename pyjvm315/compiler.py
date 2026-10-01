@@ -427,6 +427,20 @@ class Compiler:
                 self._register_function_tree(stmt, new_enclosing, top_level=False)
 
 
+    @staticmethod
+    def _mangle_class_private(class_name: str, name: str) -> str:
+        if not name.startswith("__") or name.endswith("__"):
+            return name
+        stripped = class_name.lstrip("_")
+        if not stripped:
+            return name
+        return "_" + stripped + name
+
+    def _class_attr_name(self, name: str) -> str:
+        if self.current_class is None:
+            return name
+        return self._mangle_class_private(self.current_class.name, name)
+
     def _register_class(self, node: ast.ClassDef) -> None:
         metaclass: str | None = None
         class_keywords: list[tuple[str, ast.expr]] = []
@@ -451,10 +465,10 @@ class Compiler:
             if isinstance(item, ast.Pass):
                 continue
             if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
-                attrs.append((item.targets[0].id, item.value))
+                attrs.append((self._mangle_class_private(node.name, item.targets[0].id), item.value))
                 continue
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
-                attrs.append((item.target.id, item.value))
+                attrs.append((self._mangle_class_private(node.name, item.target.id), item.value))
                 continue
             if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 raise CompileError("class bodies currently support methods and simple class attributes")
@@ -467,19 +481,21 @@ class Compiler:
                     defaults[param] = expr
             kw_defaults = {a.arg: e for a, e in zip(item.args.kwonlyargs, item.args.kw_defaults) if e is not None}
             kind = "instance"
+            raw_method_name = item.name
+            method_name = self._mangle_class_private(node.name, raw_method_name)
             # Python applies these descriptors implicitly during class creation.
-            if item.name == "__new__" and not item.decorator_list:
+            if raw_method_name == "__new__" and not item.decorator_list:
                 kind = "static"
-            elif item.name == "__init_subclass__" and not item.decorator_list:
+            elif raw_method_name == "__init_subclass__" and not item.decorator_list:
                 kind = "class"
             elif len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
                 kind = item.decorator_list[0].id.removesuffix("method")
             if kind != "static" and not positional:
-                raise CompileError(f"method {item.name} must declare an implicit receiver argument")
+                raise CompileError(f"method {raw_method_name} must declare an implicit receiver argument")
             java_name = f"__py_method_{self._method_counter}"
             self._method_counter += 1
             method = MethodInfo(
-                item.name, java_name, posonly, poskw, [a.arg for a in item.args.kwonlyargs],
+                method_name, java_name, posonly, poskw, [a.arg for a in item.args.kwonlyargs],
                 item.args.vararg.arg if item.args.vararg else None,
                 item.args.kwarg.arg if item.args.kwarg else None,
                 defaults, kw_defaults, kind, item.lineno, isinstance(item, ast.AsyncFunctionDef)
@@ -487,15 +503,15 @@ class Compiler:
             self.class_method_infos[id(item)] = method
 
             if not item.decorator_list or kind in {"class", "static"}:
-                methods[f"{item.name}#{len(methods)}"] = method
+                methods[f"{method_name}#{len(methods)}"] = method
                 continue
             if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id == "property":
-                properties[item.name] = PropertyInfo(item.name, method)
+                properties[method_name] = PropertyInfo(method_name, method)
                 continue
             if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Attribute):
                 dec = item.decorator_list[0]
                 if dec.attr == "setter" and isinstance(dec.value, ast.Name):
-                    prop_name = dec.value.id
+                    prop_name = self._mangle_class_private(node.name, dec.value.id)
                     prop = properties.get(prop_name)
                     if prop is None:
                         raise CompileError(f"property setter {prop_name!r} appears before its property getter")
@@ -1413,7 +1429,7 @@ class Compiler:
             return
         if isinstance(target, ast.Attribute):
             tmp = scope.temp(); b.astore(tmp)
-            self._expr(target.value, b, scope); b.ldc_string(target.attr); b.aload(tmp)
+            self._expr(target.value, b, scope); b.ldc_string(self._class_attr_name(target.attr)); b.aload(tmp)
             b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
             return
         if isinstance(target, ast.Subscript):
@@ -1882,7 +1898,7 @@ class Compiler:
                 self._expr(value, b, scope)
                 b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
             case ast.Assign(targets=[ast.Attribute(value=obj, attr=attr)], value=value):
-                self._expr(obj, b, scope); b.ldc_string(attr); self._expr(value, b, scope)
+                self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr)); self._expr(value, b, scope)
                 b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
             case ast.FunctionDef() | ast.AsyncFunctionDef():
                 self._emit_function_definition(node, b, scope)
@@ -2020,9 +2036,9 @@ class Compiler:
             case ast.AugAssign(target=ast.Attribute(value=obj, attr=attr), op=op, value=value):
                 obj_slot, result_slot = scope.temp(), scope.temp()
                 self._expr(obj, b, scope); b.astore(obj_slot)
-                b.aload(obj_slot); b.ldc_string(attr); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
+                b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
                 self._expr(value, b, scope); self._binary_runtime(op, b); b.astore(result_slot)
-                b.aload(obj_slot); b.ldc_string(attr); b.aload(result_slot)
+                b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.aload(result_slot)
                 b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
             case ast.AugAssign(target=ast.Subscript(value=obj, slice=key), op=op, value=value):
                 obj_slot, key_slot, result_slot = scope.temp(), scope.temp(), scope.temp()
@@ -2105,7 +2121,7 @@ class Compiler:
                         self._expr(target.value, b, scope); self._expr(target.slice, b, scope)
                         b.invokestatic(RUNTIME, "delitem", f"({OBJ}{OBJ})V")
                     elif isinstance(target, ast.Attribute):
-                        self._expr(target.value, b, scope); b.ldc_string(target.attr)
+                        self._expr(target.value, b, scope); b.ldc_string(self._class_attr_name(target.attr))
                         b.invokestatic(RUNTIME, "delattr", f"({OBJ}{OBJ})V")
                     else:
                         raise CompileError("del currently supports attributes and subscripts")
@@ -2206,7 +2222,7 @@ class Compiler:
                 self._expr(value, b, scope); self._expr(key, b, scope)
                 b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
             case ast.Attribute(value=value, attr=attr):
-                self._expr(value, b, scope); b.ldc_string(attr)
+                self._expr(value, b, scope); b.ldc_string(self._class_attr_name(attr))
                 b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
             case ast.Slice(lower=lower, upper=upper, step=step):
                 (b.aconst_null() if lower is None else self._expr(lower, b, scope))
@@ -2330,7 +2346,7 @@ class Compiler:
                 self._expr(sub, b, scope); self._expr(cls, b, scope); b.invokestatic(RUNTIME, "isSubclass", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Attribute(value=obj, attr=attr), args=args, keywords=[]):
                 if len(args) > 4: raise CompileError("dynamic method calls currently support up to 4 arguments")
-                self._expr(obj, b, scope); b.ldc_string(attr)
+                self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr))
                 for arg in args: self._expr(arg, b, scope)
                 b.invokestatic(RUNTIME, f"callMethod{len(args)}", f"({OBJ * (2 + len(args))}){OBJ}")
             case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in self.classes:
