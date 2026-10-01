@@ -493,3 +493,20 @@ sequence of characters.
 The strict focused differential corpus passes 95/95 executable cases with
 0 unsupported and 0 failed.
 
+## 0.25 star imports and module export analysis
+
+Version 0.25 adds local-module `from module import *` lowering without introducing a
+second dynamic namespace model. The multi-module compiler statically derives each local
+module's export set: a literal `__all__` is authoritative, otherwise public top-level
+bindings are exported. Public names propagated by another star import are included
+recursively.
+
+Star-imported names are pre-registered as ordinary module globals before function
+bytecode is emitted, so functions and closures can reference them through the same
+generated static-field path used by explicit imports. Relative package star imports and
+package `__init__.py` re-exports are supported. Dynamic/non-literal `__all__` remains
+an explicit compile-time limitation rather than silently using incorrect exports.
+
+The strict focused differential corpus passes 100/100 executable cases with
+0 unsupported and 0 failed.
+
