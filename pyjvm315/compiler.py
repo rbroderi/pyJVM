@@ -506,7 +506,7 @@ class Compiler:
 
                     suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
                         self._contains_await(item)
-                        or any(isinstance(x, ast.AsyncFor) for x in ast.walk(item))
+                        or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(item))
                         or self._contains_async_comprehension(item)
                     )
                     if suspendable_async:
@@ -580,7 +580,11 @@ class Compiler:
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         if info.is_async_generator:
-            lowered = self._lower_async_function(node) if (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))) else node
+            lowered = self._lower_async_function(node) if (
+                self._contains_await(node)
+                or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(node))
+                or self._contains_async_comprehension(node)
+            ) else node
             if lowered is not node:
                 lowered_locals,_,_=self._function_locals(lowered)
                 info.local_names.update(lowered_locals)
@@ -589,7 +593,7 @@ class Compiler:
             return
         if info.is_async and (
             self._contains_await(node)
-            or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))
+            or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(node))
             or self._contains_async_comprehension(node)
         ):
             lowered = self._lower_async_function(node)
@@ -653,6 +657,16 @@ class Compiler:
                 name=f"$async_{prefix}_{self.counter}"
                 self.counter += 1
                 return name
+            def visit_stmts(self, stmts):
+                out=[]
+                for st in stmts:
+                    value=self.visit(st)
+                    if value is None: continue
+                    if isinstance(value,list): out.extend(value)
+                    else: out.append(value)
+                return out
+            def awaited(self, expr, source):
+                return self.visit_Await(ast.copy_location(ast.Await(value=expr),source))
             def visit_FunctionDef(self, n):
                 if n is self.root:
                     return self.generic_visit(n)
@@ -706,12 +720,84 @@ class Compiler:
                     orelse=[],
                     finalbody=[],
                 )
-                body=[try_next] + [self.visit(st) for st in n.body]
+                body=[try_next] + self.visit_stmts(n.body)
                 loop=ast.While(test=ast.Constant(True),body=body,orelse=[])
                 tail=[]
                 if n.orelse:
-                    tail=[ast.If(test=exhausted_load,body=[self.visit(st) for st in n.orelse],orelse=[])]
+                    tail=[ast.If(test=exhausted_load,body=self.visit_stmts(n.orelse),orelse=[])]
                 out=[setup_iter,setup_exhausted,loop,*tail]
+                for st in out: ast.copy_location(st,n)
+                return out
+            def visit_AsyncWith(self, n: ast.AsyncWith):
+                original_body=self.visit_stmts(n.body)
+
+                def lower_items(items, body):
+                    if not items:
+                        return body
+                    item=items[0]
+                    mgr=self.temp("with_mgr")
+                    exc=self.temp("with_exc")
+                    caught=self.temp("with_caught")
+                    mgr_store=ast.Name(id=mgr,ctx=ast.Store())
+                    mgr_load=ast.Name(id=mgr,ctx=ast.Load())
+                    exc_store=ast.Name(id=exc,ctx=ast.Store())
+                    exc_load=ast.Name(id=exc,ctx=ast.Load())
+                    caught_store=ast.Name(id=caught,ctx=ast.Store())
+                    caught_load=ast.Name(id=caught,ctx=ast.Load())
+
+                    setup_mgr=ast.Assign(targets=[mgr_store],value=self.visit(item.context_expr))
+                    setup_exc=ast.Assign(targets=[exc_store],value=ast.Constant(None))
+                    enter_call=ast.Call(
+                        func=ast.Attribute(value=mgr_load,attr="__aenter__",ctx=ast.Load()),
+                        args=[],keywords=[],
+                    )
+                    enter_value=self.awaited(enter_call,n)
+
+                    inner=lower_items(items[1:],body)
+                    protected=[]
+                    if item.optional_vars is None:
+                        protected.append(ast.Expr(value=enter_value))
+                    else:
+                        protected.append(ast.Assign(targets=[self.visit(item.optional_vars)],value=enter_value))
+                    protected.extend(inner)
+
+                    exit_exc_call=ast.Call(
+                        func=ast.Attribute(value=ast.Name(id=mgr,ctx=ast.Load()),attr="__aexit__",ctx=ast.Load()),
+                        args=[
+                            ast.Call(func=ast.Name(id="type",ctx=ast.Load()),args=[caught_load],keywords=[]),
+                            caught_load,
+                            ast.Constant(None),
+                        ],
+                        keywords=[],
+                    )
+                    suppress=self.awaited(exit_exc_call,n)
+                    handler_body=[
+                        ast.Assign(targets=[ast.Name(id=exc,ctx=ast.Store())],value=caught_load),
+                        ast.If(test=ast.UnaryOp(op=ast.Not(),operand=suppress),body=[ast.Raise(exc=None,cause=None)],orelse=[]),
+                    ]
+                    handler=ast.ExceptHandler(
+                        type=ast.Name(id="BaseException",ctx=ast.Load()),
+                        name=caught,
+                        body=handler_body,
+                    )
+
+                    exit_normal_call=ast.Call(
+                        func=ast.Attribute(value=ast.Name(id=mgr,ctx=ast.Load()),attr="__aexit__",ctx=ast.Load()),
+                        args=[ast.Constant(None),ast.Constant(None),ast.Constant(None)],
+                        keywords=[],
+                    )
+                    normal_exit=ast.Expr(value=self.awaited(exit_normal_call,n))
+                    finalbody=[
+                        ast.If(
+                            test=ast.Compare(left=ast.Name(id=exc,ctx=ast.Load()),ops=[ast.Is()],comparators=[ast.Constant(None)]),
+                            body=[normal_exit],
+                            orelse=[],
+                        )
+                    ]
+                    wrapped=ast.Try(body=protected,handlers=[handler],orelse=[],finalbody=finalbody)
+                    return [setup_mgr,setup_exc,wrapped]
+
+                out=lower_items(list(n.items),original_body)
                 for st in out: ast.copy_location(st,n)
                 return out
 
