@@ -1,20 +1,19 @@
 {
-  "version": "0.19.0",
+  "version": "0.20.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 71, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 77, "unsupported": 0, "failed": 0},
   "new_features": [
-    "async list comprehensions",
-    "async set comprehensions",
-    "async dict comprehensions",
-    "lexical capture in async comprehension helpers",
-    "suspending expressions inside async comprehension elements",
-    "dynamic bound-method dispatch across suspension"
+    "fully suspendable async-with __aenter__ and __aexit__",
+    "async-with exception suppression after suspended exit",
+    "persistent return/break/continue/exception cleanup continuation",
+    "ordered mixed suspending and non-suspending cleanup nesting",
+    "return and loop control through yielding generator finally suites"
   ],
   "next_focus": [
-    "fully suspendable async-with __aenter__/__aexit__",
-    "persistent cleanup continuation through return/break/continue",
     "custom metaclass namespace/call protocol",
-    "larger CPython 3.15 Lib/test slices"
+    "__slots__ and richer descriptor/class creation semantics",
+    "star imports and stronger import hooks",
+    "larger curated CPython 3.15 Lib/test slices"
   ]
 }
