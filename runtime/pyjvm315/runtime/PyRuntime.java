@@ -614,6 +614,7 @@ public final class PyRuntime {
     public static void setitem(Object value, Object key, Object item) {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__setitem__");if(m!=null){invoke(instance,m,new Object[]{key,item});return;}}
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
+        if(key instanceof PySlice sl && value instanceof PyByteArray array){byteArraySetSlice(array,sl,item);return;}
         int i = asIndex(key);
         if(value instanceof PyByteArray array){array.setUnsigned(normalizeIndex(i,array.byteSize()),byteValue(item));return;}
         if(value instanceof PyMemoryView view){view.setUnsigned(normalizeIndex(i,view.byteSize()),byteValue(item));return;}
@@ -997,6 +998,142 @@ public final class PyRuntime {
         }
         return out.append('\'').toString();
     }
+    private static byte[] requireBytesLike(Object value){
+        if(value instanceof PyByteSequence seq) return seq.toByteArray();
+        throw new PyException("TypeError","a bytes-like object is required");
+    }
+    private static Object binaryResult(PyByteSequence receiver,byte[] raw){
+        return receiver instanceof PyByteArray ? new PyByteArray(raw) : new PyBytes(raw);
+    }
+    private static int clampSliceBound(Object bound,int size,int fallback){
+        if(bound==null)return fallback;
+        int i=asIndex(bound); if(i<0)i+=size;
+        return Math.max(0,Math.min(size,i));
+    }
+    private static int binaryIndexOf(byte[] hay,byte[] needle,int start,int end){
+        start=Math.max(0,Math.min(hay.length,start)); end=Math.max(start,Math.min(hay.length,end));
+        if(needle.length==0)return start;
+        outer: for(int i=start;i+needle.length<=end;i++){
+            for(int j=0;j<needle.length;j++)if(hay[i+j]!=needle[j])continue outer;
+            return i;
+        }
+        return -1;
+    }
+    private static Object binaryFind(PyByteSequence seq,Object[] args){
+        if(args.length<1||args.length>3)throw new PyException("TypeError","find() takes from 1 to 3 arguments");
+        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
+        int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
+        return (long)binaryIndexOf(hay,needle,start,end);
+    }
+    private static Object binaryCount(PyByteSequence seq,Object[] args){
+        if(args.length<1||args.length>3)throw new PyException("TypeError","count() takes from 1 to 3 arguments");
+        byte[] hay=seq.toByteArray();
+        byte[] needle;
+        if(isIntLike(args[0])) needle=new byte[]{(byte)byteValue(args[0])};
+        else needle=requireBytesLike(args[0]);
+        int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
+        int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
+        if(needle.length==0)return (long)Math.max(0,end-start+1);
+        long n=0; int pos=start;
+        while(pos<=end-needle.length){int found=binaryIndexOf(hay,needle,pos,end);if(found<0)break;n++;pos=found+needle.length;}
+        return n;
+    }
+    private static Object binaryStartsEnds(PyByteSequence seq,Object[] args,boolean starts){
+        if(args.length<1||args.length>3)throw new PyException("TypeError",(starts?"startswith":"endswith")+"() takes from 1 to 3 arguments");
+        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
+        int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
+        if(end<start||needle.length>end-start)return false;
+        int pos=starts?start:end-needle.length;
+        for(int i=0;i<needle.length;i++)if(hay[pos+i]!=needle[i])return false;
+        return true;
+    }
+    private static Object binaryReplace(PyByteSequence seq,Object[] args){
+        if(args.length<2||args.length>3)throw new PyException("TypeError","replace() takes 2 or 3 arguments");
+        byte[] src=seq.toByteArray(), old=requireBytesLike(args[0]), repl=requireBytesLike(args[1]);
+        int limit=args.length==3?asIndex(args[2]):-1;
+        if(limit==0)return binaryResult(seq,src);
+        ArrayList<Byte> out=new ArrayList<>();
+        int pos=0,replaced=0;
+        if(old.length==0){
+            int slots=src.length+1;
+            for(int i=0;i<slots;i++){
+                if(limit<0||replaced<limit){for(byte b:repl)out.add(b);replaced++;}
+                if(i<src.length)out.add(src[i]);
+            }
+        } else {
+            while(pos<src.length){
+                int found=(limit<0||replaced<limit)?binaryIndexOf(src,old,pos,src.length):-1;
+                if(found<0){while(pos<src.length)out.add(src[pos++]);break;}
+                while(pos<found)out.add(src[pos++]);
+                for(byte b:repl)out.add(b);pos+=old.length;replaced++;
+            }
+        }
+        byte[] raw=new byte[out.size()];for(int i=0;i<out.size();i++)raw[i]=out.get(i);
+        return binaryResult(seq,raw);
+    }
+    private static boolean asciiWhitespace(int v){return v==9||v==10||v==11||v==12||v==13||v==32;}
+    private static Object binarySplit(PyByteSequence seq,Object[] args){
+        if(args.length>2)throw new PyException("TypeError","split() takes at most 2 arguments");
+        byte[] src=seq.toByteArray();
+        Object sepObj=args.length>=1?args[0]:null;
+        int maxsplit=args.length==2?asIndex(args[1]):-1;
+        ArrayList<Object> out=new ArrayList<>();
+        if(sepObj==null){
+            int i=0,splits=0;
+            while(i<src.length){
+                while(i<src.length&&asciiWhitespace(src[i]&0xff))i++;
+                if(i>=src.length)break;
+                int start=i;
+                if(maxsplit>=0&&splits>=maxsplit){i=src.length;}
+                else {while(i<src.length&&!asciiWhitespace(src[i]&0xff))i++;splits++;}
+                out.add(binaryResult(seq,Arrays.copyOfRange(src,start,i)));
+            }
+            return out;
+        }
+        byte[] sep=requireBytesLike(sepObj);
+        if(sep.length==0)throw new PyException("ValueError","empty separator");
+        int pos=0,splits=0;
+        while(maxsplit<0||splits<maxsplit){
+            int found=binaryIndexOf(src,sep,pos,src.length);if(found<0)break;
+            out.add(binaryResult(seq,Arrays.copyOfRange(src,pos,found)));
+            pos=found+sep.length;splits++;
+        }
+        out.add(binaryResult(seq,Arrays.copyOfRange(src,pos,src.length)));
+        return out;
+    }
+    private static Object binaryJoin(PyByteSequence sep,Object iterableObj){
+        ArrayList<byte[]> parts=new ArrayList<>();int total=0;
+        for(Object value:iterable(iterableObj)){byte[] raw=requireBytesLike(value);parts.add(raw);total=Math.addExact(total,raw.length);}
+        byte[] delimiter=sep.toByteArray();
+        if(parts.size()>1)total=Math.addExact(total,Math.multiplyExact(delimiter.length,parts.size()-1));
+        byte[] out=new byte[total];int pos=0;
+        for(int i=0;i<parts.size();i++){
+            if(i>0){System.arraycopy(delimiter,0,out,pos,delimiter.length);pos+=delimiter.length;}
+            byte[] part=parts.get(i);System.arraycopy(part,0,out,pos,part.length);pos+=part.length;
+        }
+        return binaryResult(sep,out);
+    }
+    private static void byteArraySetSlice(PyByteArray array,PySlice sl,Object replacementObj){
+        byte[] replacement=bytesFromObject(replacementObj);
+        int size=array.byteSize();
+        int step=sl.step==null?1:asIndex(sl.step);
+        if(step==0)throw new PyException("ValueError","slice step cannot be zero");
+        int start=sl.start==null?(step>0?0:size-1):normalizeSliceIndex(asIndex(sl.start),size,step>0);
+        int stop=sl.stop==null?(step>0?size:-1):normalizeSliceStop(asIndex(sl.stop),size,step>0);
+        ArrayList<Integer> indexes=new ArrayList<>();
+        for(int i=start;step>0?i<stop:i>stop;i+=step)if(i>=0&&i<size)indexes.add(i);
+        if(step!=1){
+            if(indexes.size()!=replacement.length)throw new PyException("ValueError","attempt to assign bytes of size "+replacement.length+" to extended slice of size "+indexes.size());
+            for(int i=0;i<indexes.size();i++)array.data.set(indexes.get(i),replacement[i]);
+            return;
+        }
+        int a=Math.max(0,Math.min(size,start)), z=Math.max(a,Math.min(size,stop));
+        for(int i=z-1;i>=a;i--)array.data.remove(i);
+        for(int i=0;i<replacement.length;i++)array.data.add(a+i,replacement[i]);
+    }
+
     private static Object binarySlice(PyByteSequence seq,PySlice sl,boolean asView){
         int size=seq.byteSize();
         int step=sl.step==null?1:asIndex(sl.step);
@@ -2213,6 +2350,13 @@ public final class PyRuntime {
                     yield new String(bytes.data,Charset.forName(enc));
                 }
                 case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.data); }
+                case "find" -> binaryFind(bytes,args);
+                case "count" -> binaryCount(bytes,args);
+                case "startswith" -> binaryStartsEnds(bytes,args,true);
+                case "endswith" -> binaryStartsEnds(bytes,args,false);
+                case "replace" -> binaryReplace(bytes,args);
+                case "split" -> binarySplit(bytes,args);
+                case "join" -> { requireArgs(name,args,1); yield binaryJoin(bytes,args[0]); }
                 default -> throw new PyException("AttributeError","'bytes' object has no attribute '"+name+"'");
             };
         }
@@ -2226,6 +2370,13 @@ public final class PyRuntime {
                     yield new String(bytes.toByteArray(),Charset.forName(enc));
                 }
                 case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.toByteArray()); }
+                case "find" -> binaryFind(bytes,args);
+                case "count" -> binaryCount(bytes,args);
+                case "startswith" -> binaryStartsEnds(bytes,args,true);
+                case "endswith" -> binaryStartsEnds(bytes,args,false);
+                case "replace" -> binaryReplace(bytes,args);
+                case "split" -> binarySplit(bytes,args);
+                case "join" -> { requireArgs(name,args,1); yield binaryJoin(bytes,args[0]); }
                 default -> throw new PyException("AttributeError","'bytearray' object has no attribute '"+name+"'");
             };
         }
