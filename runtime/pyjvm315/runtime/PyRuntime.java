@@ -2398,11 +2398,6 @@ public final class PyRuntime {
                 case "rindex" -> binarySearch(bytes,args,true,true);
                 case "partition" -> binaryPartition(bytes,args,false);
                 case "rpartition" -> binaryPartition(bytes,args,true);
-                case "rfind" -> binarySearch(bytes,args,true,false);
-                case "index" -> binarySearch(bytes,args,false,true);
-                case "rindex" -> binarySearch(bytes,args,true,true);
-                case "partition" -> binaryPartition(bytes,args,false);
-                case "rpartition" -> binaryPartition(bytes,args,true);
                 case "count" -> binaryCount(bytes,args);
                 case "startswith" -> binaryStartsEnds(bytes,args,true);
                 case "endswith" -> binaryStartsEnds(bytes,args,false);
@@ -2444,6 +2439,11 @@ public final class PyRuntime {
                 }
                 case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.toByteArray()); }
                 case "find" -> binaryFind(bytes,args);
+                case "rfind" -> binarySearch(bytes,args,true,false);
+                case "index" -> binarySearch(bytes,args,false,true);
+                case "rindex" -> binarySearch(bytes,args,true,true);
+                case "partition" -> binaryPartition(bytes,args,false);
+                case "rpartition" -> binaryPartition(bytes,args,true);
                 case "count" -> binaryCount(bytes,args);
                 case "startswith" -> binaryStartsEnds(bytes,args,true);
                 case "endswith" -> binaryStartsEnds(bytes,args,false);
