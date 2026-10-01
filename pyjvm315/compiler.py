@@ -497,18 +497,48 @@ class Compiler:
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     method = self.class_method_infos[id(item)]
-                    b = CodeBuilder(self.cf.cp)
-                    scope = Scope(method.bound_args, start_slot=0)
                     self.current_method_self = method.positional[0] if method.positional else None
                     saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
                     self.current_frame_name,self.current_frame_firstlineno=item.name,item.lineno
-                    self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
-                    for stmt in item.body:
-                        self._stmt(stmt, b, scope, in_function=True)
+
+                    suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
+                        self._contains_await(item) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(item))
+                    )
+                    if suspendable_async:
+                        lowered=self._lower_async_function(item)
+                        local_names,_,nonlocal_names=self._function_locals(lowered)
+                        local_names.update(method.bound_args)
+                        resume_info=FunctionInfo(
+                            item.name,method.java_name,
+                            method.posonly,method.poskw,method.kwonly,
+                            method.vararg,method.kwarg,method.defaults,method.kw_defaults,
+                            None,False,True,local_names,set(),nonlocal_names,False,True,False,
+                        )
+                        creator=CodeBuilder(self.cf.cp)
+                        creator_scope=Scope(method.bound_args,start_slot=0)
+                        creator.aconst_null(); creator.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
+                        env_slot=creator_scope.temp(); creator.astore(env_slot)
+                        for arg_name in method.bound_args:
+                            creator.aload(env_slot); creator.ldc_string(arg_name); creator.aload(creator_scope.get(arg_name))
+                            creator.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
+                        resume_name=method.java_name+"$resume"
+                        creator.ldc_string(self.class_name.replace('/','.')); creator.ldc_string(resume_name); creator.aload(env_slot)
+                        creator.ldc_string(item.name); creator.ldc_string(self.filename); self._emit_int(item.lineno,creator)
+                        creator.invokestatic(RUNTIME,"makeSuspendableCoroutineEx",f"({OBJ*6}){OBJ}"); creator.areturn()
+                        creator_code=creator.finish()
+                        self.cf.add_method(Method(method.java_name,method.descriptor,creator_code,max_locals=max(8,creator_scope.next_slot+2),exception_table=creator.exception_table))
+                        self._compile_generator_resume(lowered,resume_info,resume_name)
+                    else:
+                        b = CodeBuilder(self.cf.cp)
+                        scope = Scope(method.bound_args, start_slot=0)
+                        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+                        for stmt in item.body:
+                            self._stmt(stmt, b, scope, in_function=True)
+                        b.aconst_null(); b.areturn()
+                        code = b.finish()
+                        self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
+
                     self.current_frame_name,self.current_frame_firstlineno=saved_frame
-                    b.aconst_null(); b.areturn()
-                    code = b.finish()
-                    self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
         finally:
             self.current_class, self.current_method_self = old_class, old_self
 
