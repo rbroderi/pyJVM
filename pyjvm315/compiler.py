@@ -1270,8 +1270,7 @@ class Compiler:
         b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
 
     def _emit_generator_expression(self, node: ast.GeneratorExp, b: CodeBuilder, scope: Scope) -> None:
-        if any(gen.is_async for gen in node.generators):
-            raise CompileError("async generator expressions are not implemented yet")
+        is_async = any(gen.is_async for gen in node.generators)
         # Python evaluates the outermost iterable expression immediately when the
         # generator expression is created. The actual iteration remains lazy.
         outer_name=f"$genexpr_outer_{self._method_counter}"
@@ -1280,8 +1279,6 @@ class Compiler:
         for gen in node.generators: target_names.update(self._target_names(gen.target))
         refs={n.id for n in ast.walk(node) if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Load)}
         free_names={name for name in refs if name not in target_names and scope.has(name) and name not in scope.global_decl}
-        info=FunctionInfo("<genexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
-                          target_names,free_names,set(),True,False)
 
         body: list[ast.stmt]=[ast.Expr(value=ast.Yield(value=node.elt))]
         generators=list(node.generators)
@@ -1290,12 +1287,38 @@ class Compiler:
             inner=body
             for cond in reversed(gen.ifs): inner=[ast.If(test=cond,body=inner,orelse=[])]
             iterable=ast.Name(id=outer_name,ctx=ast.Load()) if index==0 else gen.iter
-            body=[ast.For(target=gen.target,iter=iterable,body=inner,orelse=[])]
-        synthetic=ast.FunctionDef(name="<genexpr>",args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
-                                  body=body,decorator_list=[])
-        self.function_infos[id(synthetic)]=info
-        resume_name=java_name+"$resume"
-        self._compile_generator_resume(synthetic,info,resume_name)
+            if gen.is_async:
+                body=[ast.AsyncFor(target=gen.target,iter=iterable,body=inner,orelse=[])]
+            else:
+                body=[ast.For(target=gen.target,iter=iterable,body=inner,orelse=[])]
+
+        if is_async:
+            synthetic_async=ast.AsyncFunctionDef(
+                name="<asyncgenexpr>",
+                args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
+                body=body,decorator_list=[],
+            )
+            synthetic_async=ast.fix_missing_locations(synthetic_async)
+            lowered=self._lower_async_function(synthetic_async)
+            local_names,_,_=self._function_locals(lowered)
+            local_names.update(target_names)
+            info=FunctionInfo("<asyncgenexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
+                              local_names,free_names,set(),False,True,True)
+            self.function_infos[id(lowered)]=info
+            resume_name=java_name+"$resume"
+            self._compile_generator_resume(lowered,info,resume_name,async_generator_mode=True)
+        else:
+            info=FunctionInfo("<genexpr>",java_name,[],[],[],None,None,{}, {},None,False,True,
+                              target_names,free_names,set(),True,False,False)
+            synthetic=ast.FunctionDef(
+                name="<genexpr>",
+                args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
+                body=body,decorator_list=[],
+            )
+            synthetic=ast.fix_missing_locations(synthetic)
+            self.function_infos[id(synthetic)]=info
+            resume_name=java_name+"$resume"
+            self._compile_generator_resume(synthetic,info,resume_name)
 
         if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
         else: b.aconst_null()
@@ -1306,7 +1329,11 @@ class Compiler:
         b.aload(env_slot); b.ldc_string(outer_name); b.aload(value_slot)
         b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
         b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
-        b.invokestatic(RUNTIME,"makeGenerator",f"({OBJ}{OBJ}{OBJ}){OBJ}")
+        if is_async:
+            b.ldc_string("<asyncgenexpr>"); b.ldc_string(self.filename); self._emit_int(getattr(node,"lineno",1),b)
+            b.invokestatic(RUNTIME,"makeAsyncGeneratorEx",f"({OBJ*6}){OBJ}")
+        else:
+            b.invokestatic(RUNTIME,"makeGenerator",f"({OBJ}{OBJ}{OBJ}){OBJ}")
 
     def _emit_comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp, b: CodeBuilder, scope: Scope) -> None:
         if any(gen.is_async for gen in node.generators):
