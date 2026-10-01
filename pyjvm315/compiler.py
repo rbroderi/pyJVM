@@ -505,7 +505,9 @@ class Compiler:
                     self.current_frame_name,self.current_frame_firstlineno=item.name,item.lineno
 
                     suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
-                        self._contains_await(item) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(item))
+                        self._contains_await(item)
+                        or any(isinstance(x, ast.AsyncFor) for x in ast.walk(item))
+                        or self._contains_async_comprehension(item)
                     )
                     if suspendable_async:
                         lowered=self._lower_async_function(item)
@@ -585,7 +587,11 @@ class Compiler:
             self._compile_generator_function(lowered, info, as_async_generator=True)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
-        if info.is_async and (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))):
+        if info.is_async and (
+            self._contains_await(node)
+            or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))
+            or self._contains_async_comprehension(node)
+        ):
             lowered = self._lower_async_function(node)
             lowered_locals,_,_=self._function_locals(lowered)
             info.local_names.update(lowered_locals)
@@ -612,6 +618,13 @@ class Compiler:
         self.cf.add_method(Method(info.java_name, info.descriptor, code,
             max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
         self.current_frame_name,self.current_frame_firstlineno=saved_frame
+
+    @staticmethod
+    def _contains_async_comprehension(node: ast.AST) -> bool:
+        return any(
+            isinstance(x,(ast.ListComp,ast.SetComp,ast.DictComp)) and any(gen.is_async for gen in x.generators)
+            for x in ast.walk(node)
+        )
 
     @staticmethod
     def _contains_await(node: ast.AST) -> bool:
@@ -898,6 +911,38 @@ class Compiler:
                         self._gen_env_load(container,b,scope); self._gen_env_load(key_name,b,scope); b.aload(value_slot)
                         b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
                 self._gen_env_load(container,b,scope); return
+            if isinstance(expr, ast.Call):
+                if self._contains_yield(expr.func):
+                    gen_value(expr.func)
+                else:
+                    self._expr(expr.func,b,scope)
+                callable_name=persist_gen_value("callable")
+
+                b.invokestatic(RUNTIME,"list0",f"(){OBJ}")
+                args_name=persist_gen_value("call_args")
+                for arg in expr.args:
+                    target=arg.value if isinstance(arg,ast.Starred) else arg
+                    gen_value(target); value_slot=scope.temp(); b.astore(value_slot)
+                    self._gen_env_load(args_name,b,scope); b.aload(value_slot)
+                    method="listExtend" if isinstance(arg,ast.Starred) else "listAppend"
+                    b.invokestatic(RUNTIME,method,f"({OBJ}{OBJ})V")
+
+                b.invokestatic(RUNTIME,"dict0",f"(){OBJ}")
+                kwargs_name=persist_gen_value("call_kwargs")
+                for kw in expr.keywords:
+                    gen_value(kw.value); value_slot=scope.temp(); b.astore(value_slot)
+                    self._gen_env_load(kwargs_name,b,scope)
+                    if kw.arg is None:
+                        b.aload(value_slot); b.invokestatic(RUNTIME,"dictMergeUnique",f"({OBJ}{OBJ})V")
+                    else:
+                        b.ldc_string(kw.arg); b.aload(value_slot)
+                        b.invokestatic(RUNTIME,"dictPutUnique",f"({OBJ}{OBJ}{OBJ})V")
+
+                self._gen_env_load(callable_name,b,scope)
+                self._gen_env_load(args_name,b,scope)
+                self._gen_env_load(kwargs_name,b,scope)
+                b.invokestatic(RUNTIME,"callFunction",f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                return
             if isinstance(expr, ast.IfExp):
                 raise CompileError("suspension inside conditional expressions is not implemented yet")
             raise CompileError(f"suspension inside {type(expr).__name__} is not implemented yet")
