@@ -612,7 +612,11 @@ class Compiler:
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
         b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
-        b.ldc_string(self.package_name); self._store_name("__package__", b, scope)
+        if self.module_name == "__main__":
+            b.aconst_null()
+        else:
+            b.ldc_string(self.package_name)
+        self._store_name("__package__", b, scope)
         b.ldc_string(self.filename); self._store_name("__file__", b, scope)
         if self.module_name == "__main__":
             b.aconst_null(); self._store_name("__loader__", b, scope)
