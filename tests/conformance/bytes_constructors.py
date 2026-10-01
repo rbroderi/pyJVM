@@ -1,0 +1,7 @@
+print(bytes())
+print(bytes(3))
+print(bytes([65, 66, 255]))
+print(bytes("hé", "utf-8"))
+print("hé".encode("utf-8"))
+print(bytes("hé", "utf-8").decode("utf-8"))
+print(bytes([0, 15, 255]).hex())
