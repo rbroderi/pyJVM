@@ -545,12 +545,17 @@ class Compiler:
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         if info.is_async_generator:
-            lowered = self._lower_async_function(node) if self._contains_await(node) else node
+            lowered = self._lower_async_function(node) if (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))) else node
+            if lowered is not node:
+                lowered_locals,_,_=self._function_locals(lowered)
+                info.local_names.update(lowered_locals)
             self._compile_generator_function(lowered, info, as_async_generator=True)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
-        if info.is_async and self._contains_await(node):
+        if info.is_async and (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))):
             lowered = self._lower_async_function(node)
+            lowered_locals,_,_=self._function_locals(lowered)
+            info.local_names.update(lowered_locals)
             self._compile_generator_function(lowered, info, as_coroutine=True)
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
@@ -596,6 +601,11 @@ class Compiler:
         class Lower(ast.NodeTransformer):
             def __init__(self, root):
                 self.root=root
+                self.counter=0
+            def temp(self, prefix: str) -> str:
+                name=f"$async_{prefix}_{self.counter}"
+                self.counter += 1
+                return name
             def visit_FunctionDef(self, n):
                 if n is self.root:
                     return self.generic_visit(n)
@@ -610,8 +620,40 @@ class Compiler:
                 awaited=self.visit(n.value)
                 call=ast.Call(func=ast.Name(id="__py_await_iter_internal",ctx=ast.Load()),args=[awaited],keywords=[])
                 return ast.copy_location(ast.YieldFrom(value=call),n)
+            def visit_AsyncFor(self, n: ast.AsyncFor):
+                iterator_name=self.temp("iter")
+                exhausted_name=self.temp("exhausted")
+                iterator_target=ast.Name(id=iterator_name,ctx=ast.Store())
+                iterator_load=ast.Name(id=iterator_name,ctx=ast.Load())
+                exhausted_target=ast.Name(id=exhausted_name,ctx=ast.Store())
+                exhausted_load=ast.Name(id=exhausted_name,ctx=ast.Load())
+                setup_iter=ast.Assign(
+                    targets=[iterator_target],
+                    value=ast.Call(func=ast.Name(id="aiter",ctx=ast.Load()),args=[self.visit(n.iter)],keywords=[]),
+                )
+                setup_exhausted=ast.Assign(targets=[exhausted_target],value=ast.Constant(False))
+                next_value=ast.Await(value=ast.Call(func=ast.Name(id="anext",ctx=ast.Load()),args=[iterator_load],keywords=[]))
+                assign_next=ast.Assign(targets=[self.visit(n.target)],value=self.visit(next_value))
+                except_body=[
+                    ast.Assign(targets=[ast.Name(id=exhausted_name,ctx=ast.Store())],value=ast.Constant(True)),
+                    ast.Break(),
+                ]
+                try_next=ast.Try(
+                    body=[assign_next],
+                    handlers=[ast.ExceptHandler(type=ast.Name(id="StopAsyncIteration",ctx=ast.Load()),name=None,body=except_body)],
+                    orelse=[],
+                    finalbody=[],
+                )
+                body=[try_next] + [self.visit(st) for st in n.body]
+                loop=ast.While(test=ast.Constant(True),body=body,orelse=[])
+                tail=[]
+                if n.orelse:
+                    tail=[ast.If(test=exhausted_load,body=[self.visit(st) for st in n.orelse],orelse=[])]
+                out=[setup_iter,setup_exhausted,loop,*tail]
+                for st in out: ast.copy_location(st,n)
+                return out
 
-        lowered_async=Lower(original).visit(original)
+        lowered_async=ast.fix_missing_locations(Lower(original).visit(original))
         lowered=ast.FunctionDef(
             name=lowered_async.name,
             args=lowered_async.args,
