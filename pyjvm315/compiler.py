@@ -2331,6 +2331,10 @@ class Compiler:
                             b.dup(); self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
                     b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
                     b.invokestatic(RUNTIME, "callMethodDynamic", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
+            case ast.Call(func=ast.Attribute(value=obj, attr=attr), args=args, keywords=keywords):
+                self._expr(obj, b, scope); b.ldc_string(attr)
+                self._emit_call_parts(args, keywords, b, scope)
+                b.invokestatic(RUNTIME, "callMethodDynamic", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in self.classes:
                 if len(args) <= 3 and not any(isinstance(arg, ast.Starred) for arg in args):
                     self._load_name(name, b, scope)
