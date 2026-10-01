@@ -1262,44 +1262,75 @@ class Compiler:
                 if stmt.finalbody:
                     yielding_finally = any(self._contains_yield(x) for x in stmt.finalbody)
                     if yielding_finally:
-                        # A yielding finally suite is compiled exactly once. Both normal
-                        # completion and an exceptional exit route through that shared
-                        # state-machine region. The pending Throwable is persisted in the
-                        # generator environment so it survives any yields in finally.
-                        # Abrupt return/break/continue from the protected body needs a
-                        # separate persisted continuation and remains a narrow explicit
-                        # limitation for this form.
-                        abrupt = any(
-                            isinstance(n, (ast.Return, ast.Break, ast.Continue))
-                            for x in (stmt.body + stmt.orelse) for n in ast.walk(x)
-                            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
-                        )
-                        if abrupt:
-                            raise CompileError("return/break/continue through a yielding generator finally is not implemented yet")
                         idx = gen_finally_counter[0]; gen_finally_counter[0] += 1
-                        exc_env = f"$finally_exc_{idx}"
+                        kind_env=f"$finally_kind_{idx}"
+                        value_env=f"$finally_value_{idx}"
                         outer_start, outer_end = b.label(), b.label()
                         outer_handler, final_entry, outer_done = b.label(), b.label(), b.label()
-                        outer_exc = scope.temp()
+                        ctx={
+                            "kind_env":kind_env,
+                            "value_env":value_env,
+                            "final_entry":final_entry,
+                            "branches":{},
+                        }
+                        outer_exc=scope.temp()
+
                         b.mark(outer_start)
+                        gen_cleanup_order.append(("yielding",ctx))
                         if stmt.handlers:
                             gen_try_except(stmt.body, stmt.handlers, stmt.orelse)
                         else:
                             for x in stmt.body: gen_stmt(x)
+                        gen_cleanup_order.pop()
                         b.mark(outer_end)
-                        b.aconst_null(); normal_slot = scope.temp(); b.astore(normal_slot)
-                        self._gen_env_store(exc_env, normal_slot, b, scope)
+                        _store_env_literal(kind_env,"normal")
                         b.goto(final_entry)
+
                         b.mark(outer_handler); b.astore(outer_exc)
-                        self._gen_env_store(exc_env, outer_exc, b, scope)
+                        self._gen_env_store(value_env,outer_exc,b,scope)
+                        _store_env_literal(kind_env,"exception")
                         b.goto(final_entry)
-                        b.add_exception_handler(outer_start, outer_end, outer_handler, "java/lang/Throwable")
+                        b.add_exception_handler(outer_start,outer_end,outer_handler,"java/lang/Throwable")
+
+                        # Compile the suspending cleanup exactly once. The current
+                        # cleanup context is already popped so an abrupt completion
+                        # originating inside finally overrides the pending transfer.
                         b.mark(final_entry)
                         for x in stmt.finalbody: gen_stmt(x)
-                        self._gen_env_load(exc_env, b, scope)
-                        pending_slot = scope.temp(); b.astore(pending_slot)
-                        b.aload(pending_slot); b.invokestatic(RUNTIME, "truth", f"({OBJ})Z"); b.ifeq(outer_done)
-                        b.aload(pending_slot); b.invokestatic(RUNTIME, "rethrowThrowable", f"({OBJ})V")
+
+                        dispatch_return=b.label()
+                        dispatch_exception=b.label()
+                        dispatch_normal=b.label()
+                        branch_labels={target:b.label() for target in ctx["branches"]}
+
+                        self._gen_env_load(kind_env,b,scope); b.ldc_string("return")
+                        b.invokestatic(RUNTIME,"eq",f"({OBJ}{OBJ}){OBJ}")
+                        b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(dispatch_return)
+
+                        self._gen_env_load(kind_env,b,scope); b.ldc_string("exception")
+                        b.invokestatic(RUNTIME,"eq",f"({OBJ}{OBJ}){OBJ}")
+                        b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(dispatch_exception)
+
+                        for target,branch_kind in ctx["branches"].items():
+                            self._gen_env_load(kind_env,b,scope); b.ldc_string(branch_kind)
+                            b.invokestatic(RUNTIME,"eq",f"({OBJ}{OBJ}){OBJ}")
+                            b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(branch_labels[target])
+
+                        b.goto(dispatch_normal)
+
+                        b.mark(dispatch_return)
+                        self._gen_env_load(value_env,b,scope)
+                        pending_ret=scope.temp(); b.astore(pending_ret)
+                        _route_return(pending_ret)
+
+                        b.mark(dispatch_exception)
+                        self._gen_env_load(value_env,b,scope)
+                        b.invokestatic(RUNTIME,"rethrowThrowable",f"({OBJ})V")
+
+                        for target,label in branch_labels.items():
+                            b.mark(label); _route_branch(target)
+
+                        b.mark(dispatch_normal); b.goto(outer_done)
                         b.mark(outer_done)
                     else:
                         # Compile try/except as the protected body of an outer finally.
