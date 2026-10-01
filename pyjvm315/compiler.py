@@ -458,7 +458,12 @@ class Compiler:
                     defaults[param] = expr
             kw_defaults = {a.arg: e for a, e in zip(item.args.kwonlyargs, item.args.kw_defaults) if e is not None}
             kind = "instance"
-            if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
+            # Python applies these descriptors implicitly during class creation.
+            if item.name == "__new__" and not item.decorator_list:
+                kind = "static"
+            elif item.name == "__init_subclass__" and not item.decorator_list:
+                kind = "class"
+            elif len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
                 kind = item.decorator_list[0].id.removesuffix("method")
             if kind != "static" and not positional:
                 raise CompileError(f"method {item.name} must declare an implicit receiver argument")
@@ -1927,8 +1932,8 @@ class Compiler:
                 for decorator in decorators:
                     self._expr(decorator, b, scope)
                     slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
-                b.ldc_string(name)
-                b.invokestatic(RUNTIME, "class0", f"({OBJ}){OBJ}")
+                b.ldc_string(name); b.ldc_string(self.module_name)
+                b.invokestatic(RUNTIME, "classCreate", f"({OBJ}{OBJ}){OBJ}")
                 class_slot = scope.temp(); b.astore(class_slot)
                 for base_name in info.bases:
                     b.aload(class_slot); self._load_name(base_name, b, scope)

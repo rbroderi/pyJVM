@@ -1580,7 +1580,13 @@ public final class PyRuntime {
 
     // ---------- Python classes / instances ----------
     public static Object class0(Object name) { return new PyClass("__main__", (String) name); }
-    public static void classAddBase(Object cls, Object base) { ((PyClass)cls).bases.add((PyClass)base); }
+    public static Object classCreate(Object name,Object module) { return new PyClass((String)module,(String)name); }
+    public static void classAddBase(Object cls, Object base) {
+        PyClass target=(PyClass)cls;
+        if(base instanceof PyClass pyBase){target.bases.add(pyBase);return;}
+        if(base instanceof PyBuiltinType builtin && builtin.name.equals("object")) return;
+        throw new PyException("TypeError","class base must be a class");
+    }
     public static void classAddAttr(Object cls, Object pyName, Object value) {
         ((PyClass)cls).attrs.put((String)pyName, value);
     }
@@ -1610,7 +1616,26 @@ public final class PyRuntime {
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
         ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
     }
-    public static void classFinalize(Object cls) { ((PyClass)cls).computeMro(); }
+    public static void classFinalize(Object clsObj) {
+        PyClass cls=(PyClass)clsObj;
+        cls.computeMro();
+
+        // PEP 487: descriptors receive their owner/name before __init_subclass__.
+        for(var entry:new ArrayList<>(cls.attrs.entrySet())) {
+            Object value=entry.getValue();
+            if(value instanceof PyInstance descriptor) {
+                PyMethod setName=descriptor.cls.lookupMethod("__set_name__");
+                if(setName!=null) invoke(descriptor,setName,new Object[]{cls,entry.getKey()});
+            }
+        }
+
+        // The first inherited hook follows the class MRO; cooperative hooks can
+        // explicitly call super().__init_subclass__().
+        if(!cls.bases.isEmpty()) {
+            PyMethod hook=cls.lookupMethodAfter(cls,"__init_subclass__");
+            if(hook!=null) invokeOnClass(cls,hook,new Object[0]);
+        }
+    }
     public static Object makeSuper(Object currentClass, Object self) {
         if (!(currentClass instanceof PyClass cls) || !(self instanceof PyInstance instance))
             throw new PyException("TypeError", "super() arguments must be a class and instance");
@@ -1627,11 +1652,29 @@ public final class PyRuntime {
         return instantiate(cls,args,new LinkedHashMap<Object,Object>());
     }
     private static Object instantiate(PyClass cls, Object[] args, Map<Object,Object> kwargs) {
-        PyInstance instance = new PyInstance(cls);
-        PyMethod init = cls.lookupMethod("__init__");
-        if (init != null) invokeKw(instance, init, new ArrayList<Object>(Arrays.asList(args)), kwargs);
-        else if (args.length != 0 || !kwargs.isEmpty()) throw new PyException("TypeError", cls.name + "() takes no arguments");
-        return instance;
+        Object created;
+        PyMethod newMethod=cls.lookupMethod("__new__");
+        if(newMethod!=null) {
+            ArrayList<Object> newArgs=new ArrayList<>();
+            newArgs.add(cls);
+            newArgs.addAll(Arrays.asList(args));
+            created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
+        } else {
+            created=new PyInstance(cls);
+        }
+
+        // __init__ is called only when __new__ produced an instance of cls or a
+        // subclass, matching Python's constructor protocol.
+        if(created instanceof PyInstance instance && instance.cls.mro.contains(cls)) {
+            PyMethod init=cls.lookupMethod("__init__");
+            if(init!=null) {
+                Object initResult=invokeKw(instance,init,new ArrayList<Object>(Arrays.asList(args)),kwargs);
+                if(initResult!=null) throw new PyException("TypeError","__init__() should return None, not '"+typeName(initResult)+"'");
+            } else if(args.length!=0 || !kwargs.isEmpty()) {
+                throw new PyException("TypeError",cls.name+"() takes no arguments");
+            }
+        }
+        return created;
     }
 
     private static void requireArgs(String name,Object[] args,int count) { if(args.length!=count) throw new PyException("TypeError",name+"() takes "+count+" arguments"); }
@@ -1658,6 +1701,14 @@ public final class PyRuntime {
             PyMethod method = sup.self.cls.lookupMethodAfter(sup.currentClass, name);
             if (method == null) throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
             return invoke(sup.self, method, args);
+        }
+        if (obj instanceof PyBuiltinType builtin) {
+            if(builtin.name.equals("object") && name.equals("__new__")) {
+                requireArgs(name,args,1);
+                if(!(args[0] instanceof PyClass cls)) throw new PyException("TypeError","object.__new__() argument must be a type");
+                return new PyInstance(cls);
+            }
+            throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
             PyMethod method=cls.lookupMethod(name);
@@ -1859,6 +1910,26 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
+            if(name.equals("__name__") || name.equals("__qualname__")) return cls.name;
+            if(name.equals("__module__")) return cls.moduleName;
+            if(name.equals("__bases__")) {
+                PyTuple t=new PyTuple();
+                if(cls.bases.isEmpty()) t.items.add(new PyBuiltinType("object"));
+                else t.items.addAll(cls.bases);
+                return t;
+            }
+            if(name.equals("__mro__")) {
+                PyTuple t=new PyTuple(); t.items.addAll(cls.mro);
+                t.items.add(new PyBuiltinType("object"));
+                return t;
+            }
+            if(name.equals("__dict__")) {
+                LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
+                out.putAll(cls.attrs);
+                out.put("__module__",cls.moduleName);
+                out.put("__name__",cls.name);
+                return out;
+            }
             Object attr=cls.lookupAttr(name);
             if(attr!=MISSING) return descriptorGet(attr, null, cls);
             PyProperty prop=cls.lookupProperty(name);
@@ -1872,6 +1943,8 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
+            if(name.equals("__class__")) return instance.cls;
+            if(name.equals("__dict__")) return instance.fields;
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) return invoke(instance,new PyMethod(prop.owner,prop.getter),new Object[0]);
             Object classAttr=instance.cls.lookupAttr(name);
@@ -1959,6 +2032,7 @@ public final class PyRuntime {
             return false;
         }
         if(subObj instanceof PyClass a && clsObj instanceof PyClass b) return a.mro.contains(b);
+        if(subObj instanceof PyClass && clsObj instanceof PyBuiltinType b && b.name.equals("object")) return true;
         throw new PyException("TypeError","issubclass() arg 1 must be a class");
     }
 
