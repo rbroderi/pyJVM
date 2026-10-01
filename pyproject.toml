@@ -16,6 +16,7 @@ dependencies = []
 pyjvm315 = "pyjvm315.cli:main"
 pyjvm315-conformance = "pyjvm315.conformance:main"
 pyjvm315-probe = "pyjvm315.probe:main"
+pyjvm315-regression-probe = "pyjvm315.regression_probe:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
