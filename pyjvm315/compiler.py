@@ -294,7 +294,7 @@ class Compiler:
             b.getstatic(self.class_name, self.classes[name].class_field, OBJ); return
         if name in self.global_names:
             b.getstatic(self.class_name, self.global_fields[name], OBJ); return
-        if name in {"object","int","bool","float","str","list","tuple","dict","set","range","type",
+        if name in {"object","int","bool","float","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type",
                     "BaseException","Exception","ArithmeticError","LookupError","ValueError","TypeError",
                     "ZeroDivisionError","OverflowError","IndexError","KeyError","AssertionError","RuntimeError",
                     "NameError","UnboundLocalError","AttributeError","StopIteration","StopAsyncIteration","GeneratorExit","OSError"}:
@@ -2197,6 +2197,9 @@ class Compiler:
                 b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
             case ast.Constant(value=str() as value):
                 b.ldc_string(value)
+            case ast.Constant(value=bytes() as value):
+                b.ldc_string(value.hex())
+                b.invokestatic(RUNTIME, "bytesFromHexLiteral", f"({OBJ}){OBJ}")
             case ast.Name(id=name):
                 self._load_name(name, b, scope)
             case ast.NamedExpr(target=ast.Name(id=name), value=value):
@@ -2308,6 +2311,20 @@ class Compiler:
                 self._expr(arg, b, scope)
                 runtime_name = {"bool":"bool_", "str":"str_", "repr":"repr_", "int":"int_", "float":"float_"}.get(name, name)
                 b.invokestatic(RUNTIME, runtime_name, f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="bytes"), args=[], keywords=[]):
+                b.invokestatic(RUNTIME, "bytes0", f"(){OBJ}")
+            case ast.Call(func=ast.Name(id="bytes"), args=[arg], keywords=[]):
+                self._expr(arg,b,scope); b.invokestatic(RUNTIME, "bytes1", f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="bytes"), args=[arg, enc], keywords=[]):
+                self._expr(arg,b,scope); self._expr(enc,b,scope); b.invokestatic(RUNTIME, "bytes2", f"({OBJ}{OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="bytearray"), args=[], keywords=[]):
+                b.invokestatic(RUNTIME, "bytearray0", f"(){OBJ}")
+            case ast.Call(func=ast.Name(id="bytearray"), args=[arg], keywords=[]):
+                self._expr(arg,b,scope); b.invokestatic(RUNTIME, "bytearray1", f"({OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="bytearray"), args=[arg, enc], keywords=[]):
+                self._expr(arg,b,scope); self._expr(enc,b,scope); b.invokestatic(RUNTIME, "bytearray2", f"({OBJ}{OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id="memoryview"), args=[arg], keywords=[]):
+                self._expr(arg,b,scope); b.invokestatic(RUNTIME, "memoryview1", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="list"), args=[], keywords=[]):
                 b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
             case ast.Call(func=ast.Name(id="list"), args=[arg], keywords=[]):
