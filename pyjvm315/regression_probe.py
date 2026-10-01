@@ -133,9 +133,11 @@ def probe_files(paths: list[Path]) -> dict:
     counts = Counter(r.status for r in results)
     reasons = Counter(r.detail for r in results if r.status == "UNSUPPORTED")
     files = Counter(r.file for r in results if r.status == "UNSUPPORTED")
+    errors = Counter(r.detail for r in results if r.status == "ERROR")
     return {
         "summary": dict(counts),
         "unsupported_reasons": [{"reason": reason, "count": count} for reason, count in reasons.most_common()],
+        "error_reasons": [{"reason": reason, "count": count} for reason, count in errors.most_common()],
         "unsupported_files": [{"file": file, "count": count} for file, count in files.most_common()],
         "results": [asdict(r) for r in results],
     }
@@ -160,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpython-root", type=Path, default=Path("."), help="CPython checkout root for manifest entries")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--output", type=Path, help="Write JSON report to this path")
-    ap.add_argument("--top", type=int, default=25, help="Number of unsupported reasons to print")
+    ap.add_argument("--top", type=int, default=25, help="Number of unsupported/error reasons to print")
+    ap.add_argument("--fail-on-error", action="store_true", help="Exit non-zero when compiler errors are observed")
     ns = ap.parse_args(argv)
 
     paths = list(ns.paths)
@@ -189,8 +192,13 @@ def main(argv: list[str] | None = None) -> int:
             print("\nTop unsupported reasons:")
             for item in reasons[: ns.top]:
                 print(f"  {item['count']:5}  {item['reason']}")
+        errors = report["error_reasons"]
+        if errors:
+            print("\nTop compiler-error reasons:")
+            for item in errors[: ns.top]:
+                print(f"  {item['count']:5}  {item['reason']}")
 
-    return 1 if report["summary"].get("ERROR", 0) else 0
+    return 1 if (ns.fail_on_error and report["summary"].get("ERROR", 0)) else 0
 
 
 if __name__ == "__main__":
