@@ -231,6 +231,22 @@ class Compiler:
                 bind_target(stmt.target)
             elif isinstance(stmt, ast.AugAssign):
                 bind_target(stmt.target)
+            elif isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    names.add(alias.asname or alias.name.split('.')[0])
+            elif isinstance(stmt, ast.ImportFrom):
+                resolved=_resolve_import_name(
+                    self.module_name, self.package_name == self.module_name,
+                    stmt.module, stmt.level
+                )
+                for alias in stmt.names:
+                    if alias.name == '*':
+                        exports=self.import_exports.get(resolved or "")
+                        if exports is None:
+                            raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
+                        names.update(exports)
+                    else:
+                        names.add(alias.asname or alias.name)
             elif isinstance(stmt, (ast.For, ast.AsyncFor)):
                 bind_target(stmt.target)
                 for child in stmt.body + stmt.orelse: visit_stmt(child)
