@@ -1,0 +1,6 @@
+# High-value CPython 3.15 regression files used for compatibility triage.
+Lib/test/test_bytes.py
+Lib/test/test_descr.py
+Lib/test/test_importlib/import_/test_api.py
+Lib/test/test_importlib/import_/test_fromlist.py
+Lib/test/test_importlib/import_/test_relative_imports.py

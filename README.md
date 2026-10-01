@@ -588,3 +588,28 @@ receiver's immutable or mutable result type.
 The strict focused differential corpus passes 126/126 executable cases with
 0 unsupported and 0 failed.
 
+## 0.31 CPython 3.15 regression probing
+
+Version 0.31 adds a persistent case-level regression-probe lane against selected CPython
+3.15 tests. Unlike the older whole-file probe, it extracts individual `test_*`
+functions/methods, neutralizes external imports into placeholder bindings, compiles each
+case independently, and aggregates unsupported/compiler-error reasons by frequency.
+
+CI checks out CPython's `3.15` branch, probes a pinned manifest covering bytes,
+descriptors, and importlib import behavior, and publishes the full JSON report as the
+`cpython-regression-probe` artifact. Probe findings are reporting data; the existing
+focused differential suite remains the strict merge gate.
+
+The initial baseline covers 358 CPython cases:
+
+- 125 compile
+- 231 are explicitly unsupported
+- 2 reach unexpected compiler errors
+
+The dominant unsupported feature is nested/local class definitions inside functions
+(154 cases), followed by missing core builtins / builtin exception classes and the
+current four-argument dynamic method-call ceiling. See `CPYTHON_REGRESSION_PROBE.md`
+for the recorded baseline and priority order.
+
+The focused differential corpus remains 126/126 passing with 0 unsupported and 0 failed.
+

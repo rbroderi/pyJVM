@@ -27,3 +27,32 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -m pyjvm315.conformance tests/conformance --python python
+
+
+  cpython-regression-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: python/cpython
+          ref: '3.15'
+          path: cpython-src
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: CPython 3.15 regression probe
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pyjvm315.regression_probe \
+            --manifest tools/cpython_probe_manifest.txt \
+            --cpython-root cpython-src \
+            --output artifacts/cpython-regression-probe.json \
+            --top 30
+      - name: Upload regression probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpython-regression-probe
+          path: artifacts/cpython-regression-probe.json

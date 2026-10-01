@@ -1,18 +1,28 @@
 {
-  "version": "0.30.0",
+  "version": "0.31.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
   "focused_conformance": {"passed": 126, "unsupported": 0, "failed": 0},
+  "cpython_regression_probe": {
+    "branch": "3.15",
+    "cases": 358,
+    "compiles": 125,
+    "unsupported": 231,
+    "compiler_errors": 2,
+    "top_gap": "nested/local class definitions are not implemented",
+    "top_gap_cases": 154
+  },
   "new_features": [
-    "bytes/bytearray translate with optional deletion",
-    "bytes.maketrans and bytearray.maketrans",
-    "bytes/bytearray strip, lstrip, and rstrip",
-    "ASCII lower, upper, capitalize, title, and swapcase"
+    "case-level CPython regression probe CLI",
+    "curated CPython 3.15 bytes/descriptor/importlib manifest",
+    "unsupported and compiler-error frequency histograms",
+    "machine-readable CI probe artifact",
+    "recorded CPython regression baseline"
   ],
   "next_focus": [
-    "broader CPython test_bytes compile probing",
-    "remaining bytes/bytearray formatting and classification APIs",
-    "deeper import protocol behavior",
-    "modern JVM class targets and StackMapTable generation"
+    "nested/local class definitions inside functions",
+    "remove dynamic method-call arity ceiling",
+    "high-frequency core builtins and builtin exception classes",
+    "re-run the pinned CPython probe and measure compile-coverage movement"
   ]
 }
