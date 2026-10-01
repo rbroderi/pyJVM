@@ -1,18 +1,19 @@
 {
-  "version": "0.18.0",
+  "version": "0.19.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 69, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 71, "unsupported": 0, "failed": 0},
   "new_features": [
-    "fully suspendable async-for iteration steps",
-    "async-for loop-else across suspension",
-    "suspendable async instance/class/static methods",
-    "async generator expressions",
-    "eager outer-iterable evaluation with lazy async generation"
+    "async list comprehensions",
+    "async set comprehensions",
+    "async dict comprehensions",
+    "lexical capture in async comprehension helpers",
+    "suspending expressions inside async comprehension elements",
+    "dynamic bound-method dispatch across suspension"
   ],
   "next_focus": [
-    "async list/set/dict comprehensions",
-    "suspendable async-with enter/exit cleanup continuations",
+    "fully suspendable async-with __aenter__/__aexit__",
+    "persistent cleanup continuation through return/break/continue",
     "custom metaclass namespace/call protocol",
     "larger CPython 3.15 Lib/test slices"
   ]
