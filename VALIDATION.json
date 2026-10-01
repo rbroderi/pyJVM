@@ -1,19 +1,21 @@
 {
-  "version": "0.20.0",
+  "version": "0.21.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 77, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 80, "unsupported": 0, "failed": 0},
   "new_features": [
-    "fully suspendable async-with __aenter__ and __aexit__",
-    "async-with exception suppression after suspended exit",
-    "persistent return/break/continue/exception cleanup continuation",
-    "ordered mixed suspending and non-suspending cleanup nesting",
-    "return and loop control through yielding generator finally suites"
+    "implicit static __new__ semantics",
+    "object.__new__(cls) allocation",
+    "__new__ controls whether __init__ runs",
+    "descriptor __set_name__ ordering",
+    "implicit classmethod __init_subclass__",
+    "class and instance creation introspection metadata",
+    "explicit object base support"
   ],
   "next_focus": [
-    "custom metaclass namespace/call protocol",
-    "__slots__ and richer descriptor/class creation semantics",
-    "star imports and stronger import hooks",
-    "larger curated CPython 3.15 Lib/test slices"
+    "custom metaclass __prepare__/__new__/__init__/__call__",
+    "class keyword forwarding",
+    "__slots__",
+    "larger CPython 3.15 test_descr/test_metaclass slices"
   ]
 }
