@@ -506,7 +506,7 @@ class Compiler:
 
                     suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
                         self._contains_await(item)
-                        or any(isinstance(x, ast.AsyncFor) for x in ast.walk(item))
+                        or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(item))
                         or self._contains_async_comprehension(item)
                     )
                     if suspendable_async:
@@ -580,7 +580,11 @@ class Compiler:
             self.current_frame_name,self.current_frame_firstlineno=saved_frame
             return
         if info.is_async_generator:
-            lowered = self._lower_async_function(node) if (self._contains_await(node) or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))) else node
+            lowered = self._lower_async_function(node) if (
+                self._contains_await(node)
+                or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(node))
+                or self._contains_async_comprehension(node)
+            ) else node
             if lowered is not node:
                 lowered_locals,_,_=self._function_locals(lowered)
                 info.local_names.update(lowered_locals)
@@ -589,7 +593,7 @@ class Compiler:
             return
         if info.is_async and (
             self._contains_await(node)
-            or any(isinstance(x, ast.AsyncFor) for x in ast.walk(node))
+            or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(node))
             or self._contains_async_comprehension(node)
         ):
             lowered = self._lower_async_function(node)
@@ -653,6 +657,16 @@ class Compiler:
                 name=f"$async_{prefix}_{self.counter}"
                 self.counter += 1
                 return name
+            def visit_stmts(self, stmts):
+                out=[]
+                for st in stmts:
+                    value=self.visit(st)
+                    if value is None: continue
+                    if isinstance(value,list): out.extend(value)
+                    else: out.append(value)
+                return out
+            def awaited(self, expr, source):
+                return self.visit_Await(ast.copy_location(ast.Await(value=expr),source))
             def visit_FunctionDef(self, n):
                 if n is self.root:
                     return self.generic_visit(n)
@@ -706,12 +720,90 @@ class Compiler:
                     orelse=[],
                     finalbody=[],
                 )
-                body=[try_next] + [self.visit(st) for st in n.body]
+                body=[try_next] + self.visit_stmts(n.body)
                 loop=ast.While(test=ast.Constant(True),body=body,orelse=[])
                 tail=[]
                 if n.orelse:
-                    tail=[ast.If(test=exhausted_load,body=[self.visit(st) for st in n.orelse],orelse=[])]
+                    tail=[ast.If(test=exhausted_load,body=self.visit_stmts(n.orelse),orelse=[])]
                 out=[setup_iter,setup_exhausted,loop,*tail]
+                for st in out: ast.copy_location(st,n)
+                return out
+            def visit_AsyncWith(self, n: ast.AsyncWith):
+                original_body=self.visit_stmts(n.body)
+
+                def lower_items(items, body):
+                    if not items:
+                        return body
+                    item=items[0]
+                    mgr=self.temp("with_mgr")
+                    exc=self.temp("with_exc")
+                    caught=self.temp("with_caught")
+                    mgr_store=ast.Name(id=mgr,ctx=ast.Store())
+                    mgr_load=ast.Name(id=mgr,ctx=ast.Load())
+                    exc_store=ast.Name(id=exc,ctx=ast.Store())
+                    exc_load=ast.Name(id=exc,ctx=ast.Load())
+                    caught_store=ast.Name(id=caught,ctx=ast.Store())
+                    caught_load=ast.Name(id=caught,ctx=ast.Load())
+
+                    setup_mgr=ast.Assign(targets=[mgr_store],value=self.visit(item.context_expr))
+                    setup_exc=ast.Assign(targets=[exc_store],value=ast.Constant(None))
+                    enter_call=ast.Call(
+                        func=ast.Attribute(value=mgr_load,attr="__aenter__",ctx=ast.Load()),
+                        args=[],keywords=[],
+                    )
+                    enter_value=self.awaited(enter_call,n)
+
+                    inner=lower_items(items[1:],body)
+                    protected=[]
+                    if item.optional_vars is None:
+                        protected.append(ast.Expr(value=enter_value))
+                    else:
+                        protected.append(ast.Assign(targets=[self.visit(item.optional_vars)],value=enter_value))
+                    protected.extend(inner)
+
+                    exit_exc_call=ast.Call(
+                        func=ast.Attribute(value=ast.Name(id=mgr,ctx=ast.Load()),attr="__aexit__",ctx=ast.Load()),
+                        args=[
+                            ast.Call(func=ast.Name(id="type",ctx=ast.Load()),args=[caught_load],keywords=[]),
+                            caught_load,
+                            ast.Constant(None),
+                        ],
+                        keywords=[],
+                    )
+                    suppress_name=self.temp("with_suppress")
+                    suppress=self.awaited(exit_exc_call,n)
+                    handler_body=[
+                        ast.Assign(targets=[ast.Name(id=exc,ctx=ast.Store())],value=caught_load),
+                        ast.Assign(targets=[ast.Name(id=suppress_name,ctx=ast.Store())],value=suppress),
+                        ast.If(
+                            test=ast.UnaryOp(op=ast.Not(),operand=ast.Name(id=suppress_name,ctx=ast.Load())),
+                            body=[ast.Raise(exc=None,cause=None)],
+                            orelse=[],
+                        ),
+                    ]
+                    handler=ast.ExceptHandler(
+                        type=ast.Name(id="BaseException",ctx=ast.Load()),
+                        name=caught,
+                        body=handler_body,
+                    )
+
+                    exit_normal_call=ast.Call(
+                        func=ast.Attribute(value=ast.Name(id=mgr,ctx=ast.Load()),attr="__aexit__",ctx=ast.Load()),
+                        args=[ast.Constant(None),ast.Constant(None),ast.Constant(None)],
+                        keywords=[],
+                    )
+                    normal_exit=ast.Expr(value=self.awaited(exit_normal_call,n))
+                    finalbody=[
+                        ast.If(
+                            test=ast.Compare(left=ast.Name(id=exc,ctx=ast.Load()),ops=[ast.Is()],comparators=[ast.Constant(None)]),
+                            body=[normal_exit],
+                            orelse=[],
+                        )
+                    ]
+                    wrapped=ast.Try(body=protected,handlers=[handler],orelse=[],finalbody=finalbody)
+                    return [setup_mgr,setup_exc,wrapped]
+
+                out=lower_items(list(n.items),original_body)
                 for st in out: ast.copy_location(st,n)
                 return out
 
@@ -807,6 +899,7 @@ class Compiler:
         b.mark(labels[0])
         self.loop_stack=[]; self.exception_stack=[]; self.cleanup_stack=[]; self.finally_stack=[]
         gen_finally_stack: list[list[ast.stmt]] = []
+        gen_cleanup_order: list[tuple[str, object]] = []
         gen_active_exception_env: list[str] = []
         gen_finally_counter = [0]
 
@@ -820,6 +913,48 @@ class Compiler:
                 for cleanup_stmt in finalbody:
                     gen_stmt(cleanup_stmt)
             gen_finally_stack[:] = original
+
+        def _store_env_literal(name: str, value: str):
+            b.ldc_string(value); slot=scope.temp(); b.astore(slot)
+            self._gen_env_store(name,slot,b,scope)
+
+        def _route_return(ret_slot: int):
+            if gen_cleanup_order:
+                kind,payload=gen_cleanup_order.pop()
+                try:
+                    if kind == "inline":
+                        for cleanup_stmt in payload: gen_stmt(cleanup_stmt)
+                        _route_return(ret_slot)
+                    else:
+                        ctx=payload
+                        self._gen_env_store(ctx["value_env"],ret_slot,b,scope)
+                        _store_env_literal(ctx["kind_env"],"return")
+                        b.goto(ctx["final_entry"])
+                finally:
+                    gen_cleanup_order.append((kind,payload))
+                return
+            b.aload(gen_slot); b.aload(ret_slot)
+            b.invokestatic(RUNTIME,"generatorFinish",f"({OBJ}{OBJ}){OBJ}"); b.areturn()
+
+        def _route_branch(target):
+            if gen_cleanup_order:
+                kind,payload=gen_cleanup_order.pop()
+                try:
+                    if kind == "inline":
+                        for cleanup_stmt in payload: gen_stmt(cleanup_stmt)
+                        _route_branch(target)
+                    else:
+                        ctx=payload
+                        branch_kind=ctx["branches"].get(target)
+                        if branch_kind is None:
+                            branch_kind=f"branch_{len(ctx['branches'])}"
+                            ctx["branches"][target]=branch_kind
+                        _store_env_literal(ctx["kind_env"],branch_kind)
+                        b.goto(ctx["final_entry"])
+                finally:
+                    gen_cleanup_order.append((kind,payload))
+                return
+            b.goto(target)
 
         def emit_yield(y: ast.Yield):
             value_slot=scope.temp()
@@ -1059,19 +1194,15 @@ class Compiler:
                 if stmt.value is None: b.aconst_null()
                 else: gen_value(stmt.value)
                 ret=scope.temp(); b.astore(ret)
-                if gen_finally_stack: emit_generator_cleanups()
-                b.aload(gen_slot); b.aload(ret)
-                b.invokestatic(RUNTIME,"generatorFinish",f"({OBJ}{OBJ}){OBJ}"); b.areturn(); return
+                _route_return(ret); return
             if isinstance(stmt,ast.Break):
                 if not self.loop_stack: raise CompileError("break outside loop")
                 target=self.loop_stack[-1][1]
-                if gen_finally_stack: emit_generator_cleanups()
-                b.goto(target); return
+                _route_branch(target); return
             if isinstance(stmt,ast.Continue):
                 if not self.loop_stack: raise CompileError("continue outside loop")
                 target=self.loop_stack[-1][0]
-                if gen_finally_stack: emit_generator_cleanups()
-                b.goto(target); return
+                _route_branch(target); return
             if isinstance(stmt,ast.For):
                 syn=f"$gen_iter_{synthetic_counter[0]}"; synthetic_counter[0]+=1
                 self._expr(stmt.iter,b,scope); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
@@ -1137,44 +1268,75 @@ class Compiler:
                 if stmt.finalbody:
                     yielding_finally = any(self._contains_yield(x) for x in stmt.finalbody)
                     if yielding_finally:
-                        # A yielding finally suite is compiled exactly once. Both normal
-                        # completion and an exceptional exit route through that shared
-                        # state-machine region. The pending Throwable is persisted in the
-                        # generator environment so it survives any yields in finally.
-                        # Abrupt return/break/continue from the protected body needs a
-                        # separate persisted continuation and remains a narrow explicit
-                        # limitation for this form.
-                        abrupt = any(
-                            isinstance(n, (ast.Return, ast.Break, ast.Continue))
-                            for x in (stmt.body + stmt.orelse) for n in ast.walk(x)
-                            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
-                        )
-                        if abrupt:
-                            raise CompileError("return/break/continue through a yielding generator finally is not implemented yet")
                         idx = gen_finally_counter[0]; gen_finally_counter[0] += 1
-                        exc_env = f"$finally_exc_{idx}"
+                        kind_env=f"$finally_kind_{idx}"
+                        value_env=f"$finally_value_{idx}"
                         outer_start, outer_end = b.label(), b.label()
                         outer_handler, final_entry, outer_done = b.label(), b.label(), b.label()
-                        outer_exc = scope.temp()
+                        ctx={
+                            "kind_env":kind_env,
+                            "value_env":value_env,
+                            "final_entry":final_entry,
+                            "branches":{},
+                        }
+                        outer_exc=scope.temp()
+
                         b.mark(outer_start)
+                        gen_cleanup_order.append(("yielding",ctx))
                         if stmt.handlers:
                             gen_try_except(stmt.body, stmt.handlers, stmt.orelse)
                         else:
                             for x in stmt.body: gen_stmt(x)
+                        gen_cleanup_order.pop()
                         b.mark(outer_end)
-                        b.aconst_null(); normal_slot = scope.temp(); b.astore(normal_slot)
-                        self._gen_env_store(exc_env, normal_slot, b, scope)
+                        _store_env_literal(kind_env,"normal")
                         b.goto(final_entry)
+
                         b.mark(outer_handler); b.astore(outer_exc)
-                        self._gen_env_store(exc_env, outer_exc, b, scope)
+                        self._gen_env_store(value_env,outer_exc,b,scope)
+                        _store_env_literal(kind_env,"exception")
                         b.goto(final_entry)
-                        b.add_exception_handler(outer_start, outer_end, outer_handler, "java/lang/Throwable")
+                        b.add_exception_handler(outer_start,outer_end,outer_handler,"java/lang/Throwable")
+
+                        # Compile the suspending cleanup exactly once. The current
+                        # cleanup context is already popped so an abrupt completion
+                        # originating inside finally overrides the pending transfer.
                         b.mark(final_entry)
                         for x in stmt.finalbody: gen_stmt(x)
-                        self._gen_env_load(exc_env, b, scope)
-                        pending_slot = scope.temp(); b.astore(pending_slot)
-                        b.aload(pending_slot); b.invokestatic(RUNTIME, "truth", f"({OBJ})Z"); b.ifeq(outer_done)
-                        b.aload(pending_slot); b.invokestatic(RUNTIME, "rethrowThrowable", f"({OBJ})V")
+
+                        dispatch_return=b.label()
+                        dispatch_exception=b.label()
+                        dispatch_normal=b.label()
+                        branch_labels={target:b.label() for target in ctx["branches"]}
+
+                        self._gen_env_load(kind_env,b,scope); b.ldc_string("return")
+                        b.invokestatic(RUNTIME,"eq",f"({OBJ}{OBJ}){OBJ}")
+                        b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(dispatch_return)
+
+                        self._gen_env_load(kind_env,b,scope); b.ldc_string("exception")
+                        b.invokestatic(RUNTIME,"eq",f"({OBJ}{OBJ}){OBJ}")
+                        b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(dispatch_exception)
+
+                        for target,branch_kind in ctx["branches"].items():
+                            self._gen_env_load(kind_env,b,scope); b.ldc_string(branch_kind)
+                            b.invokestatic(RUNTIME,"eq",f"({OBJ}{OBJ}){OBJ}")
+                            b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(branch_labels[target])
+
+                        b.goto(dispatch_normal)
+
+                        b.mark(dispatch_return)
+                        self._gen_env_load(value_env,b,scope)
+                        pending_ret=scope.temp(); b.astore(pending_ret)
+                        _route_return(pending_ret)
+
+                        b.mark(dispatch_exception)
+                        self._gen_env_load(value_env,b,scope)
+                        b.invokestatic(RUNTIME,"rethrowThrowable",f"({OBJ})V")
+
+                        for target,label in branch_labels.items():
+                            b.mark(label); _route_branch(target)
+
+                        b.mark(dispatch_normal); b.goto(outer_done)
                         b.mark(outer_done)
                     else:
                         # Compile try/except as the protected body of an outer finally.
@@ -1182,10 +1344,12 @@ class Compiler:
                         outer_exc = scope.temp()
                         b.mark(outer_start)
                         gen_finally_stack.append(stmt.finalbody)
+                        gen_cleanup_order.append(("inline",stmt.finalbody))
                         if stmt.handlers:
                             gen_try_except(stmt.body, stmt.handlers, stmt.orelse)
                         else:
                             for x in stmt.body: gen_stmt(x)
+                        gen_cleanup_order.pop()
                         gen_finally_stack.pop()
                         b.mark(outer_end)
                         for x in stmt.finalbody: gen_stmt(x)

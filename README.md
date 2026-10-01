@@ -404,3 +404,20 @@ the runtime's dynamic method-dispatch path.
 The strict focused differential corpus passes 71/71 executable cases with
 0 unsupported and 0 failed.
 
+## 0.20 suspendable async-with cleanup continuations
+
+Version 0.20 makes async context-manager entry and exit fully suspendable. `async with`
+is lowered into explicit awaited `__aenter__` / `__aexit__` control flow with correct
+exception suppression and normal-exit behavior.
+
+The suspended frame backend now carries an ordered pending control transfer through
+yielding cleanup suites. A cleanup may suspend while preserving a pending return value,
+break target, continue target, exception, or normal completion, then resume the original
+transfer after cleanup finishes. Mixed nested cleanup ordering is preserved.
+
+This also removes the older generator limitation on `return` / `break` /
+`continue` through a `finally` suite that itself yields.
+
+The strict focused differential corpus passes 77/77 executable cases with
+0 unsupported and 0 failed.
+
