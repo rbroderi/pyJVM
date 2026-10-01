@@ -1061,6 +1061,75 @@ public final class PyRuntime {
         return out;
     }
 
+    private static Object bytesMaketrans(Object fromObj,Object toObj){
+        byte[] from=requireBytesLike(fromObj), to=requireBytesLike(toObj);
+        if(from.length!=to.length)throw new PyException("ValueError","maketrans arguments must have same length");
+        byte[] table=new byte[256]; for(int i=0;i<256;i++)table[i]=(byte)i;
+        for(int i=0;i<from.length;i++)table[from[i]&0xff]=to[i];
+        return new PyBytes(table);
+    }
+    private static Object binaryTranslate(PyByteSequence seq,Object[] args){
+        if(args.length<1||args.length>2)throw new PyException("TypeError","translate() takes 1 or 2 arguments");
+        byte[] table=null;
+        if(args[0]!=null){
+            table=requireBytesLike(args[0]);
+            if(table.length!=256)throw new PyException("ValueError","translation table must be 256 characters long");
+        }
+        byte[] delete=args.length==2?requireBytesLike(args[1]):new byte[0];
+        boolean[] remove=new boolean[256]; for(byte b:delete)remove[b&0xff]=true;
+        ArrayList<Byte> out=new ArrayList<>();
+        for(byte b:seq.toByteArray()){
+            int v=b&0xff; if(remove[v])continue;
+            out.add(table==null?b:table[v]);
+        }
+        byte[] raw=new byte[out.size()];for(int i=0;i<out.size();i++)raw[i]=out.get(i);
+        return binaryResult(seq,raw);
+    }
+    private static boolean byteInSet(int value,byte[] chars){
+        for(byte b:chars)if((b&0xff)==value)return true;
+        return false;
+    }
+    private static Object binaryStrip(PyByteSequence seq,Object[] args,int mode){
+        if(args.length>1)throw new PyException("TypeError","strip() takes at most 1 argument");
+        byte[] src=seq.toByteArray();
+        byte[] chars=args.length==0||args[0]==null?null:requireBytesLike(args[0]);
+        int a=0,z=src.length;
+        if(mode<=0){
+            while(a<z && (chars==null?asciiWhitespace(src[a]&0xff):byteInSet(src[a]&0xff,chars)))a++;
+        }
+        if(mode>=0){
+            while(z>a && (chars==null?asciiWhitespace(src[z-1]&0xff):byteInSet(src[z-1]&0xff,chars)))z--;
+        }
+        return binaryResult(seq,Arrays.copyOfRange(src,a,z));
+    }
+    private static int asciiLower(int v){return v>='A'&&v<='Z'?v+32:v;}
+    private static int asciiUpper(int v){return v>='a'&&v<='z'?v-32:v;}
+    private static boolean asciiAlpha(int v){return (v>='A'&&v<='Z')||(v>='a'&&v<='z');}
+    private static Object binaryCase(PyByteSequence seq,String op){
+        byte[] src=seq.toByteArray(),out=Arrays.copyOf(src,src.length);
+        switch(op){
+            case "lower" -> {for(int i=0;i<out.length;i++)out[i]=(byte)asciiLower(out[i]&0xff);}
+            case "upper" -> {for(int i=0;i<out.length;i++)out[i]=(byte)asciiUpper(out[i]&0xff);}
+            case "swapcase" -> {
+                for(int i=0;i<out.length;i++){int v=out[i]&0xff;if(v>='a'&&v<='z')v-=32;else if(v>='A'&&v<='Z')v+=32;out[i]=(byte)v;}
+            }
+            case "capitalize" -> {
+                if(out.length>0)out[0]=(byte)asciiUpper(out[0]&0xff);
+                for(int i=1;i<out.length;i++)out[i]=(byte)asciiLower(out[i]&0xff);
+            }
+            case "title" -> {
+                boolean wordStart=true;
+                for(int i=0;i<out.length;i++){
+                    int v=out[i]&0xff;
+                    out[i]=(byte)(wordStart?asciiUpper(v):asciiLower(v));
+                    wordStart=!asciiAlpha(v);
+                }
+            }
+            default -> throw new PyException("RuntimeError","unknown binary case transform");
+        }
+        return binaryResult(seq,out);
+    }
+
     private static Object binaryFind(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>3)throw new PyException("TypeError","find() takes from 1 to 3 arguments");
         byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
@@ -2343,6 +2412,9 @@ public final class PyRuntime {
                 if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__() requires a class");
                 return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
             }
+            if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
+                requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
+            }
             throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
@@ -2404,6 +2476,15 @@ public final class PyRuntime {
                 case "replace" -> binaryReplace(bytes,args);
                 case "split" -> binarySplit(bytes,args);
                 case "join" -> { requireArgs(name,args,1); yield binaryJoin(bytes,args[0]); }
+                case "translate" -> binaryTranslate(bytes,args);
+                case "strip" -> binaryStrip(bytes,args,0);
+                case "lstrip" -> binaryStrip(bytes,args,-1);
+                case "rstrip" -> binaryStrip(bytes,args,1);
+                case "lower" -> { requireArgs(name,args,0); yield binaryCase(bytes,"lower"); }
+                case "upper" -> { requireArgs(name,args,0); yield binaryCase(bytes,"upper"); }
+                case "capitalize" -> { requireArgs(name,args,0); yield binaryCase(bytes,"capitalize"); }
+                case "title" -> { requireArgs(name,args,0); yield binaryCase(bytes,"title"); }
+                case "swapcase" -> { requireArgs(name,args,0); yield binaryCase(bytes,"swapcase"); }
                 default -> throw new PyException("AttributeError","'bytes' object has no attribute '"+name+"'");
             };
         }
@@ -2450,6 +2531,15 @@ public final class PyRuntime {
                 case "replace" -> binaryReplace(bytes,args);
                 case "split" -> binarySplit(bytes,args);
                 case "join" -> { requireArgs(name,args,1); yield binaryJoin(bytes,args[0]); }
+                case "translate" -> binaryTranslate(bytes,args);
+                case "strip" -> binaryStrip(bytes,args,0);
+                case "lstrip" -> binaryStrip(bytes,args,-1);
+                case "rstrip" -> binaryStrip(bytes,args,1);
+                case "lower" -> { requireArgs(name,args,0); yield binaryCase(bytes,"lower"); }
+                case "upper" -> { requireArgs(name,args,0); yield binaryCase(bytes,"upper"); }
+                case "capitalize" -> { requireArgs(name,args,0); yield binaryCase(bytes,"capitalize"); }
+                case "title" -> { requireArgs(name,args,0); yield binaryCase(bytes,"title"); }
+                case "swapcase" -> { requireArgs(name,args,0); yield binaryCase(bytes,"swapcase"); }
                 default -> throw new PyException("AttributeError","'bytearray' object has no attribute '"+name+"'");
             };
         }
