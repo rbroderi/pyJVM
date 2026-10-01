@@ -939,6 +939,11 @@ public final class PyRuntime {
         for(int i=0;i<out.length;i++) out[i]=(byte)Integer.parseInt(hex.substring(i*2,i*2+2),16);
         return new PyBytes(out);
     }
+    private static String bytesHex(byte[] raw){
+        StringBuilder out=new StringBuilder(raw.length*2);
+        for(byte b:raw)out.append(String.format("%02x",b&0xff));
+        return out.toString();
+    }
     private static String bytesRepr(byte[] raw){
         StringBuilder out=new StringBuilder("b'");
         for(byte bb:raw){
@@ -2162,6 +2167,40 @@ public final class PyRuntime {
             ArrayList<Object> positional=new ArrayList<>(Arrays.asList(args));
             return callFunction(callable,positional,new LinkedHashMap<Object,Object>());
         }
+        if (obj instanceof PyBytes bytes) {
+            return switch(name) {
+                case "decode" -> {
+                    if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");
+                    String enc=args.length==0?"utf-8":(String)args[0];
+                    yield new String(bytes.data,Charset.forName(enc));
+                }
+                case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.data); }
+                default -> throw new PyException("AttributeError","'bytes' object has no attribute '"+name+"'");
+            };
+        }
+        if (obj instanceof PyByteArray bytes) {
+            return switch(name) {
+                case "append" -> { requireArgs(name,args,1); bytes.appendUnsigned(byteValue(args[0])); yield null; }
+                case "extend" -> { requireArgs(name,args,1); for(Object x:iterable(args[0])) bytes.appendUnsigned(byteValue(x)); yield null; }
+                case "decode" -> {
+                    if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");
+                    String enc=args.length==0?"utf-8":(String)args[0];
+                    yield new String(bytes.toByteArray(),Charset.forName(enc));
+                }
+                case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.toByteArray()); }
+                default -> throw new PyException("AttributeError","'bytearray' object has no attribute '"+name+"'");
+            };
+        }
+        if (obj instanceof PyMemoryView view) {
+            return switch(name) {
+                case "tobytes" -> { requireArgs(name,args,0); yield new PyBytes(view.toByteArray()); }
+                case "tolist" -> {
+                    requireArgs(name,args,0); ArrayList<Object> out=new ArrayList<>();
+                    for(Object x:view)out.add(x); yield out;
+                }
+                default -> throw new PyException("AttributeError","'memoryview' object has no attribute '"+name+"'");
+            };
+        }
         if (obj instanceof String str) {
             return switch(name) {
                 case "upper" -> { requireArgs(name,args,0); yield str.toUpperCase(Locale.ROOT); }
@@ -2179,6 +2218,11 @@ public final class PyRuntime {
                 case "join" -> { requireArgs(name,args,1); ArrayList<String> parts=new ArrayList<>(); for(Object x:iterable(args[0])) parts.add((String)x); yield String.join(str,parts); }
                 case "find" -> { requireArgs(name,args,1); yield (long)str.indexOf((String)args[0]); }
                 case "count" -> { requireArgs(name,args,1); String sub=(String)args[0]; if(sub.isEmpty()) yield (long)(str.length()+1); long n=0; for(int i=0;(i=str.indexOf(sub,i))>=0;i+=sub.length())n++; yield n; }
+                case "encode" -> {
+                    if(args.length>1) throw new PyException("TypeError","encode() takes at most 1 argument");
+                    String enc=args.length==0?"utf-8":(String)args[0];
+                    yield new PyBytes(str.getBytes(Charset.forName(enc)));
+                }
                 default -> throw new PyException("AttributeError","'str' object has no attribute '"+name+"'");
             };
         }
@@ -2313,6 +2357,9 @@ public final class PyRuntime {
             if (name.equals("__suppress_context__")) return exc.suppressContext;
             if (name.equals("__traceback__")) return exc.traceback;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
+        }
+        if(obj instanceof PyMemoryView view) {
+            if(name.equals("readonly")) return view.readonly();
         }
         if(obj instanceof PyTraceback tb) {
             return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
