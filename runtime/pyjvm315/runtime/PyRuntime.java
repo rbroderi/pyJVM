@@ -1771,6 +1771,7 @@ public final class PyRuntime {
     private static String mangleSlotName(String className,String name) {
         if(name.startsWith("__") && !name.endsWith("__")) {
             String stripped=className.replaceFirst("^_+","");
+            if(stripped.isEmpty()) return name;
             return "_"+stripped+name;
         }
         return name;
