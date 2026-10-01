@@ -1910,6 +1910,26 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
+            if(name.equals("__name__") || name.equals("__qualname__")) return cls.name;
+            if(name.equals("__module__")) return cls.moduleName;
+            if(name.equals("__bases__")) {
+                PyTuple t=new PyTuple();
+                if(cls.bases.isEmpty()) t.items.add(new PyBuiltinType("object"));
+                else t.items.addAll(cls.bases);
+                return t;
+            }
+            if(name.equals("__mro__")) {
+                PyTuple t=new PyTuple(); t.items.addAll(cls.mro);
+                t.items.add(new PyBuiltinType("object"));
+                return t;
+            }
+            if(name.equals("__dict__")) {
+                LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
+                out.putAll(cls.attrs);
+                out.put("__module__",cls.moduleName);
+                out.put("__name__",cls.name);
+                return out;
+            }
             Object attr=cls.lookupAttr(name);
             if(attr!=MISSING) return descriptorGet(attr, null, cls);
             PyProperty prop=cls.lookupProperty(name);
@@ -1923,6 +1943,8 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
+            if(name.equals("__class__")) return instance.cls;
+            if(name.equals("__dict__")) return instance.fields;
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) return invoke(instance,new PyMethod(prop.owner,prop.getter),new Object[0]);
             Object classAttr=instance.cls.lookupAttr(name);
@@ -2010,6 +2032,7 @@ public final class PyRuntime {
             return false;
         }
         if(subObj instanceof PyClass a && clsObj instanceof PyClass b) return a.mro.contains(b);
+        if(subObj instanceof PyClass && clsObj instanceof PyBuiltinType b && b.name.equals("object")) return true;
         throw new PyException("TypeError","issubclass() arg 1 must be a class");
     }
 
