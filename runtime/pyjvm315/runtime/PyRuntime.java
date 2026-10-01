@@ -1731,9 +1731,55 @@ public final class PyRuntime {
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
         ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
     }
+    private static void configureSlots(PyClass cls) {
+        Object spec=cls.attrs.get("__slots__");
+        boolean inheritedDict=false;
+        for(PyClass base:cls.bases) if(base.instanceDictAllowed) { inheritedDict=true; break; }
+
+        if(spec==null) {
+            cls.slotsDeclared=false;
+            cls.instanceDictAllowed=true;
+            return;
+        }
+
+        cls.slotsDeclared=true;
+        cls.instanceDictAllowed=inheritedDict;
+        ArrayList<Object> rawNames=new ArrayList<>();
+        if(spec instanceof String one) rawNames.add(one);
+        else if(spec instanceof PyTuple tuple) rawNames.addAll(tuple.items);
+        else if(spec instanceof List<?> list) rawNames.addAll(list);
+        else throw new PyException("TypeError","__slots__ must be a string or iterable of strings");
+
+        LinkedHashSet<String> names=new LinkedHashSet<>();
+        for(Object raw:rawNames) {
+            if(!(raw instanceof String name)) throw new PyException("TypeError","__slots__ items must be strings");
+            if(name.equals("__dict__")) { cls.instanceDictAllowed=true; continue; }
+            if(name.equals("__weakref__")) continue;
+            String slotName=mangleSlotName(cls.name,name);
+            names.add(slotName);
+        }
+
+        for(String slotName:names) {
+            if(cls.methods.containsKey(slotName) || cls.properties.containsKey(slotName) ||
+               (cls.attrs.containsKey(slotName) && !slotName.equals("__slots__")))
+                throw new PyException("ValueError","'"+slotName+"' in __slots__ conflicts with class variable");
+            cls.ownSlots.add(slotName);
+            cls.attrs.put(slotName,new PySlotDescriptor(cls,slotName));
+        }
+    }
+
+    private static String mangleSlotName(String className,String name) {
+        if(name.startsWith("__") && !name.endsWith("__")) {
+            String stripped=className.replaceFirst("^_+","");
+            return "_"+stripped+name;
+        }
+        return name;
+    }
+
     private static void classFinalizeWithKeywords(PyClass cls,Map<Object,Object> kwargs) {
         if(cls.finalized) return;
         cls.computeMro();
+        configureSlots(cls);
 
         // PEP 487: descriptors receive their owner/name before __init_subclass__.
         for(var entry:new ArrayList<>(cls.attrs.entrySet())) {
@@ -2022,13 +2068,23 @@ public final class PyRuntime {
     }
 
     private static boolean isDescriptor(Object value) {
-        return value instanceof PyInstance descriptor && descriptor.cls.lookupMethod("__get__") != null;
+        return value instanceof PySlotDescriptor ||
+            (value instanceof PyInstance descriptor && descriptor.cls.lookupMethod("__get__") != null);
     }
     private static boolean isDataDescriptor(Object value) {
-        return value instanceof PyInstance descriptor &&
-            (descriptor.cls.lookupMethod("__set__") != null || descriptor.cls.lookupMethod("__delete__") != null);
+        return value instanceof PySlotDescriptor ||
+            (value instanceof PyInstance descriptor &&
+            (descriptor.cls.lookupMethod("__set__") != null || descriptor.cls.lookupMethod("__delete__") != null));
     }
     private static Object descriptorGet(Object descriptor, Object instance, PyClass owner) {
+        if(descriptor instanceof PySlotDescriptor slot) {
+            if(instance==null) return slot;
+            if(!(instance instanceof PyInstance pyInstance))
+                throw new PyException("TypeError","slot descriptor requires an instance");
+            if(!pyInstance.slotValues.containsKey(slot.name))
+                throw new PyException("AttributeError","'"+pyInstance.cls.name+"' object has no attribute '"+slot.name+"'");
+            return pyInstance.slotValues.get(slot.name);
+        }
         if (!isDescriptor(descriptor)) return descriptor;
         return callMethod(descriptor, "__get__", new Object[]{instance, owner});
     }
@@ -2101,7 +2157,11 @@ public final class PyRuntime {
         }
         if (obj instanceof PyInstance instance) {
             if(name.equals("__class__")) return instance.cls;
-            if(name.equals("__dict__")) return instance.fields;
+            if(name.equals("__dict__")) {
+                if(!instance.cls.instanceDictAllowed)
+                    throw new PyException("AttributeError","'"+instance.cls.name+"' object has no attribute '__dict__'");
+                return instance.fields;
+            }
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) return invoke(instance,new PyMethod(prop.owner,prop.getter),new Object[0]);
             Object classAttr=instance.cls.lookupAttr(name);
@@ -2133,9 +2193,14 @@ public final class PyRuntime {
                 invoke(instance,new PyMethod(prop.owner,prop.setter),new Object[]{value}); return;
             }
             Object descriptor=instance.cls.lookupAttr(name);
+            if(descriptor instanceof PySlotDescriptor slot) {
+                instance.slotValues.put(slot.name,value); return;
+            }
             if(descriptor instanceof PyInstance d && d.cls.lookupMethod("__set__") != null) {
                 callMethod(descriptor,"__set__",new Object[]{instance,value}); return;
             }
+            if(!instance.cls.instanceDictAllowed)
+                throw new PyException("AttributeError","'"+instance.cls.name+"' object has no attribute '"+name+"'");
             instance.fields.put(name, value); return;
         }
         if(obj instanceof PyClass cls){cls.attrs.put(name,value);return;}
@@ -2146,10 +2211,17 @@ public final class PyRuntime {
             String name=(String)nameObj;
             if(instance.cls.lookupProperty(name)!=null) throw new PyException("AttributeError","property '"+name+"' has no deleter");
             Object descriptor=instance.cls.lookupAttr(name);
+            if(descriptor instanceof PySlotDescriptor slot) {
+                if(!instance.slotValues.containsKey(slot.name))
+                    throw new PyException("AttributeError","attribute not found");
+                instance.slotValues.remove(slot.name); return;
+            }
             if(descriptor instanceof PyInstance d && d.cls.lookupMethod("__delete__") != null) {
                 callMethod(descriptor,"__delete__",new Object[]{instance}); return;
             }
-            if(!instance.fields.containsKey(name)) throw new PyException("AttributeError","attribute not found"); instance.fields.remove(name); return;
+            if(!instance.cls.instanceDictAllowed || !instance.fields.containsKey(name))
+                throw new PyException("AttributeError","attribute not found");
+            instance.fields.remove(name); return;
         }
         if(obj instanceof PyClass cls){String name=(String)nameObj;if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);return;}
         throw typeError("attribute deletion on unsupported object",obj);
@@ -2201,6 +2273,11 @@ public final class PyRuntime {
         PyMethod(String owner,String javaName,String kind){this(owner,javaName,kind,null);}
     }
     private record PyProperty(String owner, String getter, String setter) {}
+    private static final class PySlotDescriptor {
+        final PyClass owner; final String name;
+        PySlotDescriptor(PyClass owner,String name){this.owner=owner;this.name=name;}
+        @Override public String toString(){return "<member '"+name+"' of '"+owner.name+"' objects>";}
+    }
     private record BoundMethod(PyInstance self, String name) {}
     private record BoundSuperMethod(PyInstance self, PyClass currentClass, String name) {}
     private record BoundClassMethod(PyClass cls,String name) {}
@@ -2211,6 +2288,7 @@ public final class PyRuntime {
     public static final class PyInstance {
         final PyClass cls;
         final LinkedHashMap<String,Object> fields = new LinkedHashMap<>();
+        final LinkedHashMap<String,Object> slotValues = new LinkedHashMap<>();
         PyInstance(PyClass cls) { this.cls = cls; }
         @Override public String toString() { return "<" + cls.name + " object>"; }
     }
@@ -2225,6 +2303,9 @@ public final class PyRuntime {
         List<PyClass> mro = List.of(this);
         PyClass metaclass = null;
         String builtinBaseName = null;
+        final LinkedHashSet<String> ownSlots = new LinkedHashSet<>();
+        boolean slotsDeclared = false;
+        boolean instanceDictAllowed = true;
         boolean finalized = false;
         PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; }
 

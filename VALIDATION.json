@@ -1,21 +1,22 @@
 {
-  "version": "0.22.0",
+  "version": "0.23.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 83, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 88, "unsupported": 0, "failed": 0},
   "new_features": [
-    "explicit and inherited custom metaclass selection",
-    "metaclass __prepare__/__new__/__init__/__call__",
-    "type.__new__/type.__init__/type.__call__ runtime paths",
-    "prepared namespace handoff and namespace mutation",
-    "custom metaclass introspection through type(C) and __class__",
-    "named class keyword forwarding to metaclass hooks",
-    "class keyword forwarding to __init_subclass__"
+    "__slots__ layout parsing during class finalization",
+    "slot data descriptors in class dictionaries",
+    "separate slot storage from instance __dict__",
+    "dict-less slotted instance attribute enforcement",
+    "inherited slot access",
+    "normal __dict__ restoration for subclasses without __slots__",
+    "explicit __dict__ slot support",
+    "slot/class-variable conflict detection"
   ],
   "next_focus": [
-    "__slots__ and slot descriptors",
+    "slot name mangling and additional CPython slot edge cases",
     "larger CPython 3.15 test_descr/test_metaclass slices",
     "star imports and stronger import protocol",
-    "builtin bytes/bytearray/memoryview coverage"
+    "bytes/bytearray/memoryview builtin coverage"
   ]
 }
