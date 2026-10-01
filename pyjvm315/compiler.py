@@ -912,11 +912,21 @@ class Compiler:
                         b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
                 self._gen_env_load(container,b,scope); return
             if isinstance(expr, ast.Call):
-                if self._contains_yield(expr.func):
-                    gen_value(expr.func)
+                method_object_name = None
+                method_attr = None
+                if isinstance(expr.func, ast.Attribute):
+                    method_attr=expr.func.attr
+                    if self._contains_yield(expr.func.value):
+                        gen_value(expr.func.value)
+                    else:
+                        self._expr(expr.func.value,b,scope)
+                    method_object_name=persist_gen_value("method_object")
                 else:
-                    self._expr(expr.func,b,scope)
-                callable_name=persist_gen_value("callable")
+                    if self._contains_yield(expr.func):
+                        gen_value(expr.func)
+                    else:
+                        self._expr(expr.func,b,scope)
+                    callable_name=persist_gen_value("callable")
 
                 b.invokestatic(RUNTIME,"list0",f"(){OBJ}")
                 args_name=persist_gen_value("call_args")
@@ -938,10 +948,17 @@ class Compiler:
                         b.ldc_string(kw.arg); b.aload(value_slot)
                         b.invokestatic(RUNTIME,"dictPutUnique",f"({OBJ}{OBJ}{OBJ})V")
 
-                self._gen_env_load(callable_name,b,scope)
-                self._gen_env_load(args_name,b,scope)
-                self._gen_env_load(kwargs_name,b,scope)
-                b.invokestatic(RUNTIME,"callFunction",f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                if method_object_name is not None:
+                    self._gen_env_load(method_object_name,b,scope)
+                    b.ldc_string(method_attr)
+                    self._gen_env_load(args_name,b,scope)
+                    self._gen_env_load(kwargs_name,b,scope)
+                    b.invokestatic(RUNTIME,"callMethodDynamic",f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
+                else:
+                    self._gen_env_load(callable_name,b,scope)
+                    self._gen_env_load(args_name,b,scope)
+                    self._gen_env_load(kwargs_name,b,scope)
+                    b.invokestatic(RUNTIME,"callFunction",f"({OBJ}{OBJ}{OBJ}){OBJ}")
                 return
             if isinstance(expr, ast.IfExp):
                 raise CompileError("suspension inside conditional expressions is not implemented yet")
