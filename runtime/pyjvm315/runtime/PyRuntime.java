@@ -142,6 +142,7 @@ public final class PyRuntime {
     public static Object builtinType(Object nameObj){return new PyBuiltinType((String)nameObj);}
     public static Object typeOf(Object value){
         if(value instanceof PyInstance i) return i.cls;
+        if(value instanceof PyClass cls && cls.metaclass!=null) return cls.metaclass;
         return new PyBuiltinType(typeName(value));
     }
     public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
@@ -1579,16 +1580,27 @@ public final class PyRuntime {
     }
 
     // ---------- Python classes / instances ----------
+    private static final IdentityHashMap<Map<Object,Object>,PyClass> PENDING_CLASS_NAMESPACES = new IdentityHashMap<>();
+
     public static Object class0(Object name) { return new PyClass("__main__", (String) name); }
     public static Object classCreate(Object name,Object module) { return new PyClass((String)module,(String)name); }
+    public static void classSetMetaclass(Object clsObj,Object metaObj) {
+        if(!(clsObj instanceof PyClass cls) || !(metaObj instanceof PyClass meta))
+            throw new PyException("TypeError","metaclass must be a class");
+        if(!meta.isMetaclassClass) throw new PyException("TypeError","metaclass must derive from type");
+        cls.metaclass=meta;
+    }
     public static void classAddBase(Object cls, Object base) {
         PyClass target=(PyClass)cls;
         if(base instanceof PyClass pyBase){target.bases.add(pyBase);return;}
         if(base instanceof PyBuiltinType builtin && builtin.name.equals("object")) return;
+        if(base instanceof PyBuiltinType builtin && builtin.name.equals("type")) { target.isMetaclassClass=true; return; }
         throw new PyException("TypeError","class base must be a class");
     }
     public static void classAddAttr(Object cls, Object pyName, Object value) {
-        ((PyClass)cls).attrs.put((String)pyName, value);
+        PyClass target=(PyClass)cls; String name=(String)pyName;
+        target.attrs.put(name, value);
+        if(target.namespace!=null) target.namespace.put(name,value);
     }
     public static void classAddMethod(Object cls, Object pyName, Object owner, Object javaName) {
         classAddMethodKind(cls,pyName,owner,javaName,"instance");
@@ -1606,7 +1618,9 @@ public final class PyRuntime {
             splitNames((String)posonlyObj),splitNames((String)poskwObj),splitNames((String)kwonlyObj),
             (String)varargObj,(String)kwargObj,defaults);
         function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
-        ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
+        PyClass target=(PyClass)cls;
+        target.methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
+        if(target.namespace!=null) target.namespace.put((String)pyName,function);
     }
     public static void classSetMethodAsync(Object cls,Object pyName) {
         PyMethod method=((PyClass)cls).methods.get((String)pyName);
@@ -1614,13 +1628,61 @@ public final class PyRuntime {
         method.function.asyncMode=true;
     }
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
-        ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
+        PyClass target=(PyClass)cls;
+        PyProperty property=new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter);
+        target.properties.put((String)pyName, property);
+        if(target.namespace!=null) target.namespace.put((String)pyName,property);
     }
-    public static void classFinalize(Object clsObj) {
+    public static void classPrepare(Object clsObj,Object kwargsObj) {
         PyClass cls=(PyClass)clsObj;
+        @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
+        Map<Object,Object> namespace;
+        if(cls.metaclass!=null) {
+            PyMethod prepare=cls.metaclass.lookupMethod("__prepare__");
+            if(prepare!=null) {
+                ArrayList<Object> args=new ArrayList<>();
+                args.add(cls.name); args.add(classBasesTuple(cls));
+                Object prepared=invokeMetaclassHook(cls.metaclass,cls.metaclass,prepare,args,kwargs);
+                if(!(prepared instanceof Map<?,?>))
+                    throw new PyException("TypeError","__prepare__() must return a mapping");
+                @SuppressWarnings("unchecked") Map<Object,Object> cast=(Map<Object,Object>)prepared;
+                namespace=cast;
+            } else namespace=new LinkedHashMap<>();
+        } else namespace=new LinkedHashMap<>();
+        namespace.put("__module__",cls.moduleName);
+        namespace.put("__qualname__",cls.name);
+        cls.namespace=namespace;
+        PENDING_CLASS_NAMESPACES.put(namespace,cls);
+    }
+
+    private static PyTuple classBasesTuple(PyClass cls) {
+        PyTuple tuple=new PyTuple();
+        if(cls.bases.isEmpty()) {
+            if(cls.isMetaclassClass) tuple.items.add(new PyBuiltinType("type"));
+        } else tuple.items.addAll(cls.bases);
+        return tuple;
+    }
+
+    private static Object invokeMetaclassHook(PyClass meta,Object receiver,PyMethod method,List<Object> args,Map<Object,Object> kwargs) {
+        if(method.function!=null) {
+            ArrayList<Object> actual=new ArrayList<>();
+            if(method.kind.equals("class")) actual.add(meta);
+            else if(method.kind.equals("instance")) actual.add(receiver);
+            actual.addAll(args);
+            return method.function.call(actual,kwargs);
+        }
+        if(!kwargs.isEmpty()) throw new PyException("TypeError","metaclass hook does not accept keyword arguments");
+        ArrayList<Object> actual=new ArrayList<>();
+        if(method.kind.equals("class")) actual.add(meta);
+        else if(method.kind.equals("instance")) actual.add(receiver);
+        actual.addAll(args);
+        return invokeReflective(method,actual.toArray());
+    }
+
+    private static void classFinalizeCore(PyClass cls,Map<Object,Object> kwargs) {
+        if(cls.finalized) return;
         cls.computeMro();
 
-        // PEP 487: descriptors receive their owner/name before __init_subclass__.
         for(var entry:new ArrayList<>(cls.attrs.entrySet())) {
             Object value=entry.getValue();
             if(value instanceof PyInstance descriptor) {
@@ -1629,12 +1691,48 @@ public final class PyRuntime {
             }
         }
 
-        // The first inherited hook follows the class MRO; cooperative hooks can
-        // explicitly call super().__init_subclass__().
         if(!cls.bases.isEmpty()) {
             PyMethod hook=cls.lookupMethodAfter(cls,"__init_subclass__");
-            if(hook!=null) invokeOnClass(cls,hook,new Object[0]);
+            if(hook!=null) invokeOnClassKw(cls,hook,new ArrayList<>(),kwargs);
         }
+        cls.finalized=true;
+    }
+
+    public static void classFinalize(Object clsObj) {
+        classFinalizeCore((PyClass)clsObj,new LinkedHashMap<>());
+    }
+
+    public static Object classFinalizeWithKeywords(Object clsObj,Object kwargsObj) {
+        PyClass provisional=(PyClass)clsObj;
+        @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
+
+        Object created=provisional;
+        if(provisional.metaclass!=null) {
+            PyClass meta=provisional.metaclass;
+            PyMethod newMethod=meta.lookupMethod("__new__");
+            if(newMethod!=null) {
+                ArrayList<Object> args=new ArrayList<>();
+                args.add(meta); args.add(provisional.name); args.add(classBasesTuple(provisional)); args.add(provisional.namespace);
+                created=invokeMetaclassHook(meta,meta,newMethod,args,kwargs);
+            } else {
+                classFinalizeCore(provisional,kwargs);
+            }
+
+            if(created instanceof PyClass cls) {
+                if(cls.metaclass==null) cls.metaclass=meta;
+                if(!cls.finalized) classFinalizeCore(cls,kwargs);
+                PyMethod initMethod=meta.lookupMethod("__init__");
+                if(initMethod!=null) {
+                    ArrayList<Object> initArgs=new ArrayList<>();
+                    initArgs.add(cls.name); initArgs.add(classBasesTuple(cls)); initArgs.add(cls.namespace);
+                    invokeMetaclassHook(meta,cls,initMethod,initArgs,kwargs);
+                }
+            }
+        } else {
+            classFinalizeCore(provisional,kwargs);
+        }
+        if(provisional.namespace!=null) PENDING_CLASS_NAMESPACES.remove(provisional.namespace);
+        return created;
     }
     public static Object makeSuper(Object currentClass, Object self) {
         if (!(currentClass instanceof PyClass cls) || !(self instanceof PyInstance instance))
@@ -1652,6 +1750,16 @@ public final class PyRuntime {
         return instantiate(cls,args,new LinkedHashMap<Object,Object>());
     }
     private static Object instantiate(PyClass cls, Object[] args, Map<Object,Object> kwargs) {
+        if(cls.metaclass!=null) {
+            PyMethod call=cls.metaclass.lookupMethod("__call__");
+            if(call!=null) {
+                return invokeMetaclassHook(cls.metaclass,cls,call,new ArrayList<Object>(Arrays.asList(args)),kwargs);
+            }
+        }
+        return instantiateDirect(cls,args,kwargs);
+    }
+
+    private static Object instantiateDirect(PyClass cls,Object[] args,Map<Object,Object> kwargs) {
         Object created;
         PyMethod newMethod=cls.lookupMethod("__new__");
         if(newMethod!=null) {
@@ -1677,12 +1785,48 @@ public final class PyRuntime {
         return created;
     }
 
+    private static Object builtinTypeNew(List<Object> args,Map<Object,Object> kwargs) {
+        if(args.size()<4) throw new PyException("TypeError","type.__new__() requires metaclass, name, bases, and namespace");
+        if(!(args.get(0) instanceof PyClass meta) || !meta.isMetaclassClass) throw new PyException("TypeError","type.__new__() first argument must be a metaclass");
+        if(!(args.get(1) instanceof String name)) throw new PyException("TypeError","type.__new__() name must be str");
+        if(!(args.get(2) instanceof PyTuple bases)) throw new PyException("TypeError","type.__new__() bases must be tuple");
+        if(!(args.get(3) instanceof Map<?,?> rawNamespace)) throw new PyException("TypeError","type.__new__() namespace must be mapping");
+        @SuppressWarnings("unchecked") Map<Object,Object> namespace=(Map<Object,Object>)rawNamespace;
+
+        PyClass cls=PENDING_CLASS_NAMESPACES.get(namespace);
+        if(cls==null) {
+            cls=new PyClass("__main__",name);
+            for(Object base:bases.items) {
+                if(base instanceof PyClass pyBase) cls.bases.add(pyBase);
+                else if(base instanceof PyBuiltinType builtin && builtin.name.equals("object")) {}
+                else throw new PyException("TypeError","type.__new__() bases must contain classes");
+            }
+            cls.namespace=namespace;
+        }
+        cls.metaclass=meta;
+        for(var entry:namespace.entrySet()) {
+            if(entry.getKey() instanceof String key && !key.equals("__module__") && !key.equals("__qualname__")) {
+                if(!cls.methods.containsKey(key) && !cls.properties.containsKey(key)) cls.attrs.put(key,entry.getValue());
+            }
+        }
+        classFinalizeCore(cls,kwargs);
+        return cls;
+    }
+
     private static void requireArgs(String name,Object[] args,int count) { if(args.length!=count) throw new PyException("TypeError",name+"() takes "+count+" arguments"); }
 
     public static Object callMethodDynamic(Object obj,Object nameObj,Object argsObj,Object kwargsObj) {
         @SuppressWarnings("unchecked") List<Object> args=(List<Object>)argsObj;
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         String name=(String)nameObj;
+        if(obj instanceof PyBuiltinType builtin && builtin.name.equals("type")) {
+            if(name.equals("__new__")) return builtinTypeNew(args,kwargs);
+            if(name.equals("__init__")) return null;
+            if(name.equals("__call__")) {
+                if(args.isEmpty() || !(args.get(0) instanceof PyClass cls)) throw new PyException("TypeError","type.__call__ requires a class");
+                return instantiateDirect(cls,args.subList(1,args.size()).toArray(),kwargs);
+            }
+        }
         if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
         if(obj instanceof PyInstance || obj instanceof PyClass || obj instanceof PySuper) {
             Object callable=getattr(obj,name);
@@ -1707,6 +1851,14 @@ public final class PyRuntime {
                 requireArgs(name,args,1);
                 if(!(args[0] instanceof PyClass cls)) throw new PyException("TypeError","object.__new__() argument must be a type");
                 return new PyInstance(cls);
+            }
+            if(builtin.name.equals("type") && name.equals("__new__")) {
+                return builtinTypeNew(new ArrayList<Object>(Arrays.asList(args)),new LinkedHashMap<>());
+            }
+            if(builtin.name.equals("type") && name.equals("__init__")) return null;
+            if(builtin.name.equals("type") && name.equals("__call__")) {
+                if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__ requires a class");
+                return instantiateDirect(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<>());
             }
             throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
         }
@@ -2063,6 +2215,10 @@ public final class PyRuntime {
         final LinkedHashMap<String,PyMethod> methods = new LinkedHashMap<>();
         final LinkedHashMap<String,PyProperty> properties = new LinkedHashMap<>();
         final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
+        Map<Object,Object> namespace = null;
+        PyClass metaclass = null;
+        boolean isMetaclassClass = false;
+        boolean finalized = false;
         List<PyClass> mro = List.of(this);
         PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; }
 
