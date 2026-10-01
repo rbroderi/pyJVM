@@ -105,6 +105,7 @@ class ClassInfo:
     attrs: list[tuple[str, ast.expr]]
     class_field: str
     metaclass: str | None = None
+    keywords: list[tuple[str, ast.expr]] | None = None
 
 
 @dataclass
@@ -428,12 +429,16 @@ class Compiler:
 
     def _register_class(self, node: ast.ClassDef) -> None:
         metaclass: str | None = None
-        if node.keywords:
-            for kw in node.keywords:
-                if kw.arg == "metaclass" and isinstance(kw.value, ast.Name):
-                    metaclass = kw.value.id
-                else:
-                    raise CompileError("class keywords currently support only metaclass=<name>")
+        class_keywords: list[tuple[str, ast.expr]] = []
+        for kw in node.keywords:
+            if kw.arg is None:
+                raise CompileError("** class keyword expansion is not implemented yet")
+            if kw.arg == "metaclass":
+                if not isinstance(kw.value, ast.Name):
+                    raise CompileError("metaclass must currently be a simple name")
+                metaclass = kw.value.id
+            else:
+                class_keywords.append((kw.arg, kw.value))
         bases: list[str] = []
         for base in node.bases:
             if not isinstance(base, ast.Name):
@@ -499,7 +504,7 @@ class Compiler:
             raise CompileError("method decorators currently support @property and @name.setter")
         class_field = f"__py_class_{node.name}"
         self.cf.add_field(Field(class_field))
-        self.classes[node.name] = ClassInfo(node.name, bases, methods, properties, attrs, class_field, metaclass)
+        self.classes[node.name] = ClassInfo(node.name, bases, methods, properties, attrs, class_field, metaclass, class_keywords)
 
     def _compile_class_methods(self, node: ast.ClassDef) -> None:
         info = self.classes[node.name]
@@ -1943,10 +1948,17 @@ class Compiler:
                     b.aload(class_slot); self._load_name(base_name, b, scope)
                     b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
 
+                b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                class_kw_slot = scope.temp(); b.astore(class_kw_slot)
+                for kw_name, kw_value in (info.keywords or []):
+                    b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
+                    b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
+
                 b.aload(class_slot)
                 if info.metaclass is None: b.aconst_null()
                 else: self._load_name(info.metaclass, b, scope)
-                b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}){OBJ}")
+                b.aload(class_kw_slot)
+                b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}{OBJ}){OBJ}")
                 namespace_slot = scope.temp(); b.astore(namespace_slot)
                 for attr_name, attr_value in info.attrs:
                     self._expr(attr_value, b, scope)
@@ -1985,8 +1997,8 @@ class Compiler:
                 b.aload(class_slot)
                 if info.metaclass is None: b.aconst_null()
                 else: self._load_name(info.metaclass, b, scope)
-                b.aload(namespace_slot)
-                b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                b.aload(namespace_slot); b.aload(class_kw_slot)
+                b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
                 b.astore(class_slot)
                 for decorator_slot in reversed(decorator_slots):
                     b.aload(decorator_slot)
