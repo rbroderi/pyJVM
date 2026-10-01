@@ -1621,8 +1621,9 @@ public final class PyRuntime {
         return selected;
     }
 
-    public static Object classPrepare(Object clsObj,Object explicitMeta) {
+    public static Object classPrepare(Object clsObj,Object explicitMeta,Object kwargsObj) {
         PyClass cls=(PyClass)clsObj;
+        @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         PyClass meta=resolveMetaclass(cls,explicitMeta);
         cls.metaclass=meta;
         PyClassNamespace namespace=new PyClassNamespace(cls);
@@ -1634,7 +1635,7 @@ public final class PyRuntime {
             if(prepare!=null) {
                 ArrayList<Object> args=new ArrayList<>();
                 args.add(cls.name); args.add(explicitBasesTuple(cls));
-                Object prepared=invokeOnClassKw(meta,prepare,args,new LinkedHashMap<Object,Object>());
+                Object prepared=invokeOnClassKw(meta,prepare,args,kwargs);
                 if(!(prepared instanceof Map<?,?> map))
                     throw new PyException("TypeError","__prepare__() must return a mapping");
                 namespace.clear();
@@ -1671,9 +1672,10 @@ public final class PyRuntime {
         return method.function.call(actual,kwargs);
     }
 
-    public static Object classFinish(Object clsObj,Object explicitMeta,Object namespaceObj) {
+    public static Object classFinish(Object clsObj,Object explicitMeta,Object namespaceObj,Object kwargsObj) {
         PyClass prebuilt=(PyClass)clsObj;
         @SuppressWarnings("unchecked") Map<Object,Object> namespace=(Map<Object,Object>)namespaceObj;
+        @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         PyClass meta=resolveMetaclass(prebuilt,explicitMeta);
         prebuilt.metaclass=meta;
 
@@ -1683,20 +1685,20 @@ public final class PyRuntime {
             if(newMethod!=null) {
                 ArrayList<Object> args=new ArrayList<>();
                 args.add(meta); args.add(prebuilt.name); args.add(explicitBasesTuple(prebuilt)); args.add(namespaceObj);
-                created=invokeOnClassKw(meta,newMethod,args,new LinkedHashMap<Object,Object>());
+                created=invokeOnClassKw(meta,newMethod,args,kwargs);
             }
         }
 
         if(created instanceof PyClass cls) {
             cls.metaclass=meta;
             syncNamespaceToClass(cls,namespace);
-            if(!cls.finalized) classFinalize(cls);
+            if(!cls.finalized) classFinalizeWithKeywords(cls,kwargs);
             if(meta!=null) {
                 PyMethod init=meta.lookupMethod("__init__");
                 if(init!=null) {
                     ArrayList<Object> initArgs=new ArrayList<>();
                     initArgs.add(cls.name); initArgs.add(explicitBasesTuple(cls)); initArgs.add(namespaceObj);
-                    Object result=invokeMetaclassInstance(init,cls,initArgs,new LinkedHashMap<Object,Object>());
+                    Object result=invokeMetaclassInstance(init,cls,initArgs,kwargs);
                     if(result!=null) throw new PyException("TypeError","metaclass __init__() should return None");
                 }
             }
@@ -1729,8 +1731,7 @@ public final class PyRuntime {
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
         ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
     }
-    public static void classFinalize(Object clsObj) {
-        PyClass cls=(PyClass)clsObj;
+    private static void classFinalizeWithKeywords(PyClass cls,Map<Object,Object> kwargs) {
         if(cls.finalized) return;
         cls.computeMro();
 
@@ -1743,13 +1744,17 @@ public final class PyRuntime {
             }
         }
 
-        // The first inherited hook follows the class MRO; cooperative hooks can
-        // explicitly call super().__init_subclass__().
+        // Class declaration keywords that were not consumed by the metaclass are
+        // forwarded to the inherited __init_subclass__ hook.
         if(!cls.bases.isEmpty()) {
             PyMethod hook=cls.lookupMethodAfter(cls,"__init_subclass__");
-            if(hook!=null) invokeOnClass(cls,hook,new Object[0]);
+            if(hook!=null) invokeOnClassKw(cls,hook,new ArrayList<>(),kwargs);
         }
         cls.finalized=true;
+    }
+
+    public static void classFinalize(Object clsObj) {
+        classFinalizeWithKeywords((PyClass)clsObj,new LinkedHashMap<>());
     }
     public static Object makeSuper(Object currentClass, Object self) {
         if (!(currentClass instanceof PyClass cls) || !(self instanceof PyInstance instance))
