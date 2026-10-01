@@ -51,6 +51,7 @@ jobs:
             --output artifacts/cpython-regression-probe.json \
             --top 30
       - name: Upload regression probe report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cpython-regression-probe
