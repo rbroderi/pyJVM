@@ -421,3 +421,21 @@ This also removes the older generator limitation on `return` / `break` /
 The strict focused differential corpus passes 77/77 executable cases with
 0 unsupported and 0 failed.
 
+## 0.21 Python class creation hooks
+
+Version 0.21 implements the next layer of Python's class creation protocol. `__new__`
+is implicitly static and participates in allocation before `__init__`; a non-instance
+result from `__new__` correctly skips `__init__`. `object.__new__(cls)` is available
+as the primitive allocator.
+
+Class finalization now follows PEP 487 ordering: class attributes whose values define
+`__set_name__` receive the final owner and attribute name before the inherited
+`__init_subclass__` hook is invoked.
+
+The runtime also exposes class/instance creation metadata including `__class__`,
+`__dict__`, `__name__`, `__qualname__`, `__module__`, `__bases__`, and
+`__mro__`, and explicit `class C(object)` bases are supported.
+
+The strict focused differential corpus passes 80/80 executable cases with
+0 unsupported and 0 failed.
+
