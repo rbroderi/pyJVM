@@ -1,22 +1,19 @@
 {
-  "version": "0.23.0",
+  "version": "0.24.0",
   "frontend": "Python 3.15 AST feature level",
   "ci_reference_python": "3.14 until GitHub setup-python exposes 3.15",
-  "focused_conformance": {"passed": 88, "unsupported": 0, "failed": 0},
+  "focused_conformance": {"passed": 95, "unsupported": 0, "failed": 0},
   "new_features": [
-    "__slots__ layout parsing during class finalization",
-    "slot data descriptors in class dictionaries",
-    "separate slot storage from instance __dict__",
-    "dict-less slotted instance attribute enforcement",
-    "inherited slot access",
-    "normal __dict__ restoration for subclasses without __slots__",
-    "explicit __dict__ slot support",
-    "slot/class-variable conflict detection"
+    "compiler-side class-private name mangling",
+    "private methods/properties/class attributes share CPython mangled keys",
+    "private __slots__ references resolve through mangled descriptors",
+    "leading-underscore/all-underscore class-name mangling rules",
+    "slot identifier validation"
   ],
   "next_focus": [
-    "slot name mangling and additional CPython slot edge cases",
-    "larger CPython 3.15 test_descr/test_metaclass slices",
-    "star imports and stronger import protocol",
-    "bytes/bytearray/memoryview builtin coverage"
+    "star imports and __all__ semantics",
+    "stronger package/import metadata",
+    "bytes/bytearray/memoryview builtin coverage",
+    "larger CPython 3.15 test_descr/import slices"
   ]
 }
