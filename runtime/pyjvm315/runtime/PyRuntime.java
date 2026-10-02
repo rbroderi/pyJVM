@@ -612,6 +612,7 @@ public final class PyRuntime {
     private static PyComplex complexValue(Object value){return value instanceof PyComplex z?z:new PyComplex(complexReal(value,false),0.0);}
     private static Object complexConstructor(List<Object> args,Map<Object,Object> kwargs){
         if(args.size()>2)throw new PyException("TypeError","complex() takes at most 2 arguments");
+        boolean singlePositional=args.size()==1 && kwargs.isEmpty(),converted=false;
         Object real=args.isEmpty()?0L:args.get(0),imag=args.size()<2?0L:args.get(1);
         boolean hasImag=args.size()==2;
         for(Map.Entry<Object,Object> entry:kwargs.entrySet()){
@@ -619,16 +620,16 @@ public final class PyRuntime {
             else if(entry.getKey().equals("imag")){if(hasImag)throw new PyException("TypeError","multiple values for imag");imag=entry.getValue();hasImag=true;}
             else throw new PyException("TypeError","invalid complex() keyword");
         }
-        if(real instanceof String text){if(hasImag)throw new PyException("TypeError","complex() can't take second arg if first is a string");return parseComplex(text);}
+        if(real instanceof String text){if(!singlePositional)throw new PyException("TypeError","complex() string input requires one positional argument");return parseComplex(text);}
         if(real instanceof PyInstance instance){
             PyMethod method=instance.cls.lookupMethod("__complex__");
-            if(method!=null){real=invoke(instance,method,new Object[0]);if(!(real instanceof PyComplex))throw new PyException("TypeError","__complex__ returned non-complex");}
+            if(method!=null){real=invoke(instance,method,new Object[0]);converted=true;if(!(real instanceof PyComplex))throw new PyException("TypeError","__complex__ returned non-complex");}
         }
-        if(!hasImag && real instanceof PyComplex)return real;
+        if(singlePositional && !converted && real instanceof PyComplex)return real;
         double r=real instanceof PyComplex z?z.real:complexReal(real,true);
-        double i=hasImag?(imag instanceof PyComplex z?z.real:complexReal(imag,true)):0.0;
+        double i=hasImag?(imag instanceof PyComplex z?z.real:complexReal(imag,true)):(real instanceof PyComplex z?z.imag:0.0);
         if(hasImag && imag instanceof PyComplex z)r-=z.imag;
-        if(real instanceof PyComplex z)i+=z.imag;
+        if(hasImag && real instanceof PyComplex z)i+=z.imag;
         return new PyComplex(r,i);
     }
     private static final String COMPLEX_NUMBER="(?:[0-9](?:_?[0-9])*(?:\\.(?:[0-9](?:_?[0-9])*)?)?|\\.[0-9](?:_?[0-9])*)(?:[eE][+-]?[0-9](?:_?[0-9])*)?|inf(?:inity)?|nan";

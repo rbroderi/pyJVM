@@ -19,12 +19,17 @@ for value in ['', '1 +2j', '1++2j', '1e+j', '1_', '1+2', '()', '0x1j']:
         print('malformed', repr(value))
 for operation in [lambda: alias('1j', 2), lambda: alias(None),
                   lambda: alias(1, real=2), lambda: alias(1, 2, 3),
+                  lambda: alias(real='1j'), lambda: alias(complex='1j'),
                   lambda: alias(foo=1), lambda: alias(10 ** 1000)]:
     try:
         operation()
     except (TypeError, OverflowError) as error:
         print(type(error).__name__)
 z = 3+4j
+class ExistingComplex:
+    def __complex__(self): return z
+print(alias(ExistingComplex()) is z, alias(real=z) is z)
+print(alias(real=complex(-0.0, -0.0)))
 print(alias(z) is z, callable(z.conjugate), z.conjugate(), z.conjugate.__class__ is type(z.conjugate))
 print(hasattr(z, 'unknown'))
 try:
