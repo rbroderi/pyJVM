@@ -110,6 +110,7 @@ class FinallyContext:
     branch_entries: dict[object, object]
     manager_slot: int | None = None
     async_manager: bool = False
+    loop_depth: int = 0
 
 
 class Scope:
@@ -273,7 +274,7 @@ class Compiler:
             self.cf.add_field(Field(field_name))
 
     def _load_name(self, name: str, b: CodeBuilder, scope: Scope) -> None:
-        if scope.namespace_slot is not None and name not in scope.global_decl:
+        if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
             key = self._class_attr_name(name)
             missing, done = b.label(), b.label()
             b.aload(scope.namespace_slot); b.ldc_string(key)
@@ -335,7 +336,7 @@ class Compiler:
 
     def _store_name(self, name: str, b: CodeBuilder, scope: Scope, *, temp_scope: Scope | None = None) -> None:
         b.ldc_string(name); b.invokestatic(RUNTIME, "frameSetLocalValue", f"({OBJ}{OBJ}){OBJ}")
-        if scope.namespace_slot is not None and name not in scope.global_decl:
+        if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
             value_slot = (temp_scope or scope).temp(); b.astore(value_slot)
             b.aload(scope.namespace_slot); b.ldc_string(self._class_attr_name(name)); b.aload(value_slot)
             b.invokestatic(RUNTIME, "classNamespacePut", f"({OBJ}{OBJ}{OBJ})V")
@@ -380,7 +381,10 @@ class Compiler:
             for element in target.elts: self._delete_target(element, b, scope)
         elif isinstance(target, ast.Name):
             name = target.id
-            if scope.module or name in scope.global_decl:
+            if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
+                b.aload(scope.namespace_slot); b.ldc_string(self._class_attr_name(name))
+                b.invokestatic(RUNTIME, "classNamespaceDelete", f"({OBJ}{OBJ})V")
+            elif scope.module or name in scope.global_decl:
                 field = self._global_field(name)
                 b.getstatic(self.class_name, field, OBJ); b.ldc_string(name)
                 b.invokestatic(RUNTIME, "requireGlobal", f"({OBJ}{OBJ}){OBJ}"); b.pop()
@@ -411,10 +415,12 @@ class Compiler:
         elif isinstance(target, ast.Starred): out.update(Compiler._target_names(target.value))
         return out
 
-    def _function_locals(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[set[str], set[str], set[str]]:
-        locals_: set[str] = {a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs}
-        if node.args.vararg: locals_.add(node.args.vararg.arg)
-        if node.args.kwarg: locals_.add(node.args.kwarg.arg)
+    def _function_locals(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> tuple[set[str], set[str], set[str]]:
+        locals_: set[str] = set()
+        if not isinstance(node, ast.ClassDef):
+            locals_.update(a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs)
+            if node.args.vararg: locals_.add(node.args.vararg.arg)
+            if node.args.kwarg: locals_.add(node.args.kwarg.arg)
         globals_: set[str] = set(); nonlocals: set[str] = set()
 
         def visit_stmt(stmt: ast.stmt) -> None:
@@ -428,6 +434,10 @@ class Compiler:
             elif isinstance(stmt, ast.AugAssign): locals_.update(self._target_names(stmt.target))
             elif isinstance(stmt, ast.Delete):
                 for target in stmt.targets: locals_.update(self._target_names(target))
+            elif isinstance(stmt, ast.Import):
+                locals_.update(alias.asname or alias.name.split('.')[0] for alias in stmt.names)
+            elif isinstance(stmt, ast.ImportFrom):
+                locals_.update(alias.asname or alias.name for alias in stmt.names if alias.name != '*')
             elif isinstance(stmt, (ast.For, ast.AsyncFor)):
                 locals_.update(self._target_names(stmt.target))
                 for x in stmt.body + stmt.orelse: visit_stmt(x)
@@ -581,16 +591,6 @@ class Compiler:
         bases: list[ast.expr] = list(node.bases)
         if any(isinstance(base, ast.Starred) for base in bases):
             raise CompileError("starred class bases are not implemented yet")
-        for item in node.body:
-            if isinstance(item, (ast.Pass, ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant):
-                continue
-            if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
-                continue
-            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
-                continue
-            raise CompileError("class bodies currently support methods and simple class attributes")
         local = not top_level
         class_field = self.global_fields.get(node.name, f"__py_class_{node.name}") if top_level else f"__py_local_class_{len(self.class_nodes)}"
         if top_level and not any(field.name == class_field for field in self.cf.fields):
@@ -604,13 +604,33 @@ class Compiler:
             self._alias_global_field(node.name, class_field)
         # Class attributes are not a method lexical scope. Capture the
         # enclosing function plus a private cell for zero-argument super.
-        for item in node.body:
+        _, globals_, nonlocals = self._function_locals(node)
+        for name in nonlocals:
+            if not any(name in names for names in enclosing_locals):
+                raise CompileError(f"no binding for nonlocal {name!r} found")
+        # Allocate declared globals before main initializes every field to UNBOUND.
+        for name in globals_ - self.global_fields.keys():
+            self.global_names.add(name)
+            field = f"__py_global_{name}"
+            self.global_fields[name] = field
+            self.cf.add_field(Field(field))
+        self._register_definitions(node.body, [*enclosing_locals, {"__class__"}],
+                                   qualname=qualname + ".")
+        for item in self._class_method_nodes(node.body):
+            self.function_nodes.remove(item)
+            self.function_infos[id(item)].free_names.add("__class__")
+
+    def _class_method_nodes(self, body):
+        """Methods in this class's suites, excluding nested lexical scopes."""
+        for item in body:
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self._register_function_tree(item, [*enclosing_locals, {"__class__"}],
-                                             qualname=qualname + "." + item.name)
-                self.function_nodes.remove(item)
-                fn = self.function_infos[id(item)]
-                fn.free_names.add("__class__")
+                yield item
+            elif not isinstance(item, ast.ClassDef):
+                for child in ast.iter_child_nodes(item):
+                    if isinstance(child, ast.stmt):
+                        yield from self._class_method_nodes([child])
+                    elif isinstance(child, ast.ExceptHandler):
+                        yield from self._class_method_nodes(child.body)
 
 
     @_preserve_codegen_state
@@ -619,11 +639,10 @@ class Compiler:
         old_class, old_self = self.current_class, self.current_method_self
         self.current_class = info
         try:
-            for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    function = self.function_infos[id(item)]
-                    self.current_method_self = function.positional[0] if function.positional else None
-                    self._compile_function(item)
+            for item in self._class_method_nodes(node.body):
+                function = self.function_infos[id(item)]
+                self.current_method_self = function.positional[0] if function.positional else None
+                self._compile_function(item)
         finally:
             self.current_class, self.current_method_self = old_class, old_self
 
@@ -1873,6 +1892,7 @@ class Compiler:
             def visit_Continue(self, node): self.found = True
             def visit_FunctionDef(self, node): return
             def visit_AsyncFunctionDef(self, node): return
+            def visit_ClassDef(self, node): return
             def visit_Lambda(self, node): return
         v=V()
         for stmt in stmts:
@@ -1888,6 +1908,10 @@ class Compiler:
             b.areturn()
 
     def _branch_cleanup_entry(self, ctx: FinallyContext, target: object, b: CodeBuilder) -> object:
+        # A loop nested inside this context does not leave it on break/continue.
+        for depth, destinations in enumerate(self.loop_stack):
+            if target in destinations and depth >= ctx.loop_depth:
+                return target
         if target not in ctx.branch_entries:
             ctx.branch_entries[target] = b.label()
         return ctx.branch_entries[target]
@@ -1914,7 +1938,7 @@ class Compiler:
                              finalbody: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         start, protected_end, handler, done = b.label(), b.label(), b.label(), b.label()
         exc_slot = scope.temp(); return_slot = scope.temp(); return_entry = b.label()
-        ctx = FinallyContext(finalbody, return_slot, return_entry, {})
+        ctx = FinallyContext(finalbody, return_slot, return_entry, {}, loop_depth=len(self.loop_stack))
         b.mark(start)
         self.finally_stack.append(ctx)
         if handlers:
@@ -1955,7 +1979,7 @@ class Compiler:
         item, rest = items[0], items[1:]
         manager_slot, exc_slot = scope.temp(), scope.temp()
         return_slot = scope.temp(); return_entry = b.label()
-        ctx = FinallyContext([], return_slot, return_entry, {}, manager_slot=manager_slot, async_manager=is_async)
+        ctx = FinallyContext([], return_slot, return_entry, {}, manager_slot=manager_slot, async_manager=is_async, loop_depth=len(self.loop_stack))
         self._expr(item.context_expr, b, scope); b.astore(manager_slot)
         b.aload(manager_slot); b.invokestatic(RUNTIME, "asyncWithEnter" if is_async else "withEnter", f"({OBJ}){OBJ}")
         if item.optional_vars is None: b.pop()
@@ -2106,14 +2130,12 @@ class Compiler:
                 body_scope = Scope(start_slot=scope.next_slot, parent=scope,
                                    env_mode=True, env_slot=closure_slot)
                 body_scope.free_names = scope.local_names | scope.free_names
-                body_scope.local_names = {item.name for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
-                for item in node.body:
-                    if isinstance(item, (ast.Assign, ast.AnnAssign)):
-                        targets = item.targets if isinstance(item, ast.Assign) else [item.target]
-                        for target in targets: body_scope.local_names.update(self._target_names(target))
+                body_scope.local_names, body_scope.global_decl, body_scope.nonlocal_decl = self._function_locals(node)
                 body_scope.namespace_slot = namespace_slot
                 old_class = self.current_class
                 self.current_class = info
+                saved_control = self.loop_stack, self.cleanup_stack, self.finally_stack
+                self.loop_stack, self.cleanup_stack, self.finally_stack = [], [], []
                 try:
                     for item in node.body:
                         if item is node.body[0] and isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
@@ -2123,6 +2145,7 @@ class Compiler:
                             self._stmt(item, b, body_scope, in_function=False)
                 finally:
                     self.current_class = old_class
+                    self.loop_stack, self.cleanup_stack, self.finally_stack = saved_control
                 scope.next_slot = max(scope.next_slot, body_scope.next_slot)
 
                 b.aload(class_slot)
@@ -2143,8 +2166,9 @@ class Compiler:
                 if info.local: self._store_name(name, b, scope)
                 else: b.putstatic(self.class_name, info.class_field, OBJ)
             case ast.AnnAssign(target=ast.Name(id=name), value=value):
-                if value is None: b.aconst_null()
-                else: self._expr(value, b, scope)
+                if value is None:
+                    raise CompileError("annotation-only assignments are not implemented yet")
+                self._expr(value, b, scope)
                 self._store_name(name, b, scope)
             case ast.AugAssign(target=ast.Name(id=name), op=op, value=value):
                 self._load_name(name, b, scope)

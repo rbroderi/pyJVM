@@ -32,3 +32,4 @@ Lib/test/test_descr.py::ClassPropertiesAndMethods.test_classmethod_without_dict_
 Lib/test/test_descr.py::ClassPropertiesAndMethods.test_staticmethod_annotations_without_dict_access objects
 Lib/test/test_descr.py::ClassPropertiesAndMethods.test_methods objects
 Lib/test/test_descr.py::ClassPropertiesAndMethods.test_staticmethods objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_compattr objects

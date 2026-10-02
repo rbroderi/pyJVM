@@ -131,3 +131,16 @@ def test_execution_fixture_does_not_accept_absent_or_wrong_exceptions(body, exce
     assert result.returncode != 0
     assert exception in result.stderr
     assert 'CPYTHON CASE PASSED' not in result.stdout
+
+
+@pytest.mark.parametrize('statement', ['break', 'continue'])
+def test_class_suite_cannot_branch_to_enclosing_loop(statement):
+    from pyjvm315.compiler import CompileError
+    with pytest.raises(CompileError, match='outside loop'):
+        compile_source(f'for value in range(2):\n    class Invalid:\n        {statement}\n')
+
+
+def test_annotation_only_class_assignment_remains_explicitly_unsupported():
+    from pyjvm315.compiler import CompileError
+    with pytest.raises(CompileError, match='annotation-only'):
+        compile_source('class Annotated:\n    value: int\n')
