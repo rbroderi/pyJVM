@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **315 compiling cases (88.0%)**,
-43 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **317 compiling cases (88.5%)**,
+41 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **157 passing cases**. A new strict execution
-lane runs **43 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **161 passing cases**. A new strict execution
+lane runs **49 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -722,3 +722,22 @@ covering a nested custom descriptor with private getter/setter/deleter methods.
 Annotation-only assignments remain explicitly unsupported until deferred
 annotation semantics are implemented. Compile coverage is not full CPython
 runtime compatibility.
+
+
+## Ordered builtin compatibility
+
+`min` and `max` support an iterable or multiple positional values, keyword-only
+`key` and `default`, single-pass iteration and first-winner ties. `sorted`
+supports a cached key per item, stable reverse ordering and Python rich
+comparisons. It consumes its iterable before validating sort keywords and
+converting `reverse` to a boolean, matching the Python 3.15 reference. These
+builtins work through aliases and class namespaces; builtin function objects
+retain their identity across lookups.
+
+Ordering handles reflected methods and NotImplemented fallback, NaNs, exact
+mixed integer/float comparisons, Unicode code points, byte sequences and
+lexicographic tuple/list comparisons. `bin`, `oct` and `hex` support arbitrary
+integers and the `__index__` protocol. Six more unchanged CPython bodies pass,
+including five from `test_builtin.py`; the execution corpus now extends beyond
+the five-file compile probe. Stable merge sorting does not reproduce CPython's
+Timsort comparison trace for stateful or inconsistent comparison methods.

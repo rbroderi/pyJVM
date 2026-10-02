@@ -32,6 +32,8 @@ class Fixture:
         assert isinstance(actual, expected), "CPython assertIsInstance failed"
     def assertStartsWith(self, actual, expected):
         assert actual.startswith(expected), "CPython assertStartsWith failed"
+    def assertHasAttr(self, actual, name):
+        assert hasattr(actual, name), "CPython assertHasAttr failed"
     def assertNotHasAttr(self, actual, name):
         assert not hasattr(actual, name), "CPython assertNotHasAttr failed"
     def assertRaises(self, expected, function=None, *args, **kwargs):
