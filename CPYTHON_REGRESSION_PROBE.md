@@ -96,9 +96,9 @@ method bodies for both bytes and bytearray (18 executions), with explicit
 `type2test` and `assertEqual` fixtures. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
-21, strict JVM verification and publishes the execution report. Local validation
-uses the available Python 3.12 reference; the report records the actual oracle
-version and corpus commit.
+21, strict JVM verification and publishes the execution report. Local validation also uses CPython 3.15.0rc2; the report records the actual
+oracle version and corpus commit. The full focused CI lane now uses 3.15 too,
+including the modern ValueError behavior for arbitrarily large chr arguments.
 
 ```bash
 python -m pyjvm315.cpython_execution --cpython-root /path/to/cpython \

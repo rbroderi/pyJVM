@@ -225,8 +225,6 @@ public final class PyRuntime {
         }
         if(!isIntLike(value)) throw new PyException("TypeError","chr() requires an integer");
         BigInteger code=bigInt(value);
-        if(code.compareTo(BigInteger.valueOf(Integer.MIN_VALUE))<0 || code.compareTo(BigInteger.valueOf(Integer.MAX_VALUE))>0)
-            throw new PyException("OverflowError","Python int too large to convert to C int");
         if(code.signum()<0 || code.compareTo(BigInteger.valueOf(0x10ffff))>0)
             throw new PyException("ValueError","chr() arg not in range(0x110000)");
         return new String(Character.toChars(code.intValue()));

@@ -24,6 +24,6 @@ except TypeError:
 
 try:
     chr(2**100)
-except OverflowError:
-    print("chr overflow")
+except ValueError:
+    print("chr value error")
 print(ord("\0"), ord("\ud800"))
