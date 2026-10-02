@@ -69,14 +69,14 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche | Ordered-builtin tranche |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Compiles | 125 | 264 | 299 | 303 | 312 | 315 | 317 |
-| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 | 41 |
-| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Total | 358 | 358 | 358 | 358 | 358 | 358 | 358 |
+| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche | Ordered-builtin tranche | Super tranche |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Compiles | 125 | 264 | 299 | 303 | 312 | 315 | 317 | 319 |
+| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 | 41 | 39 |
+| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Total | 358 | 358 | 358 | 358 | 358 | 358 | 358 | 358 |
 
-Compile coverage increased from 34.9% to 88.5% (+192 cases; +2 this tranche). The probe now
+Compile coverage increased from 34.9% to 89.1% (+194 cases; +2 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,13 +90,13 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 161 cases. A separate
-`pyjvm315.cpython_execution` lane executes 36 unchanged CPython test
-bodies (49 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 165 cases. A separate
+`pyjvm315.cpython_execution` lane executes 43 unchanged CPython test
+bodies (56 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Six
-ClassPropertiesAndMethods bodies and five BuiltinTest/TestSorted bodies use an
-objects fixture with assertions only. Explicit fixtures implement
+ClassPropertiesAndMethods bodies, five BuiltinTest/TestSorted bodies and seven
+TestSuper bodies use an objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -122,11 +122,11 @@ copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 41 cases remain visible as unsupported; no
+support strategy. The remaining 39 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 317 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 317`). The old 0.31
+Compiler errors and compilation coverage below 319 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 319`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -248,3 +248,39 @@ Comparator contract. It does not reproduce CPython Timsort's exact comparison
 trace or every result for stateful/inconsistent orderings. Deferred annotations,
 dynamic execution, external/native modules and remaining builtin semantics
 still need implementation and broader runtime evidence.
+
+
+### Super protocol tranche
+
+The pinned probe reaches **319/358 (89.1%)**, 39 unsupported and zero compiler
+errors. `test_metaclass` and `test_supers` now compile. These counts do not
+establish runtime success: the unchanged `test_supers` execution body still
+requires `%` string formatting and is not counted as passing.
+
+Four new focused programs bring the differential corpus to **165 cases**.
+They exercise first-class constructors, unbound descriptor binding, cooperative
+subclasses, readonly metadata, repeated initialization, class/instance receivers,
+object/type/super MRO boundaries and metaclass data-descriptor precedence.
+Zero-argument calls use a recorded first argument and class-cell context;
+argument environments preserve nonlocal changes, and resumed generators restore
+that context. Generator expressions use their implicit iterable argument.
+Class suites use isolated logical frames with exception-safe cleanup, including
+literal-only suites, verified under Java 21.
+
+Seven unchanged TestSuper bodies are added: `test___class___instancemethod`,
+`test___class___classmethod`, `test___class___staticmethod`, `test_shadowed_local`,
+`test_super___class__`, `test_super_subclass___class__` and `test_super_init_leaks`.
+The execution lane now covers **43 bodies / 56 passing executions**, with no
+substituted imports or globals. Executing the last body validates repeated
+initialization but does not replace CPython's dedicated reference-leak runner.
+Metaclass class-cell propagation/validation, custom super attribute overrides,
+copying/pickling, string formatting and external/native modules still need work.
+
+The benchmark gate caught a 4.84x collection regression in this tranche. The
+shared runtime dispatcher had grown to 8,275 bytes and JDK 21 PrintCompilation
+showed it stayed uncompiled. Splitting builtin-type handling into a helper
+reduced it to 7,211 bytes and restored tier-3/tier-4 compilation. The final
+head/base ratios were 0.95 arithmetic, 0.97 range loop, 1.00 calls and 1.02
+collections, with all checksums and the regression gate passing. Both generated
+and runtime-control timings exposed the dispatch cost; it was not counted as
+unavoidable Python semantics overhead.

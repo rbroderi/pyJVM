@@ -360,6 +360,7 @@ public final class PyRuntime {
     private static final java.util.concurrent.ConcurrentHashMap<String,PyBuiltinType> BUILTIN_TYPES = new java.util.concurrent.ConcurrentHashMap<>();
     public static Object builtinType(Object nameObj){return BUILTIN_TYPES.computeIfAbsent((String)nameObj,PyBuiltinType::new);}
     public static Object typeOf(Object value){
+        if(value instanceof PySuper sup && sup.cls==SUPER_CLASS)return builtinType("super");
         if(value instanceof PyInstance i) return i.cls;
         if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : builtinType("type");
         return builtinType(typeName(value));
@@ -1978,7 +1979,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -2023,18 +2024,22 @@ public final class PyRuntime {
         boolean buffered = false;
         Object bufferedValue = null;
         String displayName, filename; long firstlineno;
+        String firstArgument; boolean hasClassCell;
 
         PyGenerator(String owner, String resumeMethod, PyEnv env) {
             this(owner,resumeMethod,env,resumeMethod,owner,0);
         }
         PyGenerator(String owner,String resumeMethod,PyEnv env,String displayName,String filename,long firstlineno) {
             this.owner=owner; this.resumeMethod=resumeMethod; this.env=env; this.displayName=displayName; this.filename=filename; this.firstlineno=firstlineno;
+            ActiveFrame frame=currentLogicalFrame();
+            if(frame!=null){firstArgument=frame.firstArgument;hasClassCell=frame.classEnv!=null;}
         }
 
         private Object advance() {
             if (finished) throw new PyGeneratorEnd(returnValue);
             started = true;
             ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
             LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
@@ -2123,6 +2128,10 @@ public final class PyRuntime {
     public static Object makeAsyncGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
         PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyAsyncGenerator(frame,(String)nameObj);
+    }
+    public static void setGeneratorFirstArgument(Object generator,Object name){
+        PyGenerator frame=generator instanceof PyAsyncGenerator async?async.frame:(PyGenerator)generator;
+        frame.firstArgument=(String)name;
     }
     public static Object generatorEnv(Object genObj) { return ((PyGenerator)genObj).env; }
     public static Object generatorState(Object genObj) { return ((PyGenerator)genObj).state; }
@@ -2269,6 +2278,7 @@ public final class PyRuntime {
         function.metadata.put("__module__",module);function.metadata.put("__qualname__",qualname);
         function.metadata.put("__name__",function.displayName);function.metadata.put("__doc__",doc);
     }
+    public static void setFunctionClassCell(Object function,Object present){((PyFunction)function).hasClassCell=truth(present);}
     public static void setFunctionAnnotated(Object function){((PyFunction)function).hasAnnotations=true;}
     public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
     public static void setFunctionAsyncGenerator(Object functionObj) { ((PyFunction)functionObj).asyncGeneratorMode=true; }
@@ -2293,6 +2303,7 @@ public final class PyRuntime {
             return callMethod(method.self,method.name,args.toArray());
         }
         if (callable instanceof PyBuiltinType type) {
+            if(type.name.equals("super"))return superConstructor(args,kwargs);
             if(type.name.equals("classmethod") || type.name.equals("staticmethod")){
                 if(!kwargs.isEmpty() || args.size()!=1)throw new PyException("TypeError",type.name+"() requires one positional argument");
                 return methodDescriptor(args.get(0),type.name.equals("classmethod")?"class":"static");
@@ -2372,7 +2383,7 @@ public final class PyRuntime {
         final PyEnv closure;
         final boolean envMode;
         String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
-        boolean hasAnnotations=false;
+        boolean hasAnnotations=false,hasClassCell=false;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -2442,6 +2453,8 @@ public final class PyRuntime {
 
         private Object invokeStatic(Object[] bound) {
             ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+            logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
+            logical.classEnv=hasClassCell?closure:null;
             List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
             if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
             for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
@@ -2692,6 +2705,7 @@ public final class PyRuntime {
     private static final class ActiveFrame {
         final String name, filename; final long firstlineno; long line;
         final LinkedHashMap<Object,Object> locals = new LinkedHashMap<>();
+        String firstArgument; PyEnv classEnv,argumentEnv;
         ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}
     }
     private static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
@@ -2700,6 +2714,7 @@ public final class PyRuntime {
     }
     public static void popLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.pop();}
     public static void setCurrentLine(Object lineObj){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.peek().line=bigInt(lineObj).longValue();}
+    public static void frameSetArgumentEnv(Object env){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.argumentEnv=(PyEnv)env;}
     public static void frameSetLocal(Object nameObj,Object value){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);}
     public static Object frameSetLocalValue(Object value,Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);return value;}
     public static void frameDelLocal(Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.remove(nameObj);}
@@ -2880,7 +2895,7 @@ public final class PyRuntime {
     public static void classAddBase(Object cls, Object base) {
         PyClass target=(PyClass)cls;
         if(base instanceof PyClass pyBase){target.bases.add(pyBase);return;}
-        if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type"))) {
+        if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super"))) {
             target.builtinBaseName=builtin.name;
             return;
         }
@@ -3154,11 +3169,86 @@ public final class PyRuntime {
     public static void classFinalize(Object clsObj) {
         classFinalizeWithKeywords((PyClass)clsObj,new LinkedHashMap<>());
     }
-    public static Object makeSuper(Object currentClass, Object self) {
-        if (!(currentClass instanceof PyClass cls))throw new PyException("TypeError", "super() argument 1 must be a class");
-        PyClass owner=self instanceof PyInstance instance?instance.cls:self instanceof PyClass type?type:null;
-        if(owner==null || !owner.mro.contains(cls))throw new PyException("TypeError", "super(type, obj): obj must be an instance or subtype of type");
-        return new PySuper(cls, self,owner);
+    private static boolean isType(Object value){return value instanceof PyClass || value instanceof PyBuiltinType;}
+    private static List<Object> typeMro(Object type) {
+        ArrayList<Object> mro=new ArrayList<>();
+        String builtin=null;
+        if(type instanceof PyClass cls){mro.addAll(cls.mro);for(PyClass base:cls.mro)if(base.builtinBaseName!=null){builtin=base.builtinBaseName;break;}}
+        else if(type instanceof PyBuiltinType nativeType)builtin=nativeType.name;
+        else throw new PyException("TypeError","expected a type");
+        if(builtin!=null){
+            mro.add(builtinType(builtin));
+            if(builtin.equals("bool"))mro.add(builtinType("int"));
+            for(String parent=EXCEPTION_PARENTS.get(builtin);parent!=null;parent=EXCEPTION_PARENTS.get(parent))mro.add(builtinType(parent));
+        }
+        if(!mro.contains(builtinType("object")))mro.add(builtinType("object"));
+        return mro;
+    }
+    private static Object superOwner(Object currentClass,Object self) {
+        if(!isType(currentClass))throw new PyException("TypeError","super() argument 1 must be a type");
+        if(isType(self) && typeMro(self).contains(currentClass))return self;
+        Object actual=typeOf(self);
+        if(typeMro(actual).contains(currentClass))return actual;
+        if(self instanceof PyInstance){
+            Object claimed=getattr(self,"__class__");
+            if(claimed!=actual && isType(claimed) && typeMro(claimed).contains(currentClass))return claimed;
+        }
+        throw new PyException("TypeError","super(type, obj): obj must be an instance or subtype of type");
+    }
+    private static List<Object> zeroSuperArguments() {
+        ActiveFrame frame=currentLogicalFrame();
+        if(frame==null || frame.firstArgument==null)throw new PyException("RuntimeError","super(): no arguments");
+        Object self=frame.argumentEnv==null?frame.locals.getOrDefault(frame.firstArgument,UNBOUND):frame.argumentEnv.values.getOrDefault(frame.firstArgument,UNBOUND);
+        if(self==UNBOUND)throw new PyException("RuntimeError","super(): arg[0] deleted");
+        PyEnv env=frame.classEnv;
+        while(env!=null && !env.values.containsKey("__class__"))env=env.parent;
+        if(env==null)throw new PyException("RuntimeError","super(): __class__ cell not found");
+        Object current=env.values.get("__class__");
+        if(current==UNBOUND)throw new PyException("RuntimeError","super(): empty __class__ cell");
+        if(!isType(current))throw new PyException("RuntimeError","super(): __class__ is not a type");
+        return new ArrayList<>(Arrays.asList(current,self));
+    }
+    private static void initializeSuper(PySuper sup,List<Object> args,Map<Object,Object> kwargs) {
+        if(!kwargs.isEmpty())throw new PyException("TypeError","super() takes no keyword arguments");
+        if(args.size()>2)throw new PyException("TypeError","super() expected at most 2 arguments");
+        if(args.isEmpty())args=zeroSuperArguments();
+        Object current=args.get(0),self=args.size()==1?null:args.get(1);
+        if(!isType(current))throw new PyException("TypeError","super() argument 1 must be a type");
+        Object owner=self==null?null:superOwner(current,self);
+        sup.currentClass=current;sup.self=self;sup.owner=owner;
+    }
+    private static Object superConstructor(List<Object> args,Map<Object,Object> kwargs) {
+        PySuper sup=new PySuper(SUPER_CLASS);initializeSuper(sup,args,kwargs);return sup;
+    }
+    public static Object makeSuper(Object currentClass,Object self) {
+        return superConstructor(new ArrayList<>(Arrays.asList(currentClass,self)),new LinkedHashMap<>());
+    }
+    private static Object bindSuper(PySuper sup,Object instance) {
+        if(instance==null || sup.self!=null)return sup;
+        if(sup.cls==SUPER_CLASS)return makeSuper(sup.currentClass,instance);
+        return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
+    }
+    private static boolean builtinHasMethod(String type,String name) {
+        return switch(type){
+            case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__").contains(name);
+            case "type" -> Set.of("__new__","__init__","__call__","__setattr__","__delattr__").contains(name);
+            case "super" -> Set.of("__new__","__init__","__get__").contains(name);
+            default -> false;
+        };
+    }
+    private static Object superAttribute(PySuper sup,String name) {
+        if(sup.owner==null)return MISSING;
+        List<Object> mro=typeMro(sup.owner);int start=mro.indexOf(sup.currentClass);
+        for(int i=start+1;i<mro.size();i++){
+            Object base=mro.get(i);
+            if(base instanceof PyClass cls && cls.attrs.containsKey(name))
+                return descriptorGet(cls.attrs.get(name),sup.self==sup.owner?null:sup.self,sup.owner);
+            if(base instanceof PyBuiltinType builtin && builtinHasMethod(builtin.name,name)) {
+                Object callable=new BuiltinBoundMethod(base,name);
+                return name.equals("__new__") || name.equals("__init_subclass__") || sup.self==sup.owner?callable:new BoundCallable(callable,sup.self);
+            }
+        }
+        return MISSING;
     }
 
     public static Object instantiate0(Object cls) { return instantiate((PyClass)cls, new Object[0]); }
@@ -3186,7 +3276,7 @@ public final class PyRuntime {
             newArgs.addAll(Arrays.asList(args));
             created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
         } else {
-            created=new PyInstance(cls);
+            created=typeMro(cls).contains(builtinType("super"))?new PySuper(cls):new PyInstance(cls);
         }
 
         // __init__ is called only when __new__ produced an instance of cls or a
@@ -3196,6 +3286,8 @@ public final class PyRuntime {
             if(init!=null) {
                 Object initResult=invokeKw(instance,init,new ArrayList<Object>(Arrays.asList(args)),kwargs);
                 if(initResult!=null) throw new PyException("TypeError","__init__() should return None, not '"+typeName(initResult)+"'");
+            } else if(instance instanceof PySuper sup) {
+                initializeSuper(sup,new ArrayList<>(Arrays.asList(args)),kwargs);
             } else if(args.length!=0 || !kwargs.isEmpty()) {
                 throw new PyException("TypeError",cls.name+"() takes no arguments");
             }
@@ -3223,7 +3315,66 @@ public final class PyRuntime {
     public static Object callMethod3(Object obj, Object name, Object a, Object b, Object c) { return callMethod(obj, (String)name, new Object[]{a,b,c}); }
     public static Object callMethod4(Object obj, Object name, Object a, Object b, Object c, Object d) { return callMethod(obj, (String)name, new Object[]{a,b,c,d}); }
 
+    private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(builtin.name.equals("super") && name.equals("__get__")){
+            if(args.length<2 || args.length>3 || !(args[0] instanceof PySuper sup))throw new PyException("TypeError","super.__get__ requires a super object and instance");
+            return bindSuper(sup,args[1]);
+        }
+        if(builtin.name.equals("super") && name.equals("__init__")){
+            if(args.length<1 || !(args[0] instanceof PySuper sup))throw new PyException("TypeError","super.__init__ requires a super object");
+            initializeSuper(sup,new ArrayList<>(Arrays.asList(args).subList(1,args.length)),new LinkedHashMap<>());return null;
+        }
+        if(builtin.name.equals("super") && name.equals("__new__")){
+            if(args.length<1)throw new PyException("TypeError","super.__new__ requires a type");
+            if(args[0] instanceof PyBuiltinType type && type.name.equals("super"))return new PySuper(SUPER_CLASS);
+            if(args[0] instanceof PyClass cls && typeMro(cls).contains(builtinType("super")))return new PySuper(cls);
+            throw new PyException("TypeError","super.__new__ requires a super subtype");
+        }
+        if(builtin.name.equals("object") && name.equals("__init__")){requireArgs(name,args,1);return null;}
+        if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
+        if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__delattr__")){requireArgs(name,args,2);delattr(args[0],args[1]);return null;}
+        if(builtin.name.equals("object") && name.equals("__init_subclass__")){requireArgs(name,args,0);return null;}
+        if(builtin.name.equals("object") && name.equals("__new__")) {
+            requireArgs(name,args,1);
+            if(!(args[0] instanceof PyClass cls)) throw new PyException("TypeError","object.__new__() argument must be a type");
+            return new PyInstance(cls);
+        }
+        if(builtin.name.equals("type") && name.equals("__new__")) {
+            requireArgs(name,args,4);
+            if(!(args[0] instanceof PyClass meta)) throw new PyException("TypeError","type.__new__() argument 1 must be a metaclass");
+            if(!(args[1] instanceof String className)) throw new PyException("TypeError","type.__new__() name must be str");
+            if(!(args[2] instanceof PyTuple bases)) throw new PyException("TypeError","type.__new__() bases must be tuple");
+            if(!(args[3] instanceof Map<?,?> namespace)) throw new PyException("TypeError","type.__new__() namespace must be mapping");
+            PyClass cls;
+            if(args[3] instanceof PyClassNamespace prepared) cls=prepared.prebuilt;
+            else {
+                Object module=namespace.get("__module__");
+                cls=new PyClass(module instanceof String m ? m : "__main__",className);
+                for(Object base:bases.items) classAddBase(cls,base);
+            }
+            cls.metaclass=meta;
+            syncNamespaceToClass(cls,namespace);
+            classFinalize(cls);
+            return cls;
+        }
+        if(builtin.name.equals("type") && name.equals("__init__")) {
+            requireArgs(name,args,4); return null;
+        }
+        if(builtin.name.equals("type") && name.equals("__call__")) {
+            if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__() requires a class");
+            return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
+        }
+        if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
+            requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
+        }
+        throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
+    }
+
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if(obj instanceof PySuper sup && name.equals("__get__")){
+            if(args.length<1 || args.length>2)throw new PyException("TypeError","__get__ requires instance and optional owner");
+            return bindSuper(sup,args[0]);
+        }
         if(name.equals("__get__") && (obj instanceof PyFunction || obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty)){
             if(args.length<1 || args.length>2)throw new PyException("TypeError","__get__() requires instance and optional owner");
             Object owner=args.length==2?args[1]:args[0]==null?null:typeOf(args[0]);
@@ -3257,46 +3408,9 @@ public final class PyRuntime {
         if (obj instanceof PySuper sup) {
             return callFunction(getattr(sup,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         }
-        if (obj instanceof PyBuiltinType builtin) {
-            if(builtin.name.equals("object") && name.equals("__new__")) {
-                requireArgs(name,args,1);
-                if(!(args[0] instanceof PyClass cls)) throw new PyException("TypeError","object.__new__() argument must be a type");
-                return new PyInstance(cls);
-            }
-            if(builtin.name.equals("type") && name.equals("__new__")) {
-                requireArgs(name,args,4);
-                if(!(args[0] instanceof PyClass meta)) throw new PyException("TypeError","type.__new__() argument 1 must be a metaclass");
-                if(!(args[1] instanceof String className)) throw new PyException("TypeError","type.__new__() name must be str");
-                if(!(args[2] instanceof PyTuple bases)) throw new PyException("TypeError","type.__new__() bases must be tuple");
-                if(!(args[3] instanceof Map<?,?> namespace)) throw new PyException("TypeError","type.__new__() namespace must be mapping");
-                PyClass cls;
-                if(args[3] instanceof PyClassNamespace prepared) cls=prepared.prebuilt;
-                else {
-                    Object module=namespace.get("__module__");
-                    cls=new PyClass(module instanceof String m ? m : "__main__",className);
-                    for(Object base:bases.items) classAddBase(cls,base);
-                }
-                cls.metaclass=meta;
-                syncNamespaceToClass(cls,namespace);
-                classFinalize(cls);
-                return cls;
-            }
-            if(builtin.name.equals("type") && name.equals("__init__")) {
-                requireArgs(name,args,4); return null;
-            }
-            if(builtin.name.equals("type") && name.equals("__call__")) {
-                if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__() requires a class");
-                return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
-            }
-            if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
-                requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
-            }
-            throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
-        }
+        if (obj instanceof PyBuiltinType builtin)return callBuiltinTypeMethod(builtin,name,args);
         if (obj instanceof PyClass cls) {
-            PyMethod method=cls.lookupMethod(name);
-            if(method==null)return callFunction(getattr(cls,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
-            return invokeOnClass(cls,method,args);
+            return callFunction(getattr(cls,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         }
         if (obj instanceof PyAsyncGenerator generator) {
             return switch(name) {
@@ -3554,7 +3668,7 @@ public final class PyRuntime {
     }
 
     private static boolean isDescriptor(Object value) {
-        return value instanceof PyFunction || value instanceof PyMethodDescriptor || value instanceof PyManagedProperty || value instanceof PySlotDescriptor ||
+        return value instanceof PySuper || value instanceof PyFunction || value instanceof PyMethodDescriptor || value instanceof PyManagedProperty || value instanceof PySlotDescriptor ||
             (value instanceof PyInstance descriptor && descriptor.cls.lookupMethod("__get__") != null);
     }
     private static boolean isDataDescriptor(Object value) {
@@ -3563,6 +3677,7 @@ public final class PyRuntime {
             (descriptor.cls.lookupMethod("__set__") != null || descriptor.cls.lookupMethod("__delete__") != null));
     }
     private static Object descriptorGet(Object descriptor, Object instance, Object owner) {
+        if(descriptor instanceof PySuper sup)return bindSuper(sup,instance);
         if(descriptor instanceof PyFunction)return instance==null?descriptor:new BoundCallable(descriptor,instance);
         if(descriptor instanceof PyMethodDescriptor method){
             if(method.kind.equals("static"))return method.function;
@@ -3628,6 +3743,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyComplex z){
             if(name.equals("real"))return z.real;
             if(name.equals("imag"))return z.imag;
@@ -3676,13 +3792,22 @@ public final class PyRuntime {
             return switch(name){case "co_name" -> code.coName; case "co_filename" -> code.coFilename; case "co_firstlineno" -> code.coFirstlineno; default -> throw new PyException("AttributeError","code has no attribute '"+name+"'");};
         }
         if (obj instanceof PySuper sup) {
-            Object attr=sup.owner.lookupAttrAfter(sup.currentClass,name);
-            if(attr!=MISSING)return descriptorGet(attr,sup.self instanceof PyClass?null:sup.self,sup.owner);
-            PyMethod method=sup.owner.lookupMethodAfter(sup.currentClass,name);
-            if(method!=null && sup.self instanceof PyInstance instance)return new BoundSuperMethod(instance,sup.currentClass,name);
+            switch(name){
+                case "__class__": return typeOf(sup);
+                case "__thisclass__": return sup.currentClass;
+                case "__self__": return sup.self;
+                case "__self_class__": return sup.owner;
+            }
+            Object value=superAttribute(sup,name);if(value!=MISSING)return value;
+            if(name.equals("__get__"))return new BuiltinBoundMethod(sup,name);
+            if(name.equals("__init__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("super"),name),sup);
+            if(sup.fields.containsKey(name))return sup.fields.get(name);
+            Object own=sup.cls.lookupAttr(name);if(own!=MISSING)return descriptorGet(own,sup,sup.cls);
             throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
+            Object metaAttr=cls.metaclass==null?MISSING:cls.metaclass.lookupAttr(name);
+            if(metaAttr!=MISSING && isDataDescriptor(metaAttr))return descriptorGet(metaAttr,cls,cls.metaclass);
             if(name.equals("__class__")) return cls.metaclass != null ? cls.metaclass : builtinType("type");
             if(name.equals("__name__")) return cls.name;
             if(name.equals("__qualname__")) return cls.qualname;
@@ -3718,6 +3843,7 @@ public final class PyRuntime {
                 if(method.kind.equals("static")) return new BoundStaticMethod(cls,name);
                 return new UnboundMethod(cls,name);
             }
+            if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
@@ -3750,6 +3876,8 @@ public final class PyRuntime {
     }
 
     public static void setattr(Object obj, Object nameObj, Object value) {
+        if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
+            throw new PyException("AttributeError","readonly attribute");
         String name=(String)nameObj;
         if(obj instanceof PyFunction function){
             if(Set.of("__module__","__qualname__","__name__","__doc__","__annotations__","__annotate__").contains(name))function.metadata.put(name,value);
@@ -3789,6 +3917,8 @@ public final class PyRuntime {
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
+        if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
+            throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyFunction function){
             if(function.metadata.containsKey(nameObj)){function.metadata.remove(nameObj);return;}
             if(!function.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");function.attrs.remove(nameObj);return;
@@ -3830,6 +3960,7 @@ public final class PyRuntime {
             if(obj instanceof PyException error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
             return switch(bt.name) {
                 case "object" -> true;
+                case "super" -> obj instanceof PySuper;
                 case "int" -> isIntLike(obj);
                 case "bool" -> obj instanceof Boolean;
                 case "float" -> obj instanceof Double;
@@ -3857,17 +3988,9 @@ public final class PyRuntime {
     }
 
     public static Object isSubclass(Object subObj,Object clsObj) {
-        if(clsObj instanceof PyTuple tuple){for(Object c:tuple.items) if((Boolean)isSubclass(subObj,c)) return true; return false;}
-        if(subObj instanceof PyBuiltinType a && clsObj instanceof PyBuiltinType b){
-            if(a.name.equals(b.name)||b.name.equals("object")) return true;
-            if(a.name.equals("bool")&&b.name.equals("int")) return true;
-            return exceptionIsSubclass(a.name,b.name);
-        }
-        if(subObj instanceof PyClass a && clsObj instanceof PyClass b) return a.mro.contains(b);
-        if(subObj instanceof PyClass a && clsObj instanceof PyBuiltinType b && b.name.equals("type"))
-            return "type".equals(a.builtinBaseName);
-        if(subObj instanceof PyClass && clsObj instanceof PyBuiltinType b && b.name.equals("object")) return true;
-        throw new PyException("TypeError","issubclass() arg 1 must be a class");
+        if(clsObj instanceof PyTuple tuple){for(Object value:tuple.items)if(truth(isSubclass(subObj,value)))return true;return false;}
+        if(!isType(subObj) || !isType(clsObj))throw new PyException("TypeError","issubclass() arguments must be classes");
+        return typeMro(subObj).contains(clsObj);
     }
 
     private static final Object MISSING = new Object();
@@ -3890,9 +4013,14 @@ public final class PyRuntime {
     private record BoundClassMethod(PyClass cls,String name) {}
     private record BoundStaticMethod(PyClass cls,String name) {}
     private record UnboundMethod(PyClass cls,String name) {}
-    private record PySuper(PyClass currentClass, Object self,PyClass owner) {}
+    private static PyClass superClass(){PyClass cls=new PyClass("builtins","super");cls.instanceDictAllowed=false;return cls;}
+    private static final PyClass SUPER_CLASS=superClass();
+    private static final class PySuper extends PyInstance {
+        Object currentClass,self,owner;
+        PySuper(PyClass cls){super(cls);}
+    }
 
-    public static final class PyInstance {
+    public static class PyInstance {
         final PyClass cls;
         final LinkedHashMap<String,Object> fields = new LinkedHashMap<>();
         final LinkedHashMap<String,Object> slotValues = new LinkedHashMap<>();

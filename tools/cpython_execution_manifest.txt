@@ -40,3 +40,11 @@ Lib/test/test_builtin.py::BuiltinTest.test_oct objects
 Lib/test/test_builtin.py::BuiltinTest.test_bin objects
 Lib/test/test_builtin.py::TestSorted.test_bad_arguments objects
 Lib/test/test_builtin.py::TestSorted.test_baddecorator objects
+# super bodies are unchanged and use the assertion-only objects fixture.
+Lib/test/test_super.py::TestSuper.test___class___instancemethod objects
+Lib/test/test_super.py::TestSuper.test___class___classmethod objects
+Lib/test/test_super.py::TestSuper.test___class___staticmethod objects
+Lib/test/test_super.py::TestSuper.test_shadowed_local objects
+Lib/test/test_super.py::TestSuper.test_super___class__ objects
+Lib/test/test_super.py::TestSuper.test_super_subclass___class__ objects
+Lib/test/test_super.py::TestSuper.test_super_init_leaks objects
