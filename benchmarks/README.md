@@ -1,6 +1,6 @@
 # First performance tranche
 
-Run from a checkout with Python (the CI compiler host is 3.14) and a JDK with
+Run from a checkout with Python (the CI compiler host is 3.14) and a JDK 21 or newer with
 `java`, `javac`, and `javap` on PATH:
 
 ```bash

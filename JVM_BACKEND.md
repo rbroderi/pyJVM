@@ -1,30 +1,22 @@
 # Modern classfile backend
 
-Generated Python classes now default to **Java 17 / classfile major 61**.
-The compiler writes the classes and `StackMapTable` directly in Python; it does
-not use ASM, a JVM postprocessor, or javac to regenerate user code.
+Generated classes and the support runtime target **Java 21 / classfile major
+65 only**. The compiler writes classes and `StackMapTable` directly in Python;
+it does not use a JVM postprocessor or javac to regenerate user code.
 
 ```bash
-python -m pyjvm315.cli examples/hello.py --target 17 -o build/jvm -c Hello
+python -m pyjvm315.cli examples/hello.py -o build/jvm -c Hello
 java -Xverify:all -cp build/jvm Hello
 javap -v -cp build/jvm Hello
-python -m pyjvm315.conformance tests/conformance --target 21 --python python
+python -m pyjvm315.conformance tests/conformance --python python3.15
 ```
 
-| `--target` / API `target=` | Classfile major | Frames |
-|---|---:|---|
-| 5 | 49 | Legacy verifier inference; no StackMapTable |
-| 8 | 52 | StackMapTable |
-| 11 | 55 | StackMapTable |
-| 17 (default) | 61 | StackMapTable |
-| 21 | 65 | StackMapTable |
-
-`compile_source`, `compile_file`, `Compiler` and `ClassFile` accept target
-selection. The target is propagated to every discovered imported module.
-Invalid targets fail explicitly. The runtime is compiled with `javac --release
-17`, so choosing an older user classfile does **not** make the full application
-runnable on Java 5/8/11. A target-21 user class requires Java 21 or newer.
-These are non-preview classfiles (minor 0).
+`compile_source`, `compile_file`, `Compiler` and `ClassFile` retain `target=21`
+for explicit validation; all older targets are rejected. The target propagates
+to every imported module. Runtime compilation uses `javac --release 21`.
+These are non-preview classfiles (minor 0); Java 21 or newer is required.
+Legacy verifier-inference serialization is removed, so every method goes through
+frame analysis, including straight-line methods with an empty frame table.
 
 ## Frame analysis
 
@@ -69,7 +61,7 @@ New opcodes must have transfer rules before modern emission can use them.
 ## Validation and next steps
 
 The conformance runner always executes Java with `-Xverify:all`. Compatibility
-CI runs the full focused corpus on targets 5, 17 and 21. Target selection never
+CI runs the full focused corpus on target 21. Backend verification never
 changes Python semantic lowering, nested/local-class support, or runtime object
 representation. Tests also load classes with branches/joins, nulls, dead blocks,
 exception handlers, wide locals and newly initialized objects under strict
@@ -77,8 +69,8 @@ verification, and check target propagation to imported modules.
 
 The existing benchmark harness needs no special path: it compiles with the new
 default and compares against its base compiler using the same workloads. Build
-and verification cost remain outside kernel timing. The runtime's release-17
-pin makes runtime classfile targets consistent across JDK 17 and 21 hosts.
+and verification cost remain outside kernel timing. Generated and runtime
+classfiles both use major 65, regardless of the host JDK version.
 
 Next backend work should extend the typed instruction model before adding
 primitive locals/arithmetic, then support long/double constants, branch

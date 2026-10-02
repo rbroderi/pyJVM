@@ -20,12 +20,13 @@ def method(builder, *, desc="([Ljava/lang/String;)V", name="main", locals_=8):
 def test_target_header_and_stackmap_presence(target):
     code = compile_source("for i in range(3):\n    print(i)\n", target=target)
     assert struct.unpack('>HH', code[4:8]) == (0, target + 44)
-    assert (b"StackMapTable" in code) == (target != 5)
+    assert b"StackMapTable" in code
 
 
-def test_invalid_target():
+@pytest.mark.parametrize("target", [5, 8, 11, 17, 18])
+def test_invalid_target(target):
     with pytest.raises(ValueError, match="Unsupported Java target"):
-        compile_source("pass", target=18)
+        compile_source("pass", target=target)
 
 
 def test_descriptor_arrays_and_category_two_arguments():
@@ -100,9 +101,8 @@ JDK_MAJOR = int(re.search(r'version "(\d+)', subprocess.run(
     ['java', '-version'], capture_output=True, text=True).stderr)[1]) if JDK else 0
 
 
-@pytest.mark.skipif(not JDK, reason="JDK required")
-@pytest.mark.parametrize("target", [8, 11, 17, pytest.param(21, marks=pytest.mark.skipif(
-    JDK_MAJOR < 21, reason="Java 21 JVM required"))])
+@pytest.mark.skipif(JDK_MAJOR < 21, reason="Java 21 JVM required")
+@pytest.mark.parametrize("target", JAVA_TARGETS)
 def test_strict_verifier_dead_blocks_wide_locals_and_uninitialized_objects(tmp_path, target):
     cf = ClassFile("Verify", target=target)
     b = CodeBuilder(cf.cp)
@@ -143,3 +143,12 @@ def test_target_propagates_to_imports(tmp_path):
     classes = list(out.rglob('*.class'))
     assert len(classes) == 2
     assert all(struct.unpack('>H', p.read_bytes()[6:8])[0] == 65 for p in classes)
+
+
+@pytest.mark.skipif(JDK_MAJOR < 21, reason="Java 21 JDK required")
+def test_runtime_also_uses_java21_classfiles(tmp_path):
+    from pyjvm315.cli import build_runtime
+    build_runtime(tmp_path)
+    classes = list(tmp_path.rglob('*.class'))
+    assert classes
+    assert all(struct.unpack('>HH', p.read_bytes()[4:8]) == (0, 65) for p in classes)

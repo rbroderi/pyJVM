@@ -1,6 +1,9 @@
 package pyjvm315.runtime;
 
 import java.math.BigInteger;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
+import java.util.HashMap;
 import java.nio.charset.Charset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -80,6 +83,9 @@ public final class PyRuntime {
         if (value instanceof PyFunction) return "function";
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
         if (value instanceof PyMap) return "map";
+        if(value instanceof PySlice)return "slice";
+        if(value==NOT_IMPLEMENTED)return "NotImplementedType";
+        if(value==ELLIPSIS)return "ellipsis";
         if (value instanceof PyGenerator) return "generator";
         if (value instanceof PyCoroutine) return "coroutine";
         if (value instanceof PyAsyncGenerator) return "async_generator";
@@ -156,7 +162,7 @@ public final class PyRuntime {
                 if(fieldName.startsWith("__py_global_")) pyName=fieldName.substring("__py_global_".length());
                 else if(fieldName.startsWith("__py_function_")) pyName=fieldName.substring("__py_function_".length());
                 else if(fieldName.startsWith("__py_class_")) pyName=fieldName.substring("__py_class_".length());
-                if(pyName!=null) out.put(pyName,field.get(null));
+                if(pyName!=null) {Object value=field.get(null);if(value!=UNBOUND)out.put(pyName,value);}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
         return out;
@@ -169,7 +175,7 @@ public final class PyRuntime {
         try {
             Class<?> cls=Class.forName(module.className);
             for(String f:fields) {
-                try { return cls.getField(f).get(null); } catch(NoSuchFieldException ignored) {}
+                try { Object value=cls.getField(f).get(null);if(value!=UNBOUND)return value;break; } catch(NoSuchFieldException ignored) {}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
@@ -196,15 +202,76 @@ public final class PyRuntime {
             if(args.size()<2) throw new PyException("TypeError","map() must have at least two arguments");
             return new PyMap(args.get(0),args.subList(1,args.size()));
         }
-        if(args.size()!=1) throw new PyException("TypeError",name+"() takes exactly one argument");
+        int n=args.size();
+        if(name.equals("next") && (n==1 || n==2)) {
+            try { return next_(args.get(0)); }
+            catch(PyException e) { if(n==2 && exceptionIsSubclass(e.typeName,"StopIteration")) return args.get(1); throw e; }
+        }
+        if(name.equals("iter") && (n==1 || n==2)) return n==1?iter(args.get(0)):callableIterator(args.get(0),args.get(1));
+        if(name.equals("getattr") && (n==2 || n==3)) return n==2?getattr(args.get(0),args.get(1)):getattrDefault(args.get(0),args.get(1),args.get(2));
+        if(name.equals("hasattr") && n==2) return hasattr(args.get(0),args.get(1));
+        if(name.equals("setattr") && n==3) { setattr(args.get(0),args.get(1),args.get(2)); return null; }
+        if(name.equals("delattr") && n==2) { delattr(args.get(0),args.get(1)); return null; }
+        if(name.equals("isinstance") && n==2) return isInstance(args.get(0),args.get(1));
+        if(name.equals("issubclass") && n==2) return isSubclass(args.get(0),args.get(1));
+        if(name.equals("pow") && (n==2 || n==3)) return n==2?pow(args.get(0),args.get(1)):powMod(args.get(0),args.get(1),args.get(2));
+        if(name.equals("sum") && (n==1 || n==2)) {
+            Object total=n==1?0L:args.get(1);
+            if(total instanceof String || total instanceof PyByteSequence) throw new PyException("TypeError","sum() cannot sum strings or bytes");
+            for(Object item:iterable(args.get(0))) total=add(total,item);
+            return total;
+        }
+        if(n!=1) throw new PyException("TypeError","invalid arguments to "+name+"()");
         Object value=args.get(0);
         return switch(name) {
             case "ord" -> ord(value);
             case "chr" -> chr(value);
             case "repr" -> repr_(value);
-            default -> throw new PyException("RuntimeError","unknown builtin "+name);
+            case "hash" -> hash(value);
+            case "id" -> id(value);
+            case "len" -> len(value);
+            case "reversed" -> reversed(value);
+            case "callable" -> callable_(value);
+            case "abs" -> abs(value);
+            case "any" -> any(value);
+            case "all" -> all(value);
+            default -> throw new PyException("TypeError","invalid arguments to "+name+"()");
         };
     }
+
+    private static Object callableIterator(Object function,Object sentinel) {
+        if(!truth(callable_(function)) && !(function instanceof PyInstance i && i.cls.lookupMethod("__call__")!=null))
+            throw new PyException("TypeError","iter(v, w): v must be callable");
+        return new Iterator<Object>() {
+            boolean done=false, buffered=false; Object value;
+            public boolean hasNext() {
+                if(done) return false;
+                if(buffered) return true;
+                try { value=callFunction(function,new ArrayList<>(),new LinkedHashMap<>()); }
+                catch(PyException e) { if(exceptionIsSubclass(e.typeName,"StopIteration")){done=true;return false;}throw e; }
+                if(truth(eq(value,sentinel))){done=true;return false;}
+                buffered=true;return true;
+            }
+            public Object next() { if(!hasNext())throw new NoSuchElementException();buffered=false;return value; }
+        };
+    }
+
+    private static Object powMod(Object base,Object exponent,Object modulus) {
+        if(!isIntLike(base)||!isIntLike(exponent)||!isIntLike(modulus)) throw new PyException("TypeError","pow() with modulus requires integer arguments");
+        BigInteger m=bigInt(modulus), e=bigInt(exponent), a=bigInt(base);
+        if(m.signum()==0) throw new PyException("ValueError","pow() 3rd argument cannot be 0");
+        BigInteger magnitude=m.abs();
+        if(magnitude.equals(BigInteger.ONE)) return 0L;
+        if(e.signum()<0) {
+            try { a=a.mod(magnitude).modInverse(magnitude); }
+            catch(ArithmeticException error) { throw new PyException("ValueError","base is not invertible for the given modulus"); }
+            e=e.negate();
+        }
+        BigInteger result=a.mod(magnitude).modPow(e,magnitude);
+        if(m.signum()<0 && result.signum()!=0) result=result.subtract(magnitude);
+        return compact(result);
+    }
+
     public static Object ord(Object value) {
         if(value instanceof String text) {
             if(text.codePointCount(0,text.length())!=1) throw new PyException("TypeError","ord() requires one character");
@@ -265,6 +332,115 @@ public final class PyRuntime {
     }
     public static Object callable_(Object value){return value instanceof PyFunction || value instanceof PyBuiltinFunction || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
 
+    private enum Singleton { NOT_IMPLEMENTED, ELLIPSIS }
+    private static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
+    public static Object notImplemented() { return NOT_IMPLEMENTED; }
+    public static Object ellipsis() { return ELLIPSIS; }
+    private static final ReferenceQueue<Object> ID_QUEUE=new ReferenceQueue<>();
+    private static final Map<IdentityRef,Long> IDENTITIES=new HashMap<>();
+    private static long nextIdentity=2;
+    private static final class IdentityRef extends WeakReference<Object> {
+        final int hash;
+        IdentityRef(Object value,ReferenceQueue<Object> queue){super(value,queue);hash=System.identityHashCode(value);}
+        public int hashCode(){return hash;}
+        public boolean equals(Object other){return this==other || other instanceof IdentityRef ref && get()!=null && get()==ref.get();}
+    }
+    public static synchronized Object id(Object value) {
+        if(value==null)return 1L;
+        IdentityRef expired;
+        while((expired=(IdentityRef)ID_QUEUE.poll())!=null)IDENTITIES.remove(expired);
+        IdentityRef lookup=new IdentityRef(value,null);
+        Long found=IDENTITIES.get(lookup);
+        if(found!=null)return found;
+        long allocated=nextIdentity++;
+        IDENTITIES.put(new IdentityRef(value,ID_QUEUE),allocated);
+        return allocated;
+    }
+    private static final BigInteger HASH_MODULUS=BigInteger.ONE.shiftLeft(61).subtract(BigInteger.ONE);
+    private static final long[] HASH_SECRET=hashSecret();
+    private static long[] hashSecret(){
+        byte[] bytes=new byte[16];String configured=System.getenv("PYTHONHASHSEED");
+        if(configured==null || configured.equals("random"))new java.security.SecureRandom().nextBytes(bytes);
+        else {
+            long seed;
+            try{seed=Long.parseLong(configured);}catch(NumberFormatException error){throw new IllegalArgumentException("invalid PYTHONHASHSEED");}
+            if(seed<0 || seed>0xffffffffL)throw new IllegalArgumentException("invalid PYTHONHASHSEED");
+            if(seed!=0){int state=(int)seed;for(int i=0;i<bytes.length;i++){state=state*214013+2531011;bytes[i]=(byte)(state>>>16);}}
+        }
+        return new long[]{littleEndian(bytes,0,8),littleEndian(bytes,8,8)};
+    }
+    private static long normalizeHash(long value){return value==-1?-2:value;}
+    private static long numericHash(BigInteger value){return normalizeHash(value.abs().mod(HASH_MODULUS).longValue() * value.signum());}
+    private static long littleEndian(byte[] bytes,int start,int count){
+        long value=0;for(int i=0;i<count;i++)value|=(bytes[start+i]&255L)<<(8*i);return value;
+    }
+    private static void sipRound(long[] v){
+        v[0]+=v[1];v[1]=Long.rotateLeft(v[1],13);v[1]^=v[0];v[0]=Long.rotateLeft(v[0],32);
+        v[2]+=v[3];v[3]=Long.rotateLeft(v[3],16);v[3]^=v[2];
+        v[0]+=v[3];v[3]=Long.rotateLeft(v[3],21);v[3]^=v[0];
+        v[2]+=v[1];v[1]=Long.rotateLeft(v[1],17);v[1]^=v[2];v[2]=Long.rotateLeft(v[2],32);
+    }
+    private static long byteHash(byte[] bytes){
+        if(bytes.length==0)return 0;
+        long k0=HASH_SECRET[0],k1=HASH_SECRET[1];
+        long[] v={k0^0x736f6d6570736575L,k1^0x646f72616e646f6dL,k0^0x6c7967656e657261L,k1^0x7465646279746573L};
+        int offset=0;
+        while(offset+8<=bytes.length){long word=littleEndian(bytes,offset,8);v[3]^=word;sipRound(v);v[0]^=word;offset+=8;}
+        long tail=((long)bytes.length<<56)|littleEndian(bytes,offset,bytes.length-offset);
+        v[3]^=tail;sipRound(v);v[0]^=tail;v[2]^=255;sipRound(v);sipRound(v);sipRound(v);
+        return normalizeHash(v[0]^v[1]^v[2]^v[3]);
+    }
+    private static byte[] unicodeHashBytes(String text){
+        int[] points=text.codePoints().toArray();int maximum=0;for(int point:points)maximum=Math.max(maximum,point);
+        int width=maximum<=255?1:maximum<=65535?2:4;byte[] bytes=new byte[points.length*width];
+        for(int i=0;i<points.length;i++)for(int j=0;j<width;j++)bytes[i*width+j]=(byte)(points[i]>>>(8*j));
+        return bytes;
+    }
+    public static Object hash(Object value) {
+        if(isIntLike(value))return numericHash(bigInt(value));
+        if(value instanceof Double d) {
+            if(d.isNaN())return id(value);
+            if(d.isInfinite())return d>0?314159L:-314159L;
+            long bits=Double.doubleToRawLongBits(d), fraction=bits&0xfffffffffffffL;
+            int exponent=(int)((bits>>>52)&2047);
+            BigInteger significand=BigInteger.valueOf(exponent==0?fraction:fraction|(1L<<52));
+            int power=exponent==0?-1074:exponent-1023-52;
+            BigInteger number=significand.mod(HASH_MODULUS);
+            if(power>=0) number=number.multiply(BigInteger.TWO.modPow(BigInteger.valueOf(power),HASH_MODULUS)).mod(HASH_MODULUS);
+            else number=number.multiply(BigInteger.TWO.modInverse(HASH_MODULUS).modPow(BigInteger.valueOf(-power),HASH_MODULUS)).mod(HASH_MODULUS);
+            return normalizeHash(number.longValue()*(bits<0?-1:1));
+        }
+        if(value instanceof String text)return byteHash(unicodeHashBytes(text));
+        if(value instanceof PyBytes bytes)return byteHash(bytes.data);
+        if(value instanceof PyTuple tuple) {
+            long accumulator=0x27d4eb2f165667c5L;
+            for(Object item:tuple.items){accumulator+=((Number)hash(item)).longValue()*0xc2b2ae3d27d4eb4fL;accumulator=Long.rotateLeft(accumulator,31)*0x9e3779b185ebca87L;}
+            accumulator+=tuple.items.size()^(0x27d4eb2f165667c5L^3527539L);
+            return accumulator==-1?1546275796L:accumulator;
+        }
+        if(value instanceof PySlice sl){PyTuple parts=new PyTuple();parts.items.add(sl.start);parts.items.add(sl.stop);parts.items.add(sl.step);return hash(parts);}
+        if(value instanceof List<?> || value instanceof Map<?,?> || value instanceof Set<?> || value instanceof PyByteArray)
+            throw new PyException("TypeError","unhashable type: '"+typeName(value)+"'");
+        if(value instanceof PyMemoryView view){if(!view.readonly())throw new PyException("ValueError","cannot hash writable memoryview object");return byteHash(view.toByteArray());}
+        if(value instanceof PyInstance instance) {
+            for(PyClass cls:instance.cls.mro) {
+                if(cls.attrs.containsKey("__hash__")) {
+                    Object method=cls.attrs.get("__hash__");
+                    if(method==null)throw new PyException("TypeError","unhashable type: '"+instance.cls.name+"'");
+                    return hashResult(callFunction(descriptorGet(method,instance,instance.cls),new ArrayList<>(),new LinkedHashMap<>()));
+                }
+                PyMethod method=cls.methods.get("__hash__");
+                if(method!=null)return hashResult(invoke(instance,method,new Object[0]));
+            }
+        }
+        return id(value);
+    }
+    private static Object hashResult(Object result){
+        if(!isIntLike(result))throw new PyException("TypeError","__hash__ method should return an integer");
+        BigInteger n=bigInt(result);
+        return n.bitLength()<64?normalizeHash(n.longValue()):numericHash(n);
+    }
+
     // ---------- Display / truth ----------
     public static Object print(Object value) {
         System.out.println(pyStr(value));
@@ -273,6 +449,8 @@ public final class PyRuntime {
 
     public static String pyStr(Object value) {
         if (value == null) return "None";
+        if(value==NOT_IMPLEMENTED)return "NotImplemented";
+        if(value==ELLIPSIS)return "Ellipsis";
         if (value instanceof Boolean b) return b ? "True" : "False";
         if (value instanceof String s) return s;
         if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
@@ -348,6 +526,7 @@ public final class PyRuntime {
 
     public static boolean truth(Object value) {
         if (value == null) return false;
+        if(value==NOT_IMPLEMENTED)throw new PyException("TypeError","NotImplemented should not be used in a boolean context");
         if (value instanceof Boolean b) return b;
         if (value instanceof Long n) return n != 0L;
         if (value instanceof BigInteger n) return n.signum() != 0;
@@ -367,20 +546,58 @@ public final class PyRuntime {
         return true;
     }
 
-    // ---------- Arithmetic ----------
-    public static Object add(Object a, Object b) {
-        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__add__");if(m!=null)return invoke(ia,m,new Object[]{b});}
-        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__radd__");if(m!=null)return invoke(ib,m,new Object[]{a});}
-        if (a instanceof String sa && b instanceof String sb) return sa + sb;
-        if(a instanceof PyBytes ba && b instanceof PyBytes bb) {
-            byte[] out=new byte[ba.data.length+bb.data.length];
-            System.arraycopy(ba.data,0,out,0,ba.data.length); System.arraycopy(bb.data,0,out,ba.data.length,bb.data.length);
-            return new PyBytes(out);
+    private static Object binarySpecial(Object a,Object b,String leftName,String rightName,boolean comparison) {
+        PyInstance left=a instanceof PyInstance i?i:null, right=b instanceof PyInstance i?i:null;
+        PyMethod lm=left==null?null:left.cls.lookupMethod(leftName), rm=right==null?null:right.cls.lookupMethod(rightName);
+        boolean rightFirst=left!=null && right!=null && left.cls!=right.cls && right.cls.mro.contains(left.cls)
+            && rm!=null && (comparison || !rm.equals(left.cls.lookupMethod(rightName)));
+        if(rightFirst){Object result=invoke(right,rm,new Object[]{a});if(result!=NOT_IMPLEMENTED)return result;}
+        if(lm!=null){Object result=invoke(left,lm,new Object[]{b});if(result!=NOT_IMPLEMENTED)return result;}
+        if(!rightFirst && rm!=null && (comparison || left==null || left.cls!=right.cls)) {
+            Object result=invoke(right,rm,new Object[]{a});if(result!=NOT_IMPLEMENTED)return result;
         }
-        if(a instanceof PyByteArray ba && b instanceof PyByteArray bb) {
-            byte[] x=ba.toByteArray(),y=bb.toByteArray(),out=new byte[x.length+y.length];
-            System.arraycopy(x,0,out,0,x.length); System.arraycopy(y,0,out,x.length,y.length);
-            return new PyByteArray(out);
+        return NOT_IMPLEMENTED;
+    }
+
+    // ---------- Arithmetic ----------
+    public static Object iadd(Object a,Object b) {
+        if(a instanceof PyInstance instance){PyMethod method=instance.cls.lookupMethod("__iadd__");if(method!=null){Object value=invoke(instance,method,new Object[]{b});if(value!=NOT_IMPLEMENTED)return value;}}
+        if(a instanceof PyByteArray array) {
+            if((a==b || b instanceof PyMemoryView view && view.source==a) && ((PyByteSequence)b).byteSize()>0)
+                throw new PyException("BufferError","Existing exports of data: object cannot be re-sized");
+            if(!(b instanceof PyByteSequence seq))throw new PyException("TypeError","cannot concatenate bytearray and non-buffer object");
+            byte[] data=seq.toByteArray(); for(byte value:data)array.data.add(value); return array;
+        }
+        if(a instanceof List<?>){listExtend(a,a==b?new ArrayList<>((List<?>)b):b);return a;}
+        return add(a,b);
+    }
+    public static Object imul(Object a,Object b) {
+        if(a instanceof PyInstance instance){PyMethod method=instance.cls.lookupMethod("__imul__");if(method!=null){Object value=invoke(instance,method,new Object[]{b});if(value!=NOT_IMPLEMENTED)return value;}}
+        if(a instanceof PyByteArray array) {
+            PyByteArray repeated=(PyByteArray)repeatBytes(array,bigInt(b),true);
+            array.data.clear();array.data.addAll(repeated.data);return array;
+        }
+        if(a instanceof List<?>) {
+            @SuppressWarnings("unchecked") List<Object> list=(List<Object>)a;
+            List<Object> original=new ArrayList<>(list);
+            int count=asIndex(b); if(count<=0){list.clear();return list;}
+            for(int i=1;i<count;i++)list.addAll(original);
+            return list;
+        }
+        return mul(a,b);
+    }
+    public static Object ipow(Object a,Object b) {
+        if(a instanceof PyInstance instance){PyMethod method=instance.cls.lookupMethod("__ipow__");if(method!=null){Object value=invoke(instance,method,new Object[]{b});if(value!=NOT_IMPLEMENTED)return value;}}
+        return pow(a,b);
+    }
+
+    public static Object add(Object a, Object b) {
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__add__","__radd__",false);if(result!=NOT_IMPLEMENTED)return result;}
+        if (a instanceof String sa && b instanceof String sb) return sa + sb;
+        if((a instanceof PyBytes || a instanceof PyByteArray) && b instanceof PyByteSequence bb) {
+            byte[] x=((PyByteSequence)a).toByteArray(),y=bb.toByteArray(),out=new byte[x.length+y.length];
+            System.arraycopy(x,0,out,0,x.length);System.arraycopy(y,0,out,x.length,y.length);
+            return a instanceof PyByteArray?new PyByteArray(out):new PyBytes(out);
         }
         if (a instanceof List<?> la && b instanceof List<?> lb) {
             ArrayList<Object> out = new ArrayList<>(la.size() + lb.size());
@@ -397,8 +614,7 @@ public final class PyRuntime {
     }
 
     public static Object sub(Object a, Object b) {
-        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__sub__");if(m!=null)return invoke(ia,m,new Object[]{b});}
-        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__rsub__");if(m!=null)return invoke(ib,m,new Object[]{a});}
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__sub__","__rsub__",false);if(result!=NOT_IMPLEMENTED)return result;}
         if (isIntLike(a) && isIntLike(b)) {
             if (a instanceof Long x && b instanceof Long y) {
                 try { return Math.subtractExact(x, y); }
@@ -410,8 +626,7 @@ public final class PyRuntime {
     }
 
     public static Object mul(Object a, Object b) {
-        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__mul__");if(m!=null)return invoke(ia,m,new Object[]{b});}
-        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__rmul__");if(m!=null)return invoke(ib,m,new Object[]{a});}
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__mul__","__rmul__",false);if(result!=NOT_IMPLEMENTED)return result;}
         if (a instanceof String sa && isIntLike(b)) return repeatString(sa, bigInt(b));
         if (b instanceof String sb && isIntLike(a)) return repeatString(sb, bigInt(a));
         if(a instanceof PyBytes bytes && isIntLike(b)) return repeatBytes(bytes,bigInt(b),false);
@@ -498,6 +713,7 @@ public final class PyRuntime {
         throw typeError("bad operand type for abs()", a);
     }
     public static Object pow(Object a, Object b) {
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__pow__","__rpow__",false);if(result!=NOT_IMPLEMENTED)return result;}
         if (isIntLike(a) && isIntLike(b)) {
             BigInteger exp = bigInt(b);
             if (exp.signum() < 0) return Math.pow(number(a), number(b));
@@ -522,14 +738,29 @@ public final class PyRuntime {
 
     // ---------- Equality / ordering ----------
     public static Object eq(Object a, Object b) {
-        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod("__eq__");if(m!=null)return invoke(ia,m,new Object[]{b});}
-        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod("__eq__");if(m!=null)return invoke(ib,m,new Object[]{a});}
-        if (isIntLike(a) && isIntLike(b)) return bigInt(a).equals(bigInt(b));
-        if (a instanceof Number && b instanceof Number) return Double.compare(number(a), number(b)) == 0;
-        return Objects.equals(a, b);
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__eq__","__eq__",true);if(result!=NOT_IMPLEMENTED)return result;}
+        if(isIntLike(a) && isIntLike(b))return bigInt(a).equals(bigInt(b));
+        if(a instanceof Double x && b instanceof Double y)return x.doubleValue()==y.doubleValue();
+        if(isIntLike(a) && b instanceof Double d)return integerFloatEqual(bigInt(a),d);
+        if(a instanceof Double d && isIntLike(b))return integerFloatEqual(bigInt(b),d);
+        if(a instanceof PySlice x && b instanceof PySlice y)return truth(eq(x.start,y.start)) && truth(eq(x.stop,y.stop)) && truth(eq(x.step,y.step));
+        if(a instanceof PyTuple x && b instanceof PyTuple y)return sequenceEqual(x.items,y.items);
+        if(a instanceof List<?> x && b instanceof List<?> y)return sequenceEqual(x,y);
+        return Objects.equals(a,b);
     }
-
-    public static Object ne(Object a, Object b) { return !(Boolean) eq(a, b); }
+    private static boolean integerFloatEqual(BigInteger integer,double number){
+        if(!Double.isFinite(number) || number!=Math.rint(number))return false;
+        return integer.equals(new java.math.BigDecimal(number).toBigIntegerExact());
+    }
+    private static boolean sequenceEqual(List<?> left,List<?> right){
+        if(left.size()!=right.size())return false;
+        for(int i=0;i<left.size();i++)if(left.get(i)!=right.get(i) && !truth(eq(left.get(i),right.get(i))))return false;
+        return true;
+    }
+    public static Object ne(Object a, Object b) {
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__ne__","__ne__",true);if(result!=NOT_IMPLEMENTED)return result;}
+        return !truth(eq(a,b));
+    }
     public static Object is_(Object a, Object b) { return a == b; }
     public static Object is_not(Object a, Object b) { return a != b; }
 
@@ -561,7 +792,13 @@ public final class PyRuntime {
         throw typeError("int() argument must be a string or a number", value);
     }
     public static Object float_(Object value) {
-        if (value instanceof String s) return Double.valueOf(s.trim());
+        if (value instanceof String s) {
+            String text=s.trim().toLowerCase(Locale.ROOT);
+            if(text.equals("nan") || text.equals("+nan") || text.equals("-nan"))return Double.NaN;
+            if(text.equals("inf") || text.equals("infinity") || text.equals("+inf") || text.equals("+infinity"))return Double.POSITIVE_INFINITY;
+            if(text.equals("-inf") || text.equals("-infinity"))return Double.NEGATIVE_INFINITY;
+            try{return Double.valueOf(text);}catch(NumberFormatException error){throw new PyException("ValueError","could not convert string to float");}
+        }
         return number(value);
     }
     public static Object sum(Object value) {
@@ -722,6 +959,17 @@ public final class PyRuntime {
     @SuppressWarnings("unchecked")
     public static void delitem(Object value, Object key) {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__delitem__");if(m!=null){invoke(instance,m,new Object[]{key});return;}}
+        if(key instanceof PySlice sl && (value instanceof List<?> || value instanceof PyByteArray)) {
+            List<?> list=value instanceof PyByteArray array?array.data:(List<?>)value;
+            int size=list.size(),step=sl.step==null?1:asIndex(sl.step);
+            if(step==0)throw new PyException("ValueError","slice step cannot be zero");
+            int start=sl.start==null?(step>0?0:size-1):normalizeSliceIndex(asIndex(sl.start),size,step>0);
+            int stop=sl.stop==null?(step>0?size:-1):normalizeSliceStop(asIndex(sl.stop),size,step>0);
+            ArrayList<Integer> indexes=new ArrayList<>();
+            for(int i=start;step>0?i<stop:i>stop;i+=step)if(i>=0 && i<size)indexes.add(i);
+            indexes.sort(Collections.reverseOrder());for(int i:indexes)list.remove(i);return;
+        }
+        if(value instanceof PyByteArray array){int i=asIndex(key);array.data.remove(normalizeIndex(i,array.data.size()));return;}
         if (value instanceof Map<?,?> m) { if(!m.containsKey(key)) throw new NoSuchElementException("key not found"); ((Map<Object,Object>)m).remove(key); return; }
         int i=asIndex(key);
         if (value instanceof List<?> xs) { ((List<Object>)xs).remove(normalizeIndex(i,xs.size())); return; }
@@ -832,10 +1080,27 @@ public final class PyRuntime {
         out.sort((a,b)->cmp(a,b)); return out;
     }
     public static Object reversed(Object value) {
-        ArrayList<Object> out=new ArrayList<>(); for(Object x:iterable(value)) out.add(x); Collections.reverse(out); return out;
+        if(value instanceof PyInstance instance) {
+            PyMethod method=instance.cls.lookupMethod("__reversed__");
+            if(method!=null)return invoke(instance,method,new Object[0]);
+        }
+        if(!(value instanceof List<?> || value instanceof PyTuple || value instanceof String || value instanceof PyByteSequence || value instanceof PyRange || value instanceof PyInstance))
+            throw new PyException("TypeError","object is not reversible");
+        long size=((Number)len(value)).longValue();
+        return new Iterator<Object>() {
+            long position=size-1; boolean done=false;
+            public boolean hasNext(){return !done && position>=0;}
+            public Object next(){
+                if(!hasNext())throw new NoSuchElementException();
+                try{return getitem(value,position--);}
+                catch(PyException e){if(e.typeName.equals("IndexError") || e.typeName.equals("StopIteration")){done=true;throw new NoSuchElementException();}throw e;}
+                catch(IndexOutOfBoundsException e){done=true;throw new NoSuchElementException();}
+            }
+        };
     }
     public static Object next_(Object iterator) {
         if(iterator instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__next__");if(m==null)throw new PyException("TypeError","object is not an iterator");return invoke(instance,m,new Object[0]);}
+        if(!(iterator instanceof Iterator<?>))throw new PyException("TypeError","object is not an iterator");
         try { return ((Iterator<?>)iterator).next(); }
         catch(PyGeneratorEnd e) { throw new PyException("StopIteration",e.value); }
         catch(NoSuchElementException e) { throw new PyException("StopIteration",null); }
@@ -1038,6 +1303,9 @@ public final class PyRuntime {
     }
 
     private static int byteValue(Object value){
+        if(value instanceof PyInstance instance && instance.cls.lookupMethod("__index__")!=null)
+            value=invoke(instance,instance.cls.lookupMethod("__index__"),new Object[0]);
+        if(!isIntLike(value))throw new PyException("TypeError","integer argument expected");
         BigInteger n=bigInt(value);
         if(n.signum()<0 || n.compareTo(BigInteger.valueOf(255))>0)
             throw new PyException("ValueError","bytes must be in range(0, 256)");
@@ -1053,6 +1321,8 @@ public final class PyRuntime {
     }
     private static byte[] bytesFromObject(Object value){
         if(value instanceof PyByteSequence seq) return seq.toByteArray();
+        if(value instanceof PyInstance instance && instance.cls.lookupMethod("__index__")!=null)
+            value=invoke(instance,instance.cls.lookupMethod("__index__"),new Object[0]);
         if(isIntLike(value)) {
             int n=asIndex(value); if(n<0) throw new PyException("ValueError","negative count");
             return new byte[n];
@@ -1388,19 +1658,49 @@ public final class PyRuntime {
         throw new PyException("NameError", "no binding for nonlocal '" + name + "' found");
     }
 
+    private static final Object UNBOUND = new Object();
+    public static Object unbound() { return UNBOUND; }
+    public static Object requireLocal(Object value,Object name) {
+        if(value==UNBOUND) throw new PyException("UnboundLocalError","local variable '"+name+"' referenced before assignment");
+        return value;
+    }
+    public static Object requireGlobal(Object value,Object name) {
+        if(value==UNBOUND) throw new PyException("NameError","name '"+name+"' is not defined");
+        return value;
+    }
+    public static Object globalGet(Object value,Object nameObj) {
+        if(value!=UNBOUND) return value;
+        String name=(String)nameObj;
+        if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
+        if(name.equals("Ellipsis")) return ELLIPSIS;
+        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum").contains(name)) return builtinFunction(name);
+        if(Set.of("object","int","bool","float","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        return requireGlobal(value,name);
+    }
     public static Object envGetLocal(Object envObj, Object nameObj) {
         PyEnv env=(PyEnv)envObj; String name=(String)nameObj;
-        if (!env.values.containsKey(name)) throw new PyException("UnboundLocalError", "local variable '" + name + "' referenced before assignment");
-        return env.values.get(name);
+        return requireLocal(env.values.getOrDefault(name,UNBOUND),name);
     }
-
     public static Object envGet(Object envObj, Object nameObj) {
         PyEnv env=(PyEnv)envObj; String name=(String)nameObj;
-        while (env != null) {
-            if (env.values.containsKey(name)) return env.values.get(name);
+        while(env!=null) {
+            if(env.values.containsKey(name)) return requireGlobal(env.values.get(name),name);
             env=env.parent;
         }
-        throw new PyException("NameError", "free variable '" + name + "' is not defined");
+        throw new PyException("NameError","free variable '"+name+"' is not defined");
+    }
+    public static void envDelLocal(Object envObj,Object nameObj) {
+        PyEnv env=(PyEnv)envObj; String name=(String)nameObj;
+        requireLocal(env.values.getOrDefault(name,UNBOUND),name);
+        env.values.put(name,UNBOUND);
+    }
+    public static void envDelNonlocal(Object envObj,Object nameObj) {
+        PyEnv env=((PyEnv)envObj).parent; String name=(String)nameObj;
+        while(env!=null) {
+            if(env.values.containsKey(name)) { requireGlobal(env.values.get(name),name);env.values.put(name,UNBOUND);return; }
+            env=env.parent;
+        }
+        throw new PyException("NameError","free variable '"+name+"' is not defined");
     }
 
 
@@ -1675,6 +1975,10 @@ public final class PyRuntime {
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
         if (callable instanceof PyBuiltinType type) {
             if(type.name.equals("map")) return callBuiltin("map",args,kwargs);
+            if(type.name.equals("slice")) {
+                if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3) throw new PyException("TypeError","slice() requires 1 to 3 positional arguments");
+                return new PySlice(args.size()==1?null:args.get(0),args.size()==1?args.get(0):args.get(1),args.size()<3?null:args.get(2));
+            }
             if(exceptionIsSubclass(type.name,"BaseException")) {
                 if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError","exception accepts zero or one argument in this runtime");
                 return makeException(type.name,args.isEmpty()?null:args.get(0));
@@ -2022,7 +2326,7 @@ public final class PyRuntime {
     }
     public static boolean withExitException(Object manager, Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        Object result=callMethod(manager, "__exit__", new Object[]{new PyExceptionType(pythonExceptionType(t)), exceptionValue(t), null});
+        Object result=callMethod(manager, "__exit__", new Object[]{builtinType(pythonExceptionType(t)), exceptionInstance(t), null});
         return truth(result);
     }
     public static Object asyncWithEnter(Object manager) {
@@ -2033,7 +2337,7 @@ public final class PyRuntime {
     }
     public static boolean asyncWithExitException(Object manager,Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        Object result=awaitValue(callMethod(manager,"__aexit__",new Object[]{new PyExceptionType(pythonExceptionType(t)),exceptionInstance(t),null}));
+        Object result=awaitValue(callMethod(manager,"__aexit__",new Object[]{builtinType(pythonExceptionType(t)),exceptionInstance(t),null}));
         return truth(result);
     }
 
@@ -2331,6 +2635,7 @@ public final class PyRuntime {
         if(created instanceof PyClass cls) {
             cls.metaclass=meta;
             syncNamespaceToClass(cls,namespace);
+            if(cls.methods.containsKey("__eq__") && !cls.methods.containsKey("__hash__") && !cls.attrs.containsKey("__hash__")) cls.attrs.put("__hash__",null);
             if(!cls.finalized) classFinalizeWithKeywords(cls,kwargs);
             if(meta!=null) {
                 PyMethod init=meta.lookupMethod("__init__");
@@ -2877,7 +3182,10 @@ public final class PyRuntime {
     }
 
     public static Object getattr(Object obj, Object nameObj) {
+        if(!(nameObj instanceof String))throw new PyException("TypeError","attribute name must be string");
         String name = (String)nameObj;
+        if(obj instanceof PySlice sl) return switch(name){case "start"->sl.start;case "stop"->sl.stop;case "step"->sl.step;case "__class__"->builtinType("slice");default->throw new PyException("AttributeError","slice has no attribute '"+name+"'");};
+        if(name.equals("__class__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass)) return typeOf(obj);
         if (obj instanceof PyModule) return moduleGetattr(obj,nameObj);
         if (obj instanceof PyExceptionValue exc) {
             if (name.equals("args")) { PyTuple t=new PyTuple(); if(exc.value!=null)t.items.add(exc.value); return t; }
@@ -3059,6 +3367,7 @@ public final class PyRuntime {
                 case "set" -> obj instanceof Set<?>;
                 case "range" -> obj instanceof PyRange;
                 case "map" -> obj instanceof PyMap;
+                case "slice" -> obj instanceof PySlice;
                 case "type" -> obj instanceof PyClass || obj instanceof PyBuiltinType;
                 case "BaseException", "Exception" -> obj instanceof PyExceptionValue || obj instanceof PyException;
                 default -> false;

@@ -91,10 +91,9 @@ direct class-file writer
 small PyRuntime support layer
 ```
 
-Generated classes default to Java 17 (major version 61), with verifier frames
-emitted as `StackMapTable` attributes. `--target 21` selects Java 21 (major 65);
-targets 5, 8, and 11 are also available for backend comparison. The support
-runtime requires Java 17 or newer regardless of the generated-class target.
+Generated classes and the support runtime target **Java 21 only** (major version
+65), with verifier frames emitted as `StackMapTable` attributes. Java 21 or newer
+is required to build and run them. Earlier target values fail explicitly.
 See [JVM_BACKEND.md](JVM_BACKEND.md) for frame analysis and validation details.
 
 ## Differential tests
@@ -638,17 +637,35 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **264 compiling cases (73.7%)**,
-94 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **299 compiling cases (83.5%)**,
+59 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **139 passing cases**. A new strict execution
-lane runs **18 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **148 passing cases**. A new strict execution
+lane runs **33 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
 for the pinned source, measurements, current limitations and next priorities.
+
+
+## Java 21 and builtin compatibility
+
+The backend now keeps only target 21 and always emits verifier frames. Name
+and captured-cell deletion distinguishes unbound bindings from None; exception
+handler names are cleared on abrupt exits too. Top-level class methods now use
+the same closure lowering as local-class methods, enabling nested definitions,
+lambdas and comprehensions in methods.
+
+First-class builtin aliases include hash, id, len, iter/next, reversed,
+attribute helpers and pow. Numeric hash values use the 64-bit CPython modulus;
+bytes/Unicode use SipHash13 and honor numeric `PYTHONHASHSEED`. Differential
+runs default that seed to 0 for reproducibility. The runtime handles
+NotImplemented fallback for addition/subtraction/multiplication/power and
+equality, modern boolean rejection, slices, in-place list/bytearray operations,
+and bytes constructor index callbacks. These are supported paths, not full
+builtin, buffer-protocol or dict/set key-protocol compatibility.
