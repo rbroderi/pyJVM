@@ -45,7 +45,7 @@ EXCEPTION_TYPES = {
 }
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
-    "min", "max", "sorted", "hex", "oct", "bin",
+    "min", "max", "sorted", "hex", "oct", "bin", "format",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
 }
@@ -2457,8 +2457,12 @@ class Compiler:
                     if isinstance(value, ast.Constant): self._expr(value, b, scope)
                     elif isinstance(value, ast.FormattedValue):
                         self._expr(value.value, b, scope)
-                        method = "repr_" if value.conversion == ord('r') else "str_"
-                        b.invokestatic(RUNTIME, method, f"({OBJ}){OBJ}")
+                        if value.conversion != -1:
+                            method = {ord('r'): "repr_", ord('s'): "str_", ord('a'): "ascii_"}[value.conversion]
+                            b.invokestatic(RUNTIME, method, f"({OBJ}){OBJ}")
+                        if value.format_spec is None: b.ldc_string("")
+                        else: self._expr(value.format_spec, b, scope)
+                        b.invokestatic(RUNTIME, "formatValue", f"({OBJ * 2}){OBJ}")
                     else: raise CompileError("unsupported f-string component")
                     b.invokestatic(RUNTIME, "add", f"({OBJ}{OBJ}){OBJ}")
             case ast.BinOp(left=left, op=op, right=right):

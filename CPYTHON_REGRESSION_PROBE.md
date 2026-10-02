@@ -69,14 +69,14 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche | Ordered-builtin tranche | Super tranche |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Compiles | 125 | 264 | 299 | 303 | 312 | 315 | 317 | 319 |
-| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 | 41 | 39 |
-| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Total | 358 | 358 | 358 | 358 | 358 | 358 | 358 | 358 |
+| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche | Ordered-builtin tranche | Super tranche | Format tranche |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Compiles | 125 | 264 | 299 | 303 | 312 | 315 | 317 | 319 | 320 |
+| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 | 41 | 39 | 38 |
+| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Total | 358 | 358 | 358 | 358 | 358 | 358 | 358 | 358 | 358 |
 
-Compile coverage increased from 34.9% to 89.1% (+194 cases; +2 this tranche). The probe now
+Compile coverage increased from 34.9% to 89.4% (+195 cases; +1 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,7 +90,7 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 172 cases. A separate
+The focused differential corpus is now 176 cases. A separate
 `pyjvm315.cpython_execution` lane executes 49 unchanged CPython test
 bodies (62 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
@@ -122,11 +122,11 @@ copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 39 cases remain visible as unsupported; no
+support strategy. The remaining 38 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 319 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 319`). The old 0.31
+Compiler errors and compilation coverage below 320 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 320`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -339,3 +339,28 @@ Bytes percent formatting, numeric/string subclass hooks, brace/format/f-string
 specifications, Java-sized storage limits and extreme allocation behavior remain
 unfinished. All remaining compile blockers stay visible; this is a runtime semantics
 tranche and does not establish full CPython regression-suite support.
+
+
+### Format protocol tranche
+
+The fixed probe reaches **320/358 (89.4%)**, **38 unsupported** and **zero compiler
+errors**. `AssortedBytesTest.test_format` now compiles; this does not establish its
+runtime success, since its unchanged body requires regex/module fixtures. The
+missing format builtin no longer blocks `test_special_method_lookup`, which now
+stops at `dir`. The CI compile floor rises to 320 without changing the manifest.
+
+Four new differential programs bring the corpus to **176 cases**. They cover
+format special lookup versus ordinary attribute access, descriptors/inheritance,
+metaclass formatting, callbacks, string/integer/float specifications, grouping,
+Unicode width/fill, rounded zero coercion and dynamic f-string fields. F-string
+specifications now execute through the same protocol instead of being ignored.
+The 49 unchanged CPython bodies / 62 executions and 40 unit tests remain passing.
+No unsupported regex fixture or class-subclass dependency is neutralized to claim
+that the entire CPython `BuiltinTest.test_format` body passes.
+
+Float display selects the shortest decimal that round-trips to binary64, with
+Python notation boundaries and signed-zero handling; precision-based formatting
+uses the existing exact-value half-even rounding. This does not complete fractional
+grouping, locale-specific `n`, complex formatting, str/numeric subclasses, brace
+parsing or extreme allocation behavior. Existing dynamic-execution, introspection,
+external/native-module and full-suite gaps remain visible.

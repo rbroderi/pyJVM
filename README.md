@@ -637,15 +637,15 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **319 compiling cases (89.1%)**,
-39 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **320 compiling cases (89.4%)**,
+38 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **172 passing cases**. A new strict execution
+The focused differential suite is **176 passing cases**. A new strict execution
 lane runs **62 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
@@ -806,3 +806,28 @@ builtin, brace formatting or f-string format specifications. Width/precision are
 limited by Java's int-sized string storage; extreme allocation behavior and all
 CPython formatting diagnostics are not fully reproduced. Compilation coverage
 remains 319/358; it is separate from runtime and full-suite compatibility.
+
+
+## Format protocol and f-string specifications
+
+`format(value, spec)` and f-string fields share a runtime formatter. Special
+`__format__` lookup uses the value's type, binds descriptors, supports inherited
+methods/metaclasses, and requires a string result. It bypasses instance attributes;
+ordinary direct `value.__format__` access retains normal attribute lookup. Object
+formatting accepts an empty spec and rejects unsupported nonempty specifications.
+Builtin descriptors and first-class format aliases are covered.
+
+Strings support Unicode fill/alignment, width and precision. Integers support
+base/character conversion, signs, alternate prefixes, zero padding and grouping.
+Floats support fixed/scientific/general/percent presentation, signs, grouping,
+rounded negative-zero coercion and shortest round-trip output. F-strings now honor
+nested dynamic fields, `!s`/`!r`/`!a`, debug fields and callback evaluation order;
+specifications were previously ignored.
+
+The differential corpus reaches **176 cases**; the unchanged CPython lane retains
+**62 passing executions**. The fixed probe gains `AssortedBytesTest.test_format`
+(compilation only), reaching 320/358; `test_special_method_lookup` now reaches its
+next missing builtin, `dir`. Full format-spec support, fractional grouping, locale-
+aware `n`, complex formatting, string/numeric subclasses, brace `.format()` parsing,
+extreme allocation parity and external modules remain unfinished. Java 21 remains
+the only target.
