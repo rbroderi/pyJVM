@@ -91,6 +91,16 @@ def test_cpython_fixture_rejects_missing_or_decorated_tests(tmp_path):
         extract_case(source, 'Unknown.test_value')
 
 
+def test_numeric_fixture_preserves_body_without_byte_type_binding():
+    method = ast.parse('def test_value(self):\n    self.assertNotEqual(hash(1j), hash(0j))\n').body[0]
+    driver = ast.parse(fixture_source(method, 'numeric'))
+    fixture = driver.body[0]
+    extracted = next(node for node in fixture.body
+                     if isinstance(node, ast.FunctionDef) and node.name == 'test_value')
+    assert ast.dump(method.body[0]) == ast.dump(extracted.body[0])
+    assert not any(isinstance(node, ast.Assign) for node in fixture.body)
+
+
 def test_probe_coverage_floor_fails_on_regression(tmp_path, capsys):
     from pyjvm315.regression_probe import main
     source = tmp_path / 'test_floor.py'
