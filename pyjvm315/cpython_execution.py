@@ -28,6 +28,10 @@ class Fixture:
         assert actual is expected, "CPython assertIs failed"
     def assertNotEqual(self, actual, expected):
         assert actual != expected, "CPython assertNotEqual failed"
+    def assertIn(self, item, container):
+        assert item in container, "CPython assertIn failed"
+    def fail(self, message):
+        raise AssertionError(message)
     def assertNotIn(self, item, container):
         assert item not in container, "CPython assertNotIn failed"
     def assertIsInstance(self, actual, expected):

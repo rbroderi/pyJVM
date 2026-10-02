@@ -69,14 +69,20 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche | Ordered-builtin tranche | Super tranche | Format tranche |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Compiles | 125 | 264 | 299 | 303 | 312 | 315 | 317 | 319 | 320 |
-| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 | 41 | 39 | 38 |
-| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Total | 358 | 358 | 358 | 358 | 358 | 358 | 358 | 358 | 358 |
+| Tranche | Compiles | Unsupported | Compiler errors |
+|---|---:|---:|---:|
+| Initial | 125 | 231 | 2 |
+| Local classes | 264 | 94 | 0 |
+| Java 21 / builtins | 299 | 59 | 0 |
+| Complex | 303 | 55 | 0 |
+| Descriptors | 312 | 46 | 0 |
+| Class bodies | 315 | 43 | 0 |
+| Ordered builtins | 317 | 41 | 0 |
+| Super | 319 | 39 | 0 |
+| Format | 320 | 38 | 0 |
+| Introspection | 323 | 35 | 0 |
 
-Compile coverage increased from 34.9% to 89.4% (+195 cases; +1 this tranche). The probe now
+Compile coverage increased from 34.9% to 90.2% (+198 cases; +3 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,11 +96,11 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 176 cases. A separate
-`pyjvm315.cpython_execution` lane executes 49 unchanged CPython test
-bodies (62 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 180 cases. A separate
+`pyjvm315.cpython_execution` lane executes 50 unchanged CPython test
+bodies (63 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
-a numeric fixture with assertion helpers and no substituted module globals. Seven
+a numeric fixture with assertion helpers and no substituted module globals. Eight
 ClassPropertiesAndMethods bodies, five BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
@@ -122,11 +128,11 @@ copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 38 cases remain visible as unsupported; no
+support strategy. The remaining 35 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 320 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 320`). The old 0.31
+Compiler errors and compilation coverage below 323 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 323`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -364,3 +370,26 @@ uses the existing exact-value half-even rounding. This does not complete fractio
 grouping, locale-specific `n`, complex formatting, str/numeric subclasses, brace
 parsing or extreme allocation behavior. Existing dynamic-execution, introspection,
 external/native-module and full-suite gaps remain visible.
+
+
+### Introspection and sequence-descriptor tranche
+
+The fixed five-file probe reaches **323/358 (90.2%)**, **35 unsupported** and
+**zero compiler errors**. `test_properties`, `test_dir` and
+`SharedKeyTests.test_subclasses` gain compilation; special-method lookup now stops
+at the next missing builtin, `round`. Compilation alone does not establish runtime
+success or CPython-specific dictionary memory-layout compatibility.
+
+Four differential programs cover type-level `__dir__` lookup, descriptors,
+metaclasses, sorted callback results, instance/function `vars` identity and mutation,
+custom dictionary access, function snapshots, closure cells, live class namespaces
+and descriptor-backed sequence iteration. They bring the focused corpus to **180**.
+The complete unchanged `ClassPropertiesAndMethods.test_properties` body now passes
+with assertion-only fixtures (`assertIn` and `fail` added), bringing the real lane
+to **50 bodies / 63 executions**. No imports or test statements are replaced.
+
+Native directory inventories remain partial. Module-level/suspended-frame
+zero-argument inspection, live module dictionaries and readonly/live class
+mapping views raise explicit NotImplementedError. Existing dynamic execution,
+module subclasses, native extensions and full-suite gaps remain visible. The CI
+compile floor rises to 323; Java 21 and the benchmark regression gates remain.

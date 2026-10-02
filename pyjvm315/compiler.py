@@ -45,7 +45,7 @@ EXCEPTION_TYPES = {
 }
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
-    "min", "max", "sorted", "hex", "oct", "bin", "format",
+    "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
 }
@@ -338,7 +338,8 @@ class Compiler:
         raise CompileError(f"Name {name!r} referenced before assignment")
 
     def _store_name(self, name: str, b: CodeBuilder, scope: Scope, *, temp_scope: Scope | None = None) -> None:
-        b.ldc_string(name); b.invokestatic(RUNTIME, "frameSetLocalValue", f"({OBJ}{OBJ}){OBJ}")
+        if scope.module or name not in scope.global_decl:
+            b.ldc_string(name); b.invokestatic(RUNTIME, "frameSetLocalValue", f"({OBJ}{OBJ}){OBJ}")
         if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
             value_slot = (temp_scope or scope).temp(); b.astore(value_slot)
             b.aload(scope.namespace_slot); b.ldc_string(self._class_attr_name(name)); b.aload(value_slot)
@@ -2188,6 +2189,7 @@ class Compiler:
                 self.loop_stack, self.cleanup_stack, self.finally_stack = [], [], []
                 b.ldc_string(name); b.ldc_string(self.filename); self._emit_int(node.lineno, b)
                 b.invokestatic(RUNTIME, "pushLogicalFrame", f"({OBJ * 3})V")
+                b.aload(namespace_slot); b.invokestatic(RUNTIME, "frameSetNamespace", f"({OBJ})V")
                 body_start, body_end, body_handler, body_done = b.label(), b.label(), b.label(), b.label()
                 body_exception = body_scope.temp()
                 b.mark(body_start); b.emit(0x00)  # non-empty protected range for literal-only suites

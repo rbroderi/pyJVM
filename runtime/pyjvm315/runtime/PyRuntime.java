@@ -235,6 +235,8 @@ public final class PyRuntime {
             return new PyMap(args.get(0),args.subList(1,args.size()));
         }
         int n=args.size();
+        if(name.equals("dir") && n<=1)return n==0?dirLocals():dirValue(args.get(0));
+        if(name.equals("vars") && n<=1)return n==0?varsLocals():varsValue(args.get(0));
         if(name.equals("format") && (n==1 || n==2))return formatValue(args.get(0),n==1?"":args.get(1));
         if(name.equals("next") && (n==1 || n==2)) {
             try { return next_(args.get(0)); }
@@ -891,6 +893,92 @@ public final class PyRuntime {
         double x = number(a), y = number(b);
         if (y == 0.0) throw new ArithmeticException("float floor division by zero");
         return Math.floor(x / y);
+    }
+
+    // Keep namespace inspection out of shared arithmetic/collection dispatch paths.
+    private static Object varsLocals(){
+        ActiveFrame frame=currentLogicalFrame();
+        if(frame==null || frame.name.equals("<module>") || !frame.inspectSupported)throw new PyException("NotImplementedError","module and suspended-frame namespace inspection is not implemented");
+        if(frame.namespace!=null)return frame.namespace;
+        LinkedHashMap<Object,Object> result=frameLocalSnapshot(frame);
+        result.values().removeIf(value->value==UNBOUND);
+        return result;
+    }
+    private static LinkedHashMap<Object,Object> frameLocalSnapshot(ActiveFrame frame){
+        LinkedHashMap<Object,Object> result=new LinkedHashMap<>(frame.locals);
+        if(frame.closure!=null)for(String name:frame.freeNames){
+            PyEnv environment=frame.argumentEnv!=null?frame.argumentEnv:frame.closure;
+            while(environment!=null && !environment.values.containsKey(name))environment=environment.parent;
+            Object value=environment==null?UNBOUND:environment.values.get(name);
+            if(value!=UNBOUND)result.put(name,value);else result.remove(name);
+        }
+        return result;
+    }
+    private static Object dirLocals(){
+        ActiveFrame frame=currentLogicalFrame();
+        if(frame!=null && (frame.name.equals("<module>") || !frame.inspectSupported))throw new PyException("NotImplementedError","module and suspended-frame namespace inspection is not implemented");
+        Object names=frame==null?List.of():frame.namespace!=null?frame.namespace.keySet():frameLocalSnapshot(frame).keySet();
+        return sorted(names);
+    }
+    private static Object varsValue(Object value){
+        if(value instanceof PyModule || value instanceof PyClass)throw new PyException("NotImplementedError","live module/class dictionary views are not implemented");
+        if(value instanceof PyInstance instance){
+            Object access=instance.cls.lookupAttr("__getattribute__");
+            if(access!=MISSING){
+                try{return callFunction(descriptorGet(access,value,instance.cls),new ArrayList<>(List.of("__dict__")),new LinkedHashMap<>());}
+                catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;throw new PyException("TypeError","vars() argument must have __dict__ attribute");}
+            }
+            Object custom=instance.cls.lookupAttr("__dict__");
+            if(custom!=MISSING){
+                if(isDataDescriptor(custom))return descriptorGet(custom,value,instance.cls);
+                if(instance.fields.containsKey("__dict__"))return instance.fields.get("__dict__");
+                return descriptorGet(custom,value,instance.cls);
+            }
+        }
+        try{return getattr(value,"__dict__");}
+        catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;throw new PyException("TypeError","vars() argument must have __dict__ attribute");}
+    }
+    private static Object dirValue(Object value){
+        PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
+        if(owner!=null){
+            Object method=owner.lookupAttr("__dir__");
+            if(method!=MISSING)return sorted(callFunction(descriptorGet(method,value,owner),new ArrayList<>(),new LinkedHashMap<>()));
+        }
+        return sorted(defaultDir(value));
+    }
+    private static Object defaultDir(Object value){
+        LinkedHashSet<Object> names=new LinkedHashSet<>();
+        if(value instanceof PyModule module){names.addAll(((Map<?,?>)moduleDict(module)).keySet());return new ArrayList<>(names);}
+        if(value instanceof PyClass cls){classDirNames(cls,names);return new ArrayList<>(names);}
+        if(value instanceof PyInstance instance){
+            try{Object dictionary=varsValue(value);if(dictionary instanceof Map<?,?> map)names.addAll(map.keySet());}
+            catch(PyException error){if(!error.typeName.equals("TypeError"))throw error;}
+            classDirNames(instance.cls,names);
+        }else if(value instanceof PyFunction function){names.addAll(function.attrs.keySet());names.addAll(function.metadata.keySet());names.addAll(List.of("__closure__","__dict__","__get__"));}
+        else if(value instanceof BoundCallable bound){names.addAll((List<?>)defaultDir(bound.function));names.addAll(List.of("__self__","__func__"));}
+        else if(value instanceof PyManagedProperty){names.addAll(List.of("fget","fset","fdel","getter","setter","deleter","__get__","__set__","__delete__","__set_name__","__name__"));}
+        else if(value instanceof PyTraceback){names.addAll(List.of("tb_frame","tb_lasti","tb_lineno","tb_next"));return new ArrayList<>(names);}
+        else if(value instanceof PyBuiltinType type){nativeDirNames(type.name,names);return new ArrayList<>(names);}
+        else nativeDirNames(typeName(value),names);
+        names.addAll(List.of("__class__","__doc__","__format__","__dir__"));
+        return new ArrayList<>(names);
+    }
+    private static void classDirNames(PyClass cls,Set<Object> names){
+        for(PyClass base:cls.mro){names.addAll(base.attrs.keySet());names.addAll(base.methods.keySet());names.addAll(base.properties.keySet());}
+        names.addAll(List.of("__module__","__doc__","__class__","__format__","__dir__"));
+        if(cls.instanceDictAllowed)names.add("__dict__");
+        if(cls.builtinBaseName!=null)nativeDirNames(cls.builtinBaseName,names);
+    }
+    private static void nativeDirNames(String type,Set<Object> names){
+        names.addAll(List.of("__class__","__doc__","__format__","__dir__"));
+        switch(type){
+            case "str" -> names.addAll(List.of("strip","lstrip","rstrip","split","rsplit","join","replace","find","rfind","index","rindex","count","startswith","endswith","upper","lower","capitalize","swapcase","title","encode","__mod__"));
+            case "list" -> names.addAll(List.of("append","extend","insert","pop","remove","clear","copy","count","index","reverse","sort"));
+            case "dict" -> names.addAll(List.of("keys","values","items","get","pop","popitem","setdefault","update","clear","copy"));
+            case "set" -> names.addAll(List.of("add","remove","discard","pop","clear","copy","union","intersection","difference","symmetric_difference","update","intersection_update","difference_update","symmetric_difference_update","issubset","issuperset","isdisjoint"));
+            case "complex" -> names.addAll(List.of("real","imag","conjugate"));
+            case "object" -> names.addAll(List.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__"));
+        }
     }
 
     public static Object ascii_(Object value){return asciiRepr(value);}
@@ -1823,14 +1911,17 @@ public final class PyRuntime {
     private static Iterable<?> iterable(Object value) {
         if(value instanceof PyInstance instance){
             PyMethod m=instance.cls.lookupMethod("__iter__");
-            if(m!=null){
-                Object it=invoke(instance,m,new Object[0]);
+            Object special=instance.cls.lookupAttr("__iter__");
+            if(m!=null || special!=MISSING){
+                Object it=special!=MISSING?callFunction(descriptorGet(special,instance,instance.cls),new ArrayList<>(),new LinkedHashMap<>()):invoke(instance,m,new Object[0]);
                 return () -> new Iterator<Object>() {
                     Object buffered=null; boolean hasBuffered=false,done=false;
                     public boolean hasNext(){if(done)return false;if(hasBuffered)return true;try{buffered=next_(it);hasBuffered=true;return true;}catch(PyException e){if(e.typeName.equals("StopIteration")){done=true;return false;}throw e;}}
                     public Object next(){if(!hasNext())throw new NoSuchElementException();Object out=buffered;buffered=null;hasBuffered=false;return out;}
                 };
             }
+            if(instance.cls.lookupAttr("__getitem__")!=MISSING || instance.cls.lookupMethod("__getitem__")!=null)
+                return () -> sequenceIterator(instance);
         }
         if (value instanceof Iterable<?> x) return x;
         if (value instanceof Iterator<?> iterator) return () -> new Iterator<Object>() {
@@ -1844,6 +1935,21 @@ public final class PyRuntime {
             return chars;
         }
         throw typeError("object is not iterable", value);
+    }
+
+    private static Iterator<Object> sequenceIterator(PyInstance instance){
+        return new Iterator<>() {
+            long index=0;Object buffered;boolean ready=false,done=false;
+            public boolean hasNext(){
+                if(done)return false;if(ready)return true;
+                try{
+                    Object method=instance.cls.lookupAttr("__getitem__");
+                    buffered=method!=MISSING?callFunction(descriptorGet(method,instance,instance.cls),new ArrayList<>(List.of(index)),new LinkedHashMap<>()):invoke(instance,instance.cls.lookupMethod("__getitem__"),new Object[]{index});
+                    ready=true;index++;return true;
+                }catch(PyException error){if(exceptionIsSubclass(error.typeName,"IndexError") || exceptionIsSubclass(error.typeName,"StopIteration")){done=true;return false;}throw error;}
+            }
+            public Object next(){if(!hasNext())throw new NoSuchElementException();Object value=buffered;buffered=null;ready=false;return value;}
+        };
     }
 
     public static final class PyDictView implements Iterable<Object> {
@@ -2384,7 +2490,7 @@ public final class PyRuntime {
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
-        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format").contains(name)) return builtinFunction(name);
+        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
@@ -2445,7 +2551,7 @@ public final class PyRuntime {
             if (finished) throw new PyGeneratorEnd(returnValue);
             started = true;
             ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
-            logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
+            logical.inspectSupported=false;logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
             LOGICAL_FRAMES.get().push(logical);
             try {
                 Class<?> cls=Class.forName(owner);
@@ -2872,6 +2978,7 @@ public final class PyRuntime {
             ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
             logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
             logical.classEnv=hasClassCell?closure:null;
+            logical.closure=closure; logical.freeNames=freeNames;
             List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
             if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
             for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
@@ -3122,7 +3229,7 @@ public final class PyRuntime {
     private static final class ActiveFrame {
         final String name, filename; final long firstlineno; long line;
         final LinkedHashMap<Object,Object> locals = new LinkedHashMap<>();
-        String firstArgument; PyEnv classEnv,argumentEnv;
+        boolean inspectSupported=true; String firstArgument; PyEnv classEnv,argumentEnv,closure; List<String> freeNames=List.of(); Map<Object,Object> namespace;
         ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}
     }
     private static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
@@ -3131,6 +3238,8 @@ public final class PyRuntime {
     }
     public static void popLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.pop();}
     public static void setCurrentLine(Object lineObj){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.peek().line=bigInt(lineObj).longValue();}
+    @SuppressWarnings("unchecked")
+    public static void frameSetNamespace(Object namespace){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.namespace=(Map<Object,Object>)namespace;}
     public static void frameSetArgumentEnv(Object env){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.argumentEnv=(PyEnv)env;}
     public static void frameSetLocal(Object nameObj,Object value){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);}
     public static Object frameSetLocalValue(Object value,Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);return value;}
@@ -3649,10 +3758,11 @@ public final class PyRuntime {
         return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
     }
     private static boolean builtinHasMethod(String type,String name) {
+        if(name.equals("__dir__") && type.equals("object"))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
             case "str" -> name.equals("__mod__");
-            case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__").contains(name);
+            case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__","__getattribute__").contains(name);
             case "type" -> Set.of("__new__","__init__","__call__","__setattr__","__delattr__").contains(name);
             case "super" -> Set.of("__new__","__init__","__get__").contains(name);
             default -> false;
@@ -3753,6 +3863,8 @@ public final class PyRuntime {
     }
 
     private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(name.equals("__getattribute__") && builtin.name.equals("object")){requireArgs(name,args,2);return getattr(args[0],args[1]);}
+        if(name.equals("__dir__")){requireArgs(name,args,1);return defaultDir(args[0]);}
         if(name.equals("__format__")){
             requireArgs(name,args,2);
             if(builtin.name.equals("object"))return objectFormat(args[0],args[1]);
@@ -3809,6 +3921,10 @@ public final class PyRuntime {
     }
 
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if(name.equals("__dir__") && !(obj instanceof PyBuiltinType) && !(obj instanceof PyClass)){
+            if(obj instanceof PyInstance)return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
+            requireArgs(name,args,0);return defaultDir(obj);
+        }
         if(name.equals("__format__") && !(obj instanceof PyBuiltinType) && !(obj instanceof PyClass)){
             if(obj instanceof PyInstance)return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
             requireArgs(name,args,1);return formatValue(obj,args[0]);
@@ -4193,6 +4309,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(name.equals("__dir__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__format__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof String && name.equals("__mod__"))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
@@ -4315,6 +4432,7 @@ public final class PyRuntime {
             if (method != null) return new BoundMethod(instance, name);
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
+            if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
             if(name.equals("__format__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
