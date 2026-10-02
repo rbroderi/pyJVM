@@ -70,6 +70,7 @@ class FunctionInfo:
     is_generator: bool = False
     is_async: bool = False
     is_async_generator: bool = False
+    qualname: str = ""
 
     @property
     def positional(self) -> list[str]:
@@ -91,54 +92,9 @@ class FunctionInfo:
 
 
 @dataclass
-class MethodInfo:
-    py_name: str
-    java_name: str
-    posonly: list[str]
-    poskw: list[str]
-    kwonly: list[str]
-    vararg: str | None
-    kwarg: str | None
-    defaults: dict[str, ast.expr]
-    kw_defaults: dict[str, ast.expr]
-    kind: str = "instance"
-    firstlineno: int = 0
-    is_async: bool = False
-    env_mode: bool = False
-    is_async_generator: bool = False
-
-    @property
-    def positional(self) -> list[str]:
-        return self.posonly + self.poskw
-
-    @property
-    def bound_args(self) -> list[str]:
-        out = self.positional + self.kwonly
-        if self.vararg is not None:
-            out.append(self.vararg)
-        if self.kwarg is not None:
-            out.append(self.kwarg)
-        return out
-
-    @property
-    def descriptor(self) -> str:
-        return "(" + (OBJ if self.env_mode else "") + (OBJ * len(self.bound_args)) + ")" + OBJ
-
-
-@dataclass
-class PropertyInfo:
-    name: str
-    getter: MethodInfo
-    setter: MethodInfo | None = None
-
-
-@dataclass
 class ClassInfo:
     name: str
     bases: list[ast.expr]
-    methods: dict[str, MethodInfo]
-    properties: dict[str, PropertyInfo]
-    attrs: list[tuple[str, ast.expr]]
     class_field: str
     metaclass: ast.expr | None = None
     keywords: list[tuple[str, ast.expr]] | None = None
@@ -162,6 +118,7 @@ class Scope:
                  local_names: set[str] | None = None, free_names: set[str] | None = None,
                  nonlocal_names: set[str] | None = None) -> None:
         self.checked_names: set[str] = set()
+        self.namespace_slot: int | None = None
         self.slots: dict[str, int] = {}
         self.next_slot = start_slot
         self.module = module
@@ -190,6 +147,8 @@ class Scope:
         return name in self.slots or (self.env_mode and name in self.local_names)
 
     def has(self, name: str) -> bool:
+        if self.namespace_slot is not None:
+            return self.parent.has(name) if self.parent is not None else False
         if self.env_mode and (name in self.local_names or name in self.free_names or name in self.nonlocal_decl):
             return True
         return name in self.slots or (self.parent is not None and self.parent.has(name))
@@ -219,7 +178,6 @@ class Compiler:
         self.classes: dict[str, ClassInfo] = {}
         self.class_infos: dict[int, ClassInfo] = {}
         self.class_nodes: list[ast.ClassDef] = []
-        self.class_method_infos: dict[int, MethodInfo] = {}
         self.current_class: ClassInfo | None = None
         self.current_method_self: str | None = None
         self.global_names: set[str] = set()
@@ -315,6 +273,27 @@ class Compiler:
             self.cf.add_field(Field(field_name))
 
     def _load_name(self, name: str, b: CodeBuilder, scope: Scope) -> None:
+        if scope.namespace_slot is not None and name not in scope.global_decl:
+            key = self._class_attr_name(name)
+            missing, done = b.label(), b.label()
+            b.aload(scope.namespace_slot); b.ldc_string(key)
+            b.invokestatic(RUNTIME, "classNamespaceHas", f"({OBJ}{OBJ})Z")
+            b.ifeq(missing)
+            b.aload(scope.namespace_slot); b.ldc_string(key)
+            b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
+            b.goto(done); b.mark(missing)
+            parent = scope.parent
+            while parent is not None and parent.namespace_slot is not None:
+                parent = parent.parent
+            if name in scope.local_names:
+                parent = Scope(module=True)
+            try:
+                self._load_name(name, b, parent or Scope())
+            except CompileError:
+                b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.ldc_string(name)
+                b.invokestatic(RUNTIME, "globalGet", f"({OBJ}{OBJ}){OBJ}")
+            b.mark(done)
+            return
         if name in scope.global_decl:
             pass
         elif scope.env_mode and scope.env_slot is not None:
@@ -338,25 +317,29 @@ class Compiler:
             info = self.functions[name]
             assert info.function_field is not None
             b.getstatic(self.class_name, info.function_field, OBJ)
-            self._check_deleted_global(name, b); return
+            self._check_global_binding(name, b); return
         if name in self.classes:
             b.getstatic(self.class_name, self.classes[name].class_field, OBJ)
-            self._check_deleted_global(name, b); return
+            self._check_global_binding(name, b); return
         if name in self.global_names:
             b.getstatic(self.class_name, self.global_fields[name], OBJ)
-            self._check_deleted_global(name, b); return
+            self._check_global_binding(name, b); return
         if name in {"NotImplemented", "Ellipsis"}:
             b.invokestatic(RUNTIME, "notImplemented" if name == "NotImplemented" else "ellipsis", f"(){OBJ}"); return
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
-        if name in {"object", "int", "bool", "float", "complex", "str", "bytes", "bytearray", "memoryview",
+        if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
                     "list", "tuple", "dict", "set", "range", "type", "map", "slice"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
     def _store_name(self, name: str, b: CodeBuilder, scope: Scope, *, temp_scope: Scope | None = None) -> None:
         b.ldc_string(name); b.invokestatic(RUNTIME, "frameSetLocalValue", f"({OBJ}{OBJ}){OBJ}")
-        if scope.module or name in scope.global_decl:
+        if scope.namespace_slot is not None and name not in scope.global_decl:
+            value_slot = (temp_scope or scope).temp(); b.astore(value_slot)
+            b.aload(scope.namespace_slot); b.ldc_string(self._class_attr_name(name)); b.aload(value_slot)
+            b.invokestatic(RUNTIME, "classNamespacePut", f"({OBJ}{OBJ}{OBJ})V")
+        elif scope.module or name in scope.global_decl:
             if name not in self.global_fields:
                 self.global_names.add(name)
                 field_name = f"__py_global_{name}"
@@ -382,9 +365,8 @@ class Compiler:
     def _global_field(self, name: str) -> str:
         return self.global_fields[name]
 
-    def _check_deleted_global(self, name: str, b: CodeBuilder) -> None:
-        if name in self.deleted_names:
-            b.ldc_string(name); b.invokestatic(RUNTIME, "globalGet", f"({OBJ}{OBJ}){OBJ}")
+    def _check_global_binding(self, name: str, b: CodeBuilder) -> None:
+        b.ldc_string(name); b.invokestatic(RUNTIME, "globalGet", f"({OBJ}{OBJ}){OBJ}")
 
     def _prepare_deletions(self, b: CodeBuilder, scope: Scope, local_names: set[str]) -> None:
         scope.checked_names = local_names & self.deleted_names
@@ -542,6 +524,7 @@ class Compiler:
             node.args.kwarg.arg if node.args.kwarg else None,
             defaults, kw_defaults, function_field, top_level, env_mode,
             local_names, free_names, nonlocal_names, is_generator, is_async, is_async_generator)
+        info.qualname = qualname or node.name
         self.function_infos[id(node)] = info
         self.function_nodes.append(node)
         if top_level:
@@ -598,73 +581,21 @@ class Compiler:
         bases: list[ast.expr] = list(node.bases)
         if any(isinstance(base, ast.Starred) for base in bases):
             raise CompileError("starred class bases are not implemented yet")
-        methods: dict[str, MethodInfo] = {}
-        properties: dict[str, PropertyInfo] = {}
-        attrs: list[tuple[str, ast.expr]] = []
         for item in node.body:
-            if isinstance(item, ast.Pass):
+            if isinstance(item, (ast.Pass, ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant):
-                if item is node.body[0] and isinstance(item.value.value, str):
-                    attrs.append(("__doc__", item.value))
                 continue
             if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
-                attrs.append((self._mangle_class_private(node.name, item.targets[0].id), item.value))
                 continue
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
-                attrs.append((self._mangle_class_private(node.name, item.target.id), item.value))
                 continue
-            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                raise CompileError("class bodies currently support methods and simple class attributes")
-            posonly = [a.arg for a in item.args.posonlyargs]
-            poskw = [a.arg for a in item.args.args]
-            positional = posonly + poskw
-            defaults: dict[str, ast.expr] = {}
-            if item.args.defaults:
-                for param, expr in zip(positional[-len(item.args.defaults):], item.args.defaults):
-                    defaults[param] = expr
-            kw_defaults = {a.arg: e for a, e in zip(item.args.kwonlyargs, item.args.kw_defaults) if e is not None}
-            kind = "instance"
-            raw_method_name = item.name
-            method_name = self._mangle_class_private(node.name, raw_method_name)
-            # Python applies these descriptors implicitly during class creation.
-            if raw_method_name == "__new__" and not item.decorator_list:
-                kind = "static"
-            elif raw_method_name == "__init_subclass__" and not item.decorator_list:
-                kind = "class"
-            elif len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
-                kind = item.decorator_list[0].id.removesuffix("method")
-            java_name = f"__py_method_{self._method_counter}"
-            self._method_counter += 1
-            method = MethodInfo(
-                method_name, java_name, posonly, poskw, [a.arg for a in item.args.kwonlyargs],
-                item.args.vararg.arg if item.args.vararg else None,
-                item.args.kwarg.arg if item.args.kwarg else None,
-                defaults, kw_defaults, kind, item.lineno, isinstance(item, ast.AsyncFunctionDef)
-            )
-            self.class_method_infos[id(item)] = method
-
-            if not item.decorator_list or kind in {"class", "static"}:
-                methods[f"{method_name}#{len(methods)}"] = method
-                continue
-            if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id == "property":
-                properties[method_name] = PropertyInfo(method_name, method)
-                continue
-            if len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Attribute):
-                dec = item.decorator_list[0]
-                if dec.attr == "setter" and isinstance(dec.value, ast.Name):
-                    prop_name = self._mangle_class_private(node.name, dec.value.id)
-                    prop = properties.get(prop_name)
-                    if prop is None:
-                        raise CompileError(f"property setter {prop_name!r} appears before its property getter")
-                    prop.setter = method
-                    continue
-            raise CompileError("method decorators currently support @property and @name.setter")
+            raise CompileError("class bodies currently support methods and simple class attributes")
         local = not top_level
         class_field = self.global_fields.get(node.name, f"__py_class_{node.name}") if top_level else f"__py_local_class_{len(self.class_nodes)}"
         if top_level and not any(field.name == class_field for field in self.cf.fields):
             self.cf.add_field(Field(class_field))
-        info = ClassInfo(node.name, bases, methods, properties, attrs, class_field,
+        info = ClassInfo(node.name, bases, class_field,
                          metaclass, class_keywords, local, qualname)
         self.class_infos[id(node)] = info
         self.class_nodes.append(node)
@@ -680,10 +611,7 @@ class Compiler:
                 self.function_nodes.remove(item)
                 fn = self.function_infos[id(item)]
                 fn.free_names.add("__class__")
-                method = self.class_method_infos[id(item)]
-                method.java_name = fn.java_name
-                method.env_mode = True
-                method.is_async_generator = fn.is_async_generator
+
 
     @_preserve_codegen_state
     def _compile_class_methods(self, node: ast.ClassDef) -> None:
@@ -693,8 +621,8 @@ class Compiler:
         try:
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    method = self.class_method_infos[id(item)]
-                    self.current_method_self = method.positional[0] if method.positional else None
+                    function = self.function_infos[id(item)]
+                    self.current_method_self = function.positional[0] if function.positional else None
                     self._compile_function(item)
         finally:
             self.current_class, self.current_method_self = old_class, old_self
@@ -711,7 +639,7 @@ class Compiler:
         self.current_frame_name,self.current_frame_firstlineno="<module>",1
         b = CodeBuilder(self.cf.cp)
         scope = Scope(start_slot=1, module=True)
-        for name in sorted(self.deleted_names & (self.global_names | self.functions.keys() | self.classes.keys())):
+        for name in sorted(self.global_fields):
             b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, self._global_field(name), OBJ)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
@@ -1630,10 +1558,21 @@ class Compiler:
         b.invokestatic(RUNTIME, "makeFunctionEx", f"({OBJ * 10}){OBJ}")
         b.dup(); b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
+
+        b.dup(); b.ldc_string(self.module_name); b.ldc_string(info.qualname or info.name)
+        if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant) and isinstance(node.body[0].value.value, str):
+            b.ldc_string(node.body[0].value.value)
+        else: b.aconst_null()
+        b.invokestatic(RUNTIME, "setFunctionAttributes", f"({OBJ * 4})V")
+        if node.returns is not None or any(arg.annotation is not None for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs, *([node.args.vararg] if node.args.vararg else []), *([node.args.kwarg] if node.args.kwarg else [])]):
+            b.dup(); b.invokestatic(RUNTIME, "setFunctionAnnotated", f"({OBJ})V")
         if info.is_async_generator:
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAsyncGenerator", f"({OBJ})V")
         elif info.is_async:
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAsync", f"({OBJ})V")
+        if scope.namespace_slot is not None and not node.decorator_list and node.name in {"__new__", "__init_subclass__", "__class_getitem__"}:
+            b.ldc_string("static" if node.name == "__new__" else "class")
+            b.invokestatic(RUNTIME, "methodDescriptor", f"({OBJ}{OBJ}){OBJ}")
 
         if decorator_slots:
             fn_slot = scope.temp(); b.astore(fn_slot)
@@ -1713,6 +1652,8 @@ class Compiler:
         b.invokestatic(RUNTIME,"makeFunctionEx",f"({OBJ*10}){OBJ}")
         b.dup(); b.ldc_string("<lambda>"); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
+        b.dup(); b.ldc_string(self.module_name); b.ldc_string("<lambda>"); b.aconst_null()
+        b.invokestatic(RUNTIME,"setFunctionAttributes",f"({OBJ*4})V")
 
     def _emit_call_parts(self, args: list[ast.expr], keywords: list[ast.keyword], b: CodeBuilder, scope: Scope) -> None:
         b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -1882,13 +1823,23 @@ class Compiler:
             b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
             kind = "dict"
         out_slot = scope.temp(); b.astore(out_slot)
+        self._expr(node.generators[0].iter, b, scope)
+        b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}")
+        outer_iterator_slot = scope.temp(); b.astore(outer_iterator_slot)
         child = Scope(start_slot=scope.next_slot, parent=scope)
+        if scope.namespace_slot is not None:
+            child.parent = scope.parent
+            while child.parent is not None and child.parent.namespace_slot is not None:
+                child.parent = child.parent.parent
         child.comprehension_outer = scope
 
         def emit_generator(index: int) -> None:
             gen = node.generators[index]
-            iterator_slot = child.temp()
-            self._expr(gen.iter, b, child); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
+            if index == 0:
+                iterator_slot = outer_iterator_slot
+            else:
+                iterator_slot = child.temp()
+                self._expr(gen.iter, b, child); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
             start, end = b.label(), b.label()
             b.mark(start); b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterHasNext", f"({OBJ})Z"); b.ifeq(end)
             b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterNext", f"({OBJ}){OBJ}"); self._store_target(gen.target, b, child)
@@ -2152,42 +2103,27 @@ class Compiler:
                 b.aload(class_kw_slot)
                 b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}{OBJ}){OBJ}")
                 namespace_slot = scope.temp(); b.astore(namespace_slot)
-                for attr_name, attr_value in info.attrs:
-                    self._expr(attr_value, b, scope)
-                    attr_slot=scope.temp(); b.astore(attr_slot)
-                    b.aload(class_slot); b.ldc_string(attr_name); b.aload(attr_slot)
-                    b.invokestatic(RUNTIME, "classAddAttr", f"({OBJ}{OBJ}{OBJ})V")
-                    b.aload(namespace_slot); b.ldc_string(attr_name); b.aload(attr_slot)
-                    b.invokestatic(RUNTIME, "classNamespacePut", f"({OBJ}{OBJ}{OBJ})V")
-                for method in info.methods.values():
-                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
-                    defaults_slot = scope.temp(); b.astore(defaults_slot)
-                    for param, expr in [*method.defaults.items(), *method.kw_defaults.items()]:
-                        b.aload(defaults_slot); b.ldc_string(param); self._expr(expr, b, scope)
-                        b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
-                    b.aload(class_slot); b.ldc_string(method.py_name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(method.java_name); b.ldc_string(method.kind)
-                    b.ldc_string(",".join(method.posonly)); b.ldc_string(",".join(method.poskw)); b.ldc_string(",".join(method.kwonly))
-                    if method.vararg is None: b.aconst_null()
-                    else: b.ldc_string(method.vararg)
-                    if method.kwarg is None: b.aconst_null()
-                    else: b.ldc_string(method.kwarg)
-                    b.aload(defaults_slot); b.ldc_string(self.filename); self._emit_int(method.firstlineno, b)
-                    b.aload(closure_slot)
-                    b.invokestatic(RUNTIME, "classAddMethodClosure", f"({OBJ * 14})V")
-                    if method.is_async:
-                        b.aload(class_slot); b.ldc_string(method.py_name)
-                        async_setter = "classSetMethodAsyncGenerator" if method.is_async_generator else "classSetMethodAsync"
-                        b.invokestatic(RUNTIME, async_setter, f"({OBJ}{OBJ})V")
-                    b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(method.py_name)
-                    b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
-                for prop in info.properties.values():
-                    b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
-                    if prop.setter is None: b.aconst_null()
-                    else: b.ldc_string(prop.setter.java_name)
-                    b.aload(closure_slot)
-                    b.invokestatic(RUNTIME, "classAddPropertyClosure", f"({OBJ * 6})V")
-                    b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(prop.name)
-                    b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
+                body_scope = Scope(start_slot=scope.next_slot, parent=scope,
+                                   env_mode=True, env_slot=closure_slot)
+                body_scope.free_names = scope.local_names | scope.free_names
+                body_scope.local_names = {item.name for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+                for item in node.body:
+                    if isinstance(item, (ast.Assign, ast.AnnAssign)):
+                        targets = item.targets if isinstance(item, ast.Assign) else [item.target]
+                        for target in targets: body_scope.local_names.update(self._target_names(target))
+                body_scope.namespace_slot = namespace_slot
+                old_class = self.current_class
+                self.current_class = info
+                try:
+                    for item in node.body:
+                        if item is node.body[0] and isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+                            self._expr(item.value, b, body_scope)
+                            self._store_name("__doc__", b, body_scope)
+                        elif not (isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant)):
+                            self._stmt(item, b, body_scope, in_function=False)
+                finally:
+                    self.current_class = old_class
+                scope.next_slot = max(scope.next_slot, body_scope.next_slot)
 
                 b.aload(class_slot)
                 b.aload(metaclass_slot)
@@ -2334,7 +2270,7 @@ class Compiler:
     def _expr(self, node: ast.expr, b: CodeBuilder, scope: Scope) -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id
-            if name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
+            if scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
                 self._emit_dynamic_call(node.func, node.args, node.keywords, b, scope)
                 return
         match node:

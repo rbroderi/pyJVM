@@ -69,14 +69,14 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche |
-|---|---:|---:|---:|---:|
-| Compiles | 125 | 264 | 299 | 303 |
-| Unsupported | 231 | 94 | 59 | 55 |
-| Compiler error | 2 | 0 | 0 | 0 |
-| Total | 358 | 358 | 358 | 358 |
+| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche |
+|---|---:|---:|---:|---:|---:|
+| Compiles | 125 | 264 | 299 | 303 | 312 |
+| Unsupported | 231 | 94 | 59 | 55 | 46 |
+| Compiler error | 2 | 0 | 0 | 0 | 0 |
+| Total | 358 | 358 | 358 | 358 | 358 |
 
-Compile coverage increased from 34.9% to 84.6% (+178 cases; +4 this tranche). The probe now
+Compile coverage increased from 34.9% to 87.2% (+187 cases; +9 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,11 +90,12 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 151 cases. A separate
-`pyjvm315.cpython_execution` lane executes 25 unchanged CPython test
-bodies (38 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 154 cases. A separate
+`pyjvm315.cpython_execution` lane executes 29 unchanged CPython test
+bodies (42 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
-a numeric fixture with assertion helpers and no substituted module globals. Explicit fixtures implement
+a numeric fixture with assertion helpers and no substituted module globals. Four
+ClassPropertiesAndMethods bodies use an objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -114,18 +115,17 @@ cases are rejected by this lane rather than stripping skip/platform semantics.
 
 ### Remaining priorities toward full compatibility
 
-The largest remaining probe blockers are eval, first-class
-classmethod/staticmethod/property wrappers, and general class-body statements. External imports still include
+The largest remaining probe blockers are eval and general class-body statements. External imports still include
 copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 55 cases remain visible as unsupported; no
+support strategy. The remaining 46 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 303 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 303`). The old 0.31
+Compiler errors and compilation coverage below 312 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 312`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -173,3 +173,27 @@ focused suite. Complex subclasses, full numeric descriptors, constructor warning
 behavior, all nonfinite exponent cases and exact binary64 string formatting
 remain unfinished. The compile probe is still distinct from these 38 executions
 and from full CPython-suite support.
+
+
+### First-class descriptor tranche
+
+The same pinned probe reaches 312 compiling cases (87.2%), 46 unsupported and
+zero compiler errors. Class bodies use an ordered namespace instead of separate
+attribute/method/property emission passes. Function descriptors and first-class
+classmethod/staticmethod/property objects support aliases, normal decorator
+application, inherited binding, property copies and data-descriptor precedence.
+Class-bound super(), callable static wrappers, rebinding and metadata have
+focused differential coverage. Class names mask closure lookup when Python
+requires global fallback; comprehensions evaluate only their first iterable in
+the class namespace. Global fields start unbound to distinguish forward reads
+from a binding to None.
+
+Four unchanged CPython bodies are added: `test_methods`, `test_staticmethods`,
+`test_classmethod_without_dict_access` and
+`test_staticmethod_annotations_without_dict_access`. The execution lane now
+covers 29 bodies / 42 passing executions; the focused suite has 154 cases.
+Unannotated-function annotations are supported, but annotated-function deferred
+annotation evaluation raises an explicit NotImplementedError. General class-body
+control flow/nested class statements, descriptor subclassing, complete builtin
+callable metadata and live class dict proxies remain unfinished. Compile
+coverage is still distinct from runtime and full-suite compatibility.

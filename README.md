@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **303 compiling cases (84.6%)**,
-55 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **312 compiling cases (87.2%)**,
+46 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **151 passing cases**. A new strict execution
-lane runs **38 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **154 passing cases**. A new strict execution
+lane runs **42 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -685,3 +685,24 @@ all nonfinite exponent cases, and exact float-to-string parity across the entire
 binary64 range remain work in progress. Dict/set key protocols still use Java
 containers. These checks extend supported paths without establishing full
 CPython compatibility.
+
+
+## First-class descriptor compatibility
+
+Class members now execute in source order in a class namespace. Earlier methods
+can be aliased, wrapped with `classmethod`/`staticmethod`/`property`, or replaced
+by later assignments. Defaults and decorators read that namespace; method,
+lambda and comprehension bodies retain Python's lexical rules and class-cell
+captures. Missing global bindings use an explicit unbound state.
+
+Descriptors support instance/class binding, subclass owners, class-bound
+`super`, callable static methods, property getter/setter/deleter copies and
+function metadata. Instance fields can override non-data descriptors, while
+properties keep data-descriptor precedence. Four unchanged CPython descriptor
+test bodies join the strict execution lane.
+
+General class-body control flow and nested class statements, descriptor
+subclasses, full builtin callable metadata and live class mapping proxies remain
+unfinished. Unannotated functions expose their empty annotations; access to
+unimplemented deferred annotations on annotated functions raises
+`NotImplementedError`, rather than returning an empty placeholder.

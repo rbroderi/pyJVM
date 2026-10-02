@@ -28,6 +28,12 @@ class Fixture:
         assert actual is expected, "CPython assertIs failed"
     def assertNotEqual(self, actual, expected):
         assert actual != expected, "CPython assertNotEqual failed"
+    def assertIsInstance(self, actual, expected):
+        assert isinstance(actual, expected), "CPython assertIsInstance failed"
+    def assertStartsWith(self, actual, expected):
+        assert actual.startswith(expected), "CPython assertStartsWith failed"
+    def assertNotHasAttr(self, actual, name):
+        assert not hasattr(actual, name), "CPython assertNotHasAttr failed"
     def assertRaises(self, expected, function=None, *args, **kwargs):
         context = RaisesContext(expected)
         if function is None:
@@ -66,11 +72,11 @@ def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
 
 
 def fixture_source(method: ast.FunctionDef, variant: str) -> str:
-    if variant not in ('bytes', 'bytearray', 'numeric'):
+    if variant not in ('bytes', 'bytearray', 'numeric', 'objects'):
         raise ValueError("unsupported fixture variant")
     fixtures = ast.parse(FIXTURE).body
     fixture = fixtures[0]
-    if variant != 'numeric':
+    if variant in ('bytes', 'bytearray'):
         fixture.body.insert(0, ast.Assign(targets=[ast.Name(id='type2test', ctx=ast.Store())],
                                           value=ast.Name(id=variant, ctx=ast.Load())))
     fixture.body.append(copy.deepcopy(method))
@@ -94,7 +100,7 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
                 raise ValueError("execution manifest entry requires a case and optional fixture variant")
             relative, qualified = fields[0].split('::', 1)
             variants = ('bytes', 'bytearray') if len(fields) == 1 else (fields[1],)
-            if any(variant not in ('bytes', 'bytearray', 'numeric') for variant in variants):
+            if any(variant not in ('bytes', 'bytearray', 'numeric', 'objects') for variant in variants):
                 raise ValueError("unsupported fixture variant")
             method = extract_case(root / relative, qualified)
             for variant in variants:
