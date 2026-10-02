@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **312 compiling cases (87.2%)**,
-46 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **315 compiling cases (88.0%)**,
+43 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **154 passing cases**. A new strict execution
-lane runs **42 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **157 passing cases**. A new strict execution
+lane runs **43 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -701,8 +701,24 @@ function metadata. Instance fields can override non-data descriptors, while
 properties keep data-descriptor precedence. Four unchanged CPython descriptor
 test bodies join the strict execution lane.
 
-General class-body control flow and nested class statements, descriptor
-subclasses, full builtin callable metadata and live class mapping proxies remain
-unfinished. Unannotated functions expose their empty annotations; access to
+Descriptor subclasses, full builtin callable metadata and live class mapping
+proxies remain unfinished. Unannotated functions expose their empty annotations; access to
 unimplemented deferred annotations on annotated functions raises
 `NotImplementedError`, rather than returning an empty placeholder.
+
+
+## Class-body statement compatibility
+
+Class suites now support nested class definitions, methods inside control-flow
+suites, loops, unpacking/chained assignments, deletion, exception handling and
+context managers using the same ordered namespace. Global and nonlocal
+bindings bypass that namespace; nested methods retain their enclosing function
+closures and distinct class cells. Exception aliases are removed from the
+namespace after handling, including abrupt exits. Loop branches run context
+cleanup only when they leave that context.
+
+The unchanged CPython `test_compattr` body now runs in the execution lane,
+covering a nested custom descriptor with private getter/setter/deleter methods.
+Annotation-only assignments remain explicitly unsupported until deferred
+annotation semantics are implemented. Compile coverage is not full CPython
+runtime compatibility.

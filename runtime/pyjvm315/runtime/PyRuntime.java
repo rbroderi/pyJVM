@@ -2865,6 +2865,11 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)namespace;
         map.put(name,value);
     }
+    public static void classNamespaceDelete(Object namespace,Object name) {
+        Map<?,?> values=(Map<?,?>)namespace;
+        if(!values.containsKey(name)) throw new PyException("NameError", "name '"+name+"' is not defined");
+        values.remove(name);
+    }
     public static boolean classNamespaceHas(Object namespace,Object name){return ((Map<?,?>)namespace).containsKey(name);}
 
     public static void classNamespaceSyncMember(Object namespace,Object clsObj,Object nameObj) {
