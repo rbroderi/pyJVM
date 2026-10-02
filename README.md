@@ -645,8 +645,8 @@ control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **168 passing cases**. A new strict execution
-lane runs **61 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **172 passing cases**. A new strict execution
+lane runs **62 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -757,8 +757,8 @@ actual class-cell context. Nested functions, lambdas, generators, captured
 argument changes and deleted/empty bindings follow the Python 3.15 reference.
 Class suites have isolated logical frames and pop them on errors; generator
 expressions use their implicit iterable argument. Seven unchanged bodies from
-CPython's `test_super.py` join the strict execution lane. General `%` string
-formatting still blocks the larger `test_descr.test_supers` execution body.
+CPython's `test_super.py` join the strict execution lane. The complete `test_descr.test_supers` body now passes with the percent-formatting
+tranche below.
 Class-cell propagation and validation are covered below. Custom super attribute
 overrides and copying/pickling remain unfinished.
 
@@ -781,3 +781,28 @@ cell identity, wrong-cell rejection and a closure cell used as a super receiver.
 The focused corpus now has 168 cases and the strict lane has 61 executions.
 This does not complete closure/code-object introspection, custom metaclass `mro`
 behavior, full three-argument `type` metaclass selection, or native-module support.
+
+
+## Percent string formatting
+
+String `%` formatting supports `%s`, `%r`, `%a`, `%c`, decimal/octal/hex integer
+conversions and `%e`/`%f`/`%g` (including uppercase forms). It handles tuple or
+mapping operands, balanced mapping keys, flags, dynamic width/precision, Unicode
+codepoint widths/truncation, escaped percent signs and ignored `h`/`l`/`L` prefixes.
+Bound and first-class `str.__mod__` use the same implementation; `%=` preserves
+normal string rebinding. Display and numeric conversions invoke Python protocols
+and propagate callback failures. Missing mapping keys retain their `KeyError`
+argument and representation.
+
+Finite float formatting rounds the exact binary64 value with half-even decimal
+rounding; general formatting switches notation after rounding. Signed zero,
+subnormal values, exponent padding, alternate forms and nonfinite values have
+CPython 3.15 differential coverage. The runtime keeps this formatting parser off
+the shared method dispatcher. The corpus reaches **172 differential cases** and
+**62 unchanged CPython executions**, including the complete `test_supers` body.
+
+This tranche does not implement bytes `%`, str/numeric subclass hooks, the `format`
+builtin, brace formatting or f-string format specifications. Width/precision are
+limited by Java's int-sized string storage; extreme allocation behavior and all
+CPython formatting diagnostics are not fully reproduced. Compilation coverage
+remains 319/358; it is separate from runtime and full-suite compatibility.

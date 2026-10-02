@@ -506,12 +506,14 @@ public final class PyRuntime {
         if (value instanceof PyMemoryView view) return view.toString();
         if (value instanceof PyTuple t) return t.pyRepr();
         if (value instanceof PyDictView v) return v.pyRepr();
-        if (value instanceof PyExceptionValue e) return e.value == null ? "" : pyStr(e.value);
-        if (value instanceof PyException e) return e.getMessage() == null ? "" : e.getMessage();
+        if (value instanceof PyExceptionValue e) return e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):pyStr(e.value);
+        if (value instanceof PyException e) return e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):e.getMessage() == null ? "" : e.getMessage();
         if (value instanceof Throwable t) return t.getMessage() == null ? "" : t.getMessage();
         if (value instanceof PyInstance instance) {
             PyMethod m=instance.cls.lookupMethod("__str__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
+            m=instance.cls.lookupMethod("__repr__");
+            if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}
         }
         if (value instanceof List<?> xs) return seqRepr(xs, "[", "]");
         if (value instanceof Set<?> xs) {
@@ -889,7 +891,226 @@ public final class PyRuntime {
         return Math.floor(x / y);
     }
 
+    // Percent formatting is kept off the shared method dispatcher/JIT hot paths.
+    private static final class PercentFormatter {
+        final String format; final Object operand; final List<Object> args;
+        final boolean tuple,mapping; int index=0,position=0; boolean keyed=false;
+        PercentFormatter(String format,Object operand){
+            this.format=format;this.operand=operand;tuple=operand instanceof PyTuple;
+            args=tuple?((PyTuple)operand).items:Collections.singletonList(operand);
+            mapping=operand instanceof Map || operand instanceof List || operand instanceof PyByteSequence || operand instanceof PyRange ||
+                operand instanceof PyInstance instance && instance.cls.lookupMethod("__getitem__")!=null;
+        }
+        Object next(boolean star){
+            if(index>=args.size() || star && !tuple)
+                throw new PyException("TypeError","not enough arguments for format string (got "+args.size()+")");
+            return args.get(index++);
+        }
+        int star(boolean precision,int start){
+            if(keyed)throw new PyException("ValueError","* cannot be used with a parenthesised mapping key at position "+start);
+            Object value=next(true);
+            if(!isIntLike(value))throw new PyException("TypeError","format argument "+index+": * requires int, not "+typeName(value));
+            BigInteger integer=bigInt(value);
+            if(precision){
+                try{return Math.max(0,integer.intValueExact());}
+                catch(ArithmeticException error){throw new PyException("OverflowError","format argument "+index+": too big for precision");}
+            }
+            // Width uses Py_ssize_t, but Java strings have int-sized storage.
+            try{return integer.intValueExact();}
+            catch(ArithmeticException error){throw new PyException("OverflowError","format argument "+index+": too big for width");}
+        }
+        int digits(boolean precision,int start){
+            long value=0;
+            while(position<format.length() && format.charAt(position)>='0' && format.charAt(position)<='9'){
+                int digit=format.charAt(position++)-'0';
+                if(value>(Integer.MAX_VALUE-digit)/10)
+                    throw new PyException("ValueError",(precision?"precision":"width")+" too big at position "+start);
+                value=value*10+digit;
+            }
+            return (int)value;
+        }
+        String run(){
+            StringBuilder out=new StringBuilder();
+            while(position<format.length()){
+                char literal=format.charAt(position++);
+                if(literal!='%'){out.append(literal);continue;}
+                int start=position-1;
+                if(position<format.length() && format.charAt(position)=='%'){out.append('%');position++;continue;}
+                Object value=null; boolean hasKey=false; String argumentKey=null;
+                if(position<format.length() && format.charAt(position)=='('){
+                    if(!mapping)throw new PyException("TypeError","format requires a mapping, not "+typeName(operand));
+                    int keyStart=++position,depth=1;
+                    while(position<format.length() && depth>0){char c=format.charAt(position++);if(c=='(')depth++;else if(c==')')depth--;}
+                    if(depth!=0)throw new PyException("ValueError","stray % or incomplete format key at position "+start);
+                    argumentKey=format.substring(keyStart,position-1);value=getitem(operand,argumentKey);keyed=true;hasKey=true;
+                }else if(keyed)throw new PyException("ValueError","format requires a parenthesised mapping key at position "+start);
+                boolean left=false,plus=false,blank=false,alternate=false,zero=false;
+                while(position<format.length()){
+                    char flag=format.charAt(position);
+                    if(flag=='-')left=true;else if(flag=='+')plus=true;else if(flag==' ')blank=true;
+                    else if(flag=='#')alternate=true;else if(flag=='0')zero=true;else break;
+                    position++;
+                }
+                int width=0,precision=-1;
+                if(position<format.length() && format.charAt(position)=='*'){
+                    position++;width=star(false,start);if(width<0){left=true;if(width==Integer.MIN_VALUE)throw new PyException("OverflowError","format argument "+index+": too big for width");width=-width;}
+                }else width=digits(false,start);
+                if(position<format.length() && format.charAt(position)=='.'){
+                    position++;
+                    if(position<format.length() && format.charAt(position)=='*'){position++;precision=star(true,start);}
+                    else precision=digits(true,start);
+                }
+                if(position<format.length() && "hlL".indexOf(format.charAt(position))>=0)position++;
+                if(position>=format.length())throw new PyException("ValueError","stray % at position "+format.codePointCount(0,start));
+                int conversionPosition=position,code=format.codePointAt(position);
+                position+=Character.charCount(code);
+                char conversion=code<128?(char)code:0;
+                if(!hasKey)value=next(false);
+                String body,prefix="";boolean numeric=false;
+                try { switch(conversion){
+                    case 's','r','a' -> {
+                        body=conversion=='s'?pyStr(value):conversion=='r'?pyRepr(value):asciiRepr(value);
+                        if(precision>=0 && body.codePointCount(0,body.length())>precision)body=body.substring(0,body.offsetByCodePoints(0,precision));
+                    }
+                    case 'c' -> {
+                        if(value instanceof String text){
+                            int length=text.codePointCount(0,text.length());
+                            if(length!=1)throw new PyException("TypeError","format argument: %c requires an integer or a unicode character, not a string of length "+length);
+                            body=text;
+                        }else {
+                            BigInteger charCode=percentInteger(value,conversion,false);
+                            if(charCode.signum()<0 || charCode.compareTo(BigInteger.valueOf(0x10ffff))>0)throw new PyException("OverflowError","format argument: %c argument not in range(0x110000)");
+                            body=new String(Character.toChars(charCode.intValue()));
+                        }
+                    }
+                    case 'd','i','u','o','x','X' -> {
+                        BigInteger integer=percentInteger(value,conversion,"diu".indexOf(conversion)>=0);
+                        numeric=true;prefix=integer.signum()<0?"-":plus?"+":blank?" ":"";
+                        int radix=conversion=='o'?8:conversion=='x'||conversion=='X'?16:10;
+                        body=integer.abs().toString(radix);
+                        if(conversion=='X')body=body.toUpperCase(Locale.ROOT);
+                        if(precision>body.length())body="0".repeat(precision-body.length())+body;
+                        if(alternate && radix!=10)prefix+=radix==8?"0o":conversion=='X'?"0X":"0x";
+                    }
+                    case 'e','E','f','F','g','G' -> {
+                        double number=percentFloat(value,conversion);numeric=true;
+                        boolean negative=!Double.isNaN(number) && Double.doubleToRawLongBits(number)<0;
+                        prefix=negative?"-":plus?"+":blank?" ":"";
+                        body=floatDigits(Math.abs(number),conversion,precision,alternate);
+                    }
+                    default -> {
+                        int conversionOffset=format.codePointCount(0,conversionPosition);
+                        String display;
+                        if(code=='\'')display="\"'\"";
+                        else if(code>=32 && code<127)display="'"+(char)code+"'";
+                        else if(Character.isISOControl(code))display=String.format(Locale.ROOT,"U+%04X",code);
+                        else display="'"+new String(Character.toChars(code))+"' ("+String.format(Locale.ROOT,"U+%04X",code)+")";
+                        String message=code<128 && Character.isLetter(code)?"unsupported format %"+(char)code+" at position "+format.codePointCount(0,start):
+                            "stray % at position "+format.codePointCount(0,start)+" or unexpected format character "+display+" at position "+conversionOffset;
+                        throw new PyException("ValueError",message);
+                    }
+                }
+                }catch(PyException error){
+                    if(error.value instanceof String message && message.startsWith("format argument:")){
+                        String context=hasKey?" "+pyRepr(argumentKey):tuple?" "+index:"";
+                        throw new PyException(error.typeName,"format argument"+context+message.substring("format argument".length()));
+                    }
+                    throw error;
+                }
+                int padding=Math.max(0,width-prefix.length()-body.codePointCount(0,body.length()));
+                if(left)out.append(prefix).append(body).append(" ".repeat(padding));
+                else if(zero && numeric)out.append(prefix).append("0".repeat(padding)).append(body);
+                else out.append(" ".repeat(padding)).append(prefix).append(body);
+            }
+            if(!mapping && index<args.size())throw new PyException("TypeError","not all arguments converted during string formatting (required "+index+", got "+args.size()+")");
+            return out.toString();
+        }
+    }
+    private static String asciiRepr(Object value){
+        String repr=pyRepr(value);StringBuilder out=new StringBuilder();
+        repr.codePoints().forEach(code->{
+            if(code<128)out.appendCodePoint(code);
+            else out.append(String.format(Locale.ROOT,code<256?"\\x%02x":code<65536?"\\u%04x":"\\U%08x",code));
+        });
+        return out.toString();
+    }
+    private static BigInteger percentInteger(Object value,char conversion,boolean decimal){
+        Object original=value;
+        if(value instanceof PyInstance instance){
+            PyMethod method=decimal?instance.cls.lookupMethod("__int__"):null;
+            if(method==null)method=instance.cls.lookupMethod("__index__");
+            if(method!=null){
+                try{
+                    Object result=invoke(instance,method,new Object[0]);
+                    if(isIntLike(result))return bigInt(result);
+                }catch(PyException error){if(!error.typeName.equals("TypeError"))throw error;}
+            }
+        }
+        if(isIntLike(value))return bigInt(value);
+        if(decimal && value instanceof Double number){
+            if(Double.isNaN(number))throw new PyException("ValueError","cannot convert float NaN to integer");
+            if(Double.isInfinite(number))throw new PyException("OverflowError","cannot convert float infinity to integer");
+            return new java.math.BigDecimal(number).toBigInteger();
+        }
+        throw new PyException("TypeError","format argument: %"+conversion+" requires "+(decimal?"a real number":conversion=='c'?"an integer or a unicode character":"an integer")+", not "+typeName(original));
+    }
+    private static double percentFloat(Object value,char conversion){
+        Object original=value;
+        if(value instanceof PyInstance instance){
+            try{
+                PyMethod method=instance.cls.lookupMethod("__float__");
+                if(method!=null){
+                    Object result=invoke(instance,method,new Object[0]);
+                    if(result instanceof Double number)return number;
+                }else{
+                    method=instance.cls.lookupMethod("__index__");
+                    if(method!=null){Object result=invoke(instance,method,new Object[0]);if(isIntLike(result))value=result;}
+                }
+            }catch(PyException error){if(!error.typeName.equals("TypeError"))throw error;}
+        }
+        if(!(isIntLike(value) || value instanceof Double))throw new PyException("TypeError","format argument: %"+conversion+" requires a real number, not "+typeName(original));
+        double result=number(value);
+        if(value instanceof BigInteger && !Double.isFinite(result))throw new PyException("OverflowError","int too large to convert to float");
+        return result;
+    }
+    private static String floatDigits(double number,char conversion,int precision,boolean alternate){
+        // CPython reserves headroom for binary64 digits and exponent in int-sized buffers.
+        if(precision>Integer.MAX_VALUE-1024)throw new PyException("ValueError","precision too big");
+        if(Double.isNaN(number))return Character.isUpperCase(conversion)?"NAN":"nan";
+        if(Double.isInfinite(number))return Character.isUpperCase(conversion)?"INF":"inf";
+        int digits=precision<0?6:precision;
+        char kind=Character.toLowerCase(conversion);
+        java.math.BigDecimal exact=new java.math.BigDecimal(number),rounded;
+        String body;
+        if(kind=='f'){
+            body=exact.setScale(digits,java.math.RoundingMode.HALF_EVEN).toPlainString();
+            if(digits==0 && alternate)body+=".";
+        }else{
+            int significant=kind=='e'?Math.addExact(digits,1):Math.max(1,digits);
+            rounded=exact.round(new java.math.MathContext(significant,java.math.RoundingMode.HALF_EVEN));
+            int exponent=rounded.signum()==0?0:rounded.precision()-rounded.scale()-1;
+            if(kind=='e' || exponent<-4 || exponent>=significant){
+                body=rounded.movePointLeft(exponent).setScale(significant-1,java.math.RoundingMode.HALF_EVEN).toPlainString();
+                if(kind=='g' && !alternate)body=trimFraction(body);
+                if(alternate && body.indexOf('.')<0)body+=".";
+                body+=(Character.isUpperCase(conversion)?"E":"e")+(exponent<0?"-":"+")+(Math.abs(exponent)<10?"0":"")+Math.abs(exponent);
+            }else{
+                body=rounded.setScale(Math.max(0,significant-exponent-1),java.math.RoundingMode.HALF_EVEN).toPlainString();
+                if(!alternate)body=trimFraction(body);
+                else if(body.indexOf('.')<0)body+=".";
+            }
+        }
+        return body;
+    }
+    private static String trimFraction(String text){
+        if(text.indexOf('.')<0)return text;
+        int end=text.length();while(end>0 && text.charAt(end-1)=='0')end--;
+        if(end>0 && text.charAt(end-1)=='.')end--;
+        return text.substring(0,end);
+    }
+
     public static Object mod(Object a, Object b) {
+        if(a instanceof String format)return new PercentFormatter(format,b).run();
         if (isIntLike(a) && isIntLike(b)) {
             BigInteger x = bigInt(a), y = bigInt(b);
             if (y.signum() == 0) throw new ArithmeticException("integer division or modulo by zero");
@@ -1212,7 +1433,7 @@ public final class PyRuntime {
             int i=asIndex(key); return (long)seq.unsignedAt(normalizeIndex(i,seq.byteSize()));
         }
         if (value instanceof Map<?, ?> m) {
-            if (!m.containsKey(key)) throw new NoSuchElementException("key not found: " + pyRepr(key));
+            if (!m.containsKey(key)) throw new PyException("KeyError",key);
             return m.get(key);
         }
         int i = asIndex(key);
@@ -3287,6 +3508,7 @@ public final class PyRuntime {
     }
     private static boolean builtinHasMethod(String type,String name) {
         return switch(type){
+            case "str" -> name.equals("__mod__");
             case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__").contains(name);
             case "type" -> Set.of("__new__","__init__","__call__","__setattr__","__delattr__").contains(name);
             case "super" -> Set.of("__new__","__init__","__get__").contains(name);
@@ -3388,6 +3610,11 @@ public final class PyRuntime {
     }
 
     private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(builtin.name.equals("str") && name.equals("__mod__")){
+            requireArgs(name,args,2);
+            if(!(args[0] instanceof String str))throw new PyException("TypeError","str.__mod__ requires a str object");
+            return new PercentFormatter(str,args[1]).run();
+        }
         if(builtin.name.equals("super") && name.equals("__get__")){
             if(args.length<2 || args.length>3 || !(args[0] instanceof PySuper sup))throw new PyException("TypeError","super.__get__ requires a super object and instance");
             return bindSuper(sup,args[1]);
@@ -3607,6 +3834,7 @@ public final class PyRuntime {
         }
         if (obj instanceof String str) {
             return switch(name) {
+                case "__mod__" -> { requireArgs(name,args,1); yield new PercentFormatter(str,args[0]).run(); }
                 case "upper" -> { requireArgs(name,args,0); yield str.toUpperCase(Locale.ROOT); }
                 case "lower" -> { requireArgs(name,args,0); yield str.toLowerCase(Locale.ROOT); }
                 case "strip" -> { requireArgs(name,args,0); yield str.strip(); }
@@ -3812,6 +4040,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(obj instanceof String && name.equals("__mod__"))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyComplex z){
             if(name.equals("real"))return z.real;

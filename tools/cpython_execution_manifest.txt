@@ -54,3 +54,5 @@ Lib/test/test_super.py::TestSuper.test___class___delayed objects
 Lib/test/test_super.py::TestSuper.test___classcell___expected_behaviour objects
 Lib/test/test_super.py::TestSuper.test___classcell___wrong_cell objects
 Lib/test/test_super.py::TestSuper.test_cell_as_self objects
+# Percent formatting unblocks the complete cooperative super regression body.
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_supers objects

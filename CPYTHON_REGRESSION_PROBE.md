@@ -90,11 +90,11 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 168 cases. A separate
-`pyjvm315.cpython_execution` lane executes 48 unchanged CPython test
-bodies (61 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 172 cases. A separate
+`pyjvm315.cpython_execution` lane executes 49 unchanged CPython test
+bodies (62 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
-a numeric fixture with assertion helpers and no substituted module globals. Six
+a numeric fixture with assertion helpers and no substituted module globals. Seven
 ClassPropertiesAndMethods bodies, five BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
@@ -315,3 +315,27 @@ They do not establish full cell construction/equality, code-object introspection
 transitive free-variable introspection, custom metaclass MRO computation or full
 metaclass selection for three-argument `type`. Those and the previously listed
 formatting, dynamic-execution, external/native-module gaps remain unfinished.
+
+
+### Percent-formatting tranche
+
+The fixed compile probe stays **319/358**, **39 unsupported**, and **zero compiler
+errors**. Runtime coverage reaches **172 passing differential programs** and
+**49 unchanged CPython bodies / 62 executions**. `ClassPropertiesAndMethods.test_supers`
+now passes as a complete unchanged body, covering cooperative multiple inheritance,
+super subclasses, unbound descriptor binding, properties, classmethods and errors.
+The assertion fixture and existing nested/local-class lowering are unchanged.
+
+Four new focused programs cover percent text/ASCII/character conversion, arbitrarily
+large integer output and numeric callbacks, binary64 float rounding/notation, and
+mapping/error behavior. Matrices include Unicode width/truncation, dynamic fields,
+flags, alternate forms, tuple argument counts, missing keys, negative zero, subnormals,
+maximum finite binary64, infinities, NaNs, conversion callback exceptions and Python
+3.15 argument-number/key diagnostics. Direct and first-class `str.__mod__` and `%=`
+share the parser. Floating-point conversion rounds the exact binary64 value using
+half-even decimal arithmetic, rather than Java Formatter's separate conventions.
+
+Bytes percent formatting, numeric/string subclass hooks, brace/format/f-string
+specifications, Java-sized storage limits and extreme allocation behavior remain
+unfinished. All remaining compile blockers stay visible; this is a runtime semantics
+tranche and does not establish full CPython regression-suite support.
