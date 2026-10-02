@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **317 compiling cases (88.5%)**,
-41 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **319 compiling cases (89.1%)**,
+39 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **161 passing cases**. A new strict execution
-lane runs **49 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **165 passing cases**. A new strict execution
+lane runs **56 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -741,3 +741,23 @@ integers and the `__index__` protocol. Six more unchanged CPython bodies pass,
 including five from `test_builtin.py`; the execution corpus now extends beyond
 the five-file compile probe. Stable merge sorting does not reproduce CPython's
 Timsort comparison trace for stateful or inconsistent comparison methods.
+
+
+## Super protocol compatibility
+
+`super` is a first-class constructor with zero, one or two positional arguments.
+Unbound objects bind as non-data descriptors; bound objects retain their receiver,
+owner and starting class. Cooperative subclasses, readonly `__thisclass__`,
+`__self__` and `__self_class__`, explicit reinitialization and supported
+object/type/super MRO boundaries have executable differential coverage.
+Metaclass descriptors bind the class receiver and keep data-descriptor precedence.
+
+Zero-argument calls use the current function's first positional argument and its
+actual class-cell context. Nested functions, lambdas, generators, captured
+argument changes and deleted/empty bindings follow the Python 3.15 reference.
+Class suites have isolated logical frames and pop them on errors; generator
+expressions use their implicit iterable argument. Seven unchanged bodies from
+CPython's `test_super.py` join the strict execution lane. General `%` string
+formatting still blocks the larger `test_descr.test_supers` execution body.
+Metaclass class-cell propagation/validation, custom super attribute overrides
+and copying/pickling remain unfinished.

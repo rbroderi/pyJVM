@@ -117,3 +117,12 @@ before changing thresholds. Do not copy a machine-specific ns baseline into CI.
 `tests/test_benchmarks.py` checks mismatch detection, incompatible baselines,
 regression/noise handling and an all-mode JVM correctness smoke run. Existing
 focused conformance remains the independent compatibility gate.
+
+The super compatibility tranche demonstrated why the runtime control and gate
+matter: collection timings increased about 4.8x in both generated and runtime
+Java modes, with unchanged workload semantics. JDK 21 compilation diagnostics
+showed the shared method dispatcher (8,275 bytes) was not JIT compiled. Moving
+builtin-type handling to its own helper reduced the dispatcher to 7,211 bytes;
+compilation at tiers 3 and 4 resumed, and the final generated head/base collection
+ratio was 1.02. These measurements document a caught regression, not a portable
+baseline or a claim that runtime dispatch costs are unavoidable.
