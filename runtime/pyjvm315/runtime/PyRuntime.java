@@ -66,7 +66,10 @@ public final class PyRuntime {
         return new IllegalArgumentException(message + ": " + typeName(value));
     }
 
+    private static final class PyObject {}
     private static String typeName(Object value) {
+        if(value instanceof PyObject)return "object";
+        if(value instanceof PyCell)return "cell";
         if (value == null) return "NoneType";
         if (value instanceof Long || value instanceof BigInteger) return "int";
         if (value instanceof Double) return "float";
@@ -1942,8 +1945,48 @@ public final class PyRuntime {
     public static final class PyEnv {
         final PyEnv parent;
         final LinkedHashMap<String,Object> values = new LinkedHashMap<>();
+        final HashMap<String,PyCell> cells = new HashMap<>();
         PyEnv(PyEnv parent) { this.parent = parent; }
     }
+
+    // Cells share the existing lexical binding, including writes and deletion.
+    public static final class PyCell {
+        final PyEnv env; final String name;
+        PyCell(PyEnv env,String name){this.env=env;this.name=name;}
+        Object value(){return env.values.getOrDefault(name,UNBOUND);}
+        void set(Object value){env.values.put(name,value);}
+    }
+    private static PyCell envCell(PyEnv env,String name) {
+        while(env!=null && !env.values.containsKey(name))env=env.parent;
+        if(env==null)throw new PyException("RuntimeError","closure binding unavailable: "+name);
+        PyEnv binding=env;
+        return env.cells.computeIfAbsent(name,key->new PyCell(binding,key));
+    }
+    public static void classPublishCell(Object namespace,Object env) {
+        classNamespacePut(namespace,"__classcell__",envCell((PyEnv)env,"__class__"));
+    }
+    public static void classValidateCell(Object env,Object created,Object required) {
+        if(!truth(required) || !(created instanceof PyClass))return;
+        Object value=envCell((PyEnv)env,"__class__").value();
+        if(value==UNBOUND)throw new PyException("RuntimeError","__class__ not set defining class. Was __classcell__ propagated to type.__new__?");
+        if(value!=created)throw new PyException("TypeError","__class__ set to a different class defining class");
+    }
+    private static void populateClassCell(PyClass cls,Map<?,?> namespace) {
+        if(!namespace.containsKey("__classcell__"))return;
+        Object value=namespace.get("__classcell__");
+        if(!(value instanceof PyCell cell))throw new PyException("TypeError","__classcell__ must be a nonlocal cell");
+        cell.set(cls);
+    }
+    private static PyTuple functionClosure(PyFunction function) {
+        if(function.closureTuple==null){
+            PyTuple result=new PyTuple();
+            for(String name:function.freeNames)result.items.add(envCell(function.closure,name));
+            function.closureTuple=result;
+        }
+        return function.closureTuple;
+    }
+
+    public static Object envParent(Object env){return ((PyEnv)env).parent;}
 
     public static Object envChild(Object parentObj) {
         return new PyEnv((PyEnv)parentObj);
@@ -2279,6 +2322,7 @@ public final class PyRuntime {
         function.metadata.put("__name__",function.displayName);function.metadata.put("__doc__",doc);
     }
     public static void setFunctionClassCell(Object function,Object present){((PyFunction)function).hasClassCell=truth(present);}
+    public static void setFunctionFreeNames(Object function,Object names){((PyFunction)function).freeNames=splitNames((String)names);}
     public static void setFunctionAnnotated(Object function){((PyFunction)function).hasAnnotations=true;}
     public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
     public static void setFunctionAsyncGenerator(Object functionObj) { ((PyFunction)functionObj).asyncGeneratorMode=true; }
@@ -2303,6 +2347,10 @@ public final class PyRuntime {
             return callMethod(method.self,method.name,args.toArray());
         }
         if (callable instanceof PyBuiltinType type) {
+            if(type.name.equals("object")){
+                if(!args.isEmpty() || !kwargs.isEmpty())throw new PyException("TypeError","object() takes no arguments");
+                return new PyObject();
+            }
             if(type.name.equals("super"))return superConstructor(args,kwargs);
             if(type.name.equals("classmethod") || type.name.equals("staticmethod")){
                 if(!kwargs.isEmpty() || args.size()!=1)throw new PyException("TypeError",type.name+"() requires one positional argument");
@@ -2322,7 +2370,11 @@ public final class PyRuntime {
                 if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3)throw new PyException("TypeError","invalid range() arguments");
                 return args.size()==1?range1(args.get(0)):args.size()==2?range2(args.get(0),args.get(1)):range3(args.get(0),args.get(1),args.get(2));
             }
-            if(type.name.equals("type") && kwargs.isEmpty() && args.size()==1)return typeOf(args.get(0));
+            if(type.name.equals("type")){
+                if(kwargs.isEmpty() && args.size()==1)return typeOf(args.get(0));
+                if(args.size()==3)return typeNew(null,args.get(0),args.get(1),args.get(2),kwargs);
+                throw new PyException("TypeError","type() takes 1 or 3 arguments");
+            }
             if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(type.name.equals("map")) return callBuiltin("map",args,kwargs);
@@ -2384,6 +2436,8 @@ public final class PyRuntime {
         final boolean envMode;
         String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
         boolean hasAnnotations=false,hasClassCell=false;
+        List<String> freeNames=List.of();
+        PyTuple closureTuple;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -2983,7 +3037,7 @@ public final class PyRuntime {
     private static void syncNamespaceToClass(PyClass cls,Map<?,?> namespace) {
         cls.attrs.clear();cls.methods.clear();cls.properties.clear();
         for(var e:namespace.entrySet()) {
-            if(!(e.getKey() instanceof String name)) continue;
+            if(!(e.getKey() instanceof String name) || name.equals("__classcell__")) continue;
             classAddAttr(cls,name,e.getValue());
         }
     }
@@ -3013,7 +3067,10 @@ public final class PyRuntime {
 
         if(created instanceof PyClass cls) {
             cls.metaclass=meta;
-            syncNamespaceToClass(cls,namespace);
+            if(!cls.finalized){
+                syncNamespaceToClass(cls,namespace);
+                populateClassCell(cls,namespace);
+            }
             if(cls.methods.containsKey("__eq__") && !cls.methods.containsKey("__hash__") && !cls.attrs.containsKey("__hash__")) cls.attrs.put("__hash__",null);
             if(!cls.finalized) classFinalizeWithKeywords(cls,kwargs);
             if(meta!=null) {
@@ -3315,6 +3372,21 @@ public final class PyRuntime {
     public static Object callMethod3(Object obj, Object name, Object a, Object b, Object c) { return callMethod(obj, (String)name, new Object[]{a,b,c}); }
     public static Object callMethod4(Object obj, Object name, Object a, Object b, Object c, Object d) { return callMethod(obj, (String)name, new Object[]{a,b,c,d}); }
 
+    private static Object typeNew(PyClass meta,Object nameObj,Object basesObj,Object namespaceObj,Map<Object,Object> kwargs) {
+        if(!(nameObj instanceof String name))throw new PyException("TypeError","type.__new__() name must be str");
+        if(!(basesObj instanceof PyTuple bases))throw new PyException("TypeError","type.__new__() bases must be tuple");
+        if(!(namespaceObj instanceof Map<?,?> namespace))throw new PyException("TypeError","type.__new__() namespace must be mapping");
+        Object module=namespace.get("__module__");
+        PyClass cls=new PyClass(module instanceof String m?m:"__main__",name);
+        for(Object base:bases.items)classAddBase(cls,base);
+        cls.metaclass=meta;
+        if(namespace.get("__qualname__") instanceof String qualname)cls.qualname=qualname;
+        syncNamespaceToClass(cls,namespace);
+        populateClassCell(cls,namespace);
+        classFinalizeWithKeywords(cls,kwargs);
+        return cls;
+    }
+
     private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
         if(builtin.name.equals("super") && name.equals("__get__")){
             if(args.length<2 || args.length>3 || !(args[0] instanceof PySuper sup))throw new PyException("TypeError","super.__get__ requires a super object and instance");
@@ -3341,21 +3413,11 @@ public final class PyRuntime {
         }
         if(builtin.name.equals("type") && name.equals("__new__")) {
             requireArgs(name,args,4);
-            if(!(args[0] instanceof PyClass meta)) throw new PyException("TypeError","type.__new__() argument 1 must be a metaclass");
-            if(!(args[1] instanceof String className)) throw new PyException("TypeError","type.__new__() name must be str");
-            if(!(args[2] instanceof PyTuple bases)) throw new PyException("TypeError","type.__new__() bases must be tuple");
-            if(!(args[3] instanceof Map<?,?> namespace)) throw new PyException("TypeError","type.__new__() namespace must be mapping");
-            PyClass cls;
-            if(args[3] instanceof PyClassNamespace prepared) cls=prepared.prebuilt;
-            else {
-                Object module=namespace.get("__module__");
-                cls=new PyClass(module instanceof String m ? m : "__main__",className);
-                for(Object base:bases.items) classAddBase(cls,base);
-            }
-            cls.metaclass=meta;
-            syncNamespaceToClass(cls,namespace);
-            classFinalize(cls);
-            return cls;
+            PyClass meta=null;
+            if(args[0] instanceof PyClass cls && typeMro(cls).contains(builtinType("type")))meta=cls;
+            else if(!(args[0] instanceof PyBuiltinType type && type.name.equals("type")))
+                throw new PyException("TypeError","type.__new__() argument 1 must be a metaclass");
+            return typeNew(meta,args[1],args[2],args[3],new LinkedHashMap<>());
         }
         if(builtin.name.equals("type") && name.equals("__init__")) {
             requireArgs(name,args,4); return null;
@@ -3586,6 +3648,7 @@ public final class PyRuntime {
         if (obj instanceof Map<?,?> raw) {
             @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)raw;
             return switch(name) {
+                case "copy" -> { requireArgs(name,args,0); yield new LinkedHashMap<Object,Object>(map); }
                 case "get" -> { if(args.length<1||args.length>2) throw new PyException("TypeError","get expected 1 or 2 arguments"); yield map.getOrDefault(args[0],args.length==2?args[1]:null); }
                 case "keys" -> { requireArgs(name,args,0); yield new PyDictView(map, "keys"); }
                 case "values" -> { requireArgs(name,args,0); yield new PyDictView(map, "values"); }
@@ -3705,7 +3768,13 @@ public final class PyRuntime {
         if(!(nameObj instanceof String))throw new PyException("TypeError","attribute name must be string");
         String name = (String)nameObj;
         if(obj==null && name.equals("__doc__"))return "The type of the None singleton.";
+        if(obj instanceof PyCell cell && name.equals("cell_contents")){
+            Object value=cell.value();
+            if(value==UNBOUND)throw new PyException("ValueError","Cell is empty");
+            return value;
+        }
         if(obj instanceof PyFunction function){
+            if(name.equals("__closure__"))return function.freeNames.isEmpty()?null:functionClosure(function);
             if(name.equals("__dict__"))return function.attrs;
             if(function.hasAnnotations && (name.equals("__annotations__") || name.equals("__annotate__")) && !function.metadata.containsKey(name))
                 throw new PyException("NotImplementedError","deferred function annotations are not implemented");
@@ -3879,7 +3948,9 @@ public final class PyRuntime {
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
         String name=(String)nameObj;
+        if(obj instanceof PyCell cell && name.equals("cell_contents")){cell.set(value);return;}
         if(obj instanceof PyFunction function){
+            if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
             if(Set.of("__module__","__qualname__","__name__","__doc__","__annotations__","__annotate__").contains(name))function.metadata.put(name,value);
             else function.attrs.put(name,value);return;
         }
@@ -3919,7 +3990,9 @@ public final class PyRuntime {
     public static void delattr(Object obj,Object nameObj) {
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
+        if(obj instanceof PyCell cell && nameObj.equals("cell_contents")){cell.set(UNBOUND);return;}
         if(obj instanceof PyFunction function){
+            if(nameObj.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
             if(function.metadata.containsKey(nameObj)){function.metadata.remove(nameObj);return;}
             if(!function.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");function.attrs.remove(nameObj);return;
         }

@@ -645,8 +645,8 @@ control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **165 passing cases**. A new strict execution
-lane runs **56 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **168 passing cases**. A new strict execution
+lane runs **61 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -759,5 +759,25 @@ Class suites have isolated logical frames and pop them on errors; generator
 expressions use their implicit iterable argument. Seven unchanged bodies from
 CPython's `test_super.py` join the strict execution lane. General `%` string
 formatting still blocks the larger `test_descr.test_supers` execution body.
-Metaclass class-cell propagation/validation, custom super attribute overrides
-and copying/pickling remain unfinished.
+Class-cell propagation and validation are covered below. Custom super attribute
+overrides and copying/pickling remain unfinished.
+
+
+## Class-cell construction protocol
+
+The compiler publishes the actual implicit `__classcell__` to a metaclass only
+when a method or class lambda needs it. `type.__new__` fills that shared cell
+before returning, so methods can use `__class__` during metaclass construction.
+Missing propagation and a cell populated with a different class raise errors;
+non-class metaclass results can retain an empty cell for later construction.
+Class decorators run after validation. Reusing a namespace in three-argument
+`type` construction creates distinct classes and updates the shared cell.
+
+Function `__closure__` exposes cached tuples of shared lexical cells, with
+read/write/delete `cell_contents` and an explicit empty-cell error. Empty local
+bindings are reserved before nested definitions can inspect them. Five additional
+unchanged CPython bodies cover construction timing, delayed creation, namespace
+cell identity, wrong-cell rejection and a closure cell used as a super receiver.
+The focused corpus now has 168 cases and the strict lane has 61 executions.
+This does not complete closure/code-object introspection, custom metaclass `mro`
+behavior, full three-argument `type` metaclass selection, or native-module support.

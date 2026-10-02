@@ -303,7 +303,10 @@ class Compiler:
                 b.invokestatic(RUNTIME, "envGetLocal", f"({OBJ}{OBJ}){OBJ}")
                 return
             if name in scope.free_names or name in scope.nonlocal_decl:
-                b.aload(scope.env_slot); b.ldc_string(name)
+                b.aload(scope.env_slot)
+                if scope.namespace_slot is not None and name in scope.nonlocal_decl:
+                    b.invokestatic(RUNTIME, "envParent", f"({OBJ}){OBJ}")
+                b.ldc_string(name)
                 b.invokestatic(RUNTIME, "envGet", f"({OBJ}{OBJ}){OBJ}")
                 return
         elif scope.parent is not None and not scope.has_local(name):
@@ -479,6 +482,21 @@ class Compiler:
             for item in node.body: visitor.visit(item)
         return visitor.found
 
+    def _class_needs_cell(self, node: ast.ClassDef) -> bool:
+        class Visitor(ast.NodeVisitor):
+            needed = False
+            def visit_ClassDef(visitor, item): pass
+            def visit_FunctionDef(visitor, item):
+                if "__class__" in self.function_infos[id(item)].free_names:
+                    visitor.needed = True
+            visit_AsyncFunctionDef = visit_FunctionDef
+            def visit_Lambda(visitor, item):
+                if "__class__" in self.function_infos[id(item)].free_names:
+                    visitor.needed = True
+        visitor = Visitor()
+        for item in node.body: visitor.visit(item)
+        return visitor.needed
+
     def _referenced_names_shallow(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
         refs: set[str] = set()
         class Visitor(ast.NodeVisitor):
@@ -635,7 +653,6 @@ class Compiler:
                                    qualname=qualname + ".")
         for item in self._class_method_nodes(node.body):
             self.function_nodes.remove(item)
-            self.function_infos[id(item)].free_names.add("__class__")
 
     def _class_method_nodes(self, body):
         """Methods in this class's suites, excluding nested lexical scopes."""
@@ -747,7 +764,7 @@ class Compiler:
             b.aload(0); b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
             env_slot = scope.temp(); b.astore(env_slot); scope.env_slot = env_slot
             b.aload(env_slot); b.invokestatic(RUNTIME, "frameSetArgumentEnv", f"({OBJ})V")
-            for name in sorted(info.local_names & self.deleted_names):
+            for name in sorted((info.local_names - set(info.bound_args)) | (info.local_names & self.deleted_names)):
                 b.aload(env_slot); b.ldc_string(name); b.invokestatic(RUNTIME,"unbound",f"(){OBJ}")
                 b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ*3})V")
             for name in info.bound_args:
@@ -1006,7 +1023,7 @@ class Compiler:
                     free_names=info.free_names,nonlocal_names=info.nonlocal_names)
         b.aload(0); b.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
         env_slot=scope.temp(); b.astore(env_slot); scope.env_slot=env_slot
-        for name in sorted(info.local_names & self.deleted_names):
+        for name in sorted((info.local_names - set(info.bound_args)) | (info.local_names & self.deleted_names)):
             b.aload(env_slot); b.ldc_string(name); b.invokestatic(RUNTIME,"unbound",f"(){OBJ}")
             b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ*3})V")
         for name in info.bound_args:
@@ -1599,8 +1616,10 @@ class Compiler:
             b.ldc_string(node.body[0].value.value)
         else: b.aconst_null()
         b.invokestatic(RUNTIME, "setFunctionAttributes", f"({OBJ * 4})V")
-        b.dup(); self._boxed_bool("__class__" in info.free_names and self._needs_class_cell(node), b)
+        b.dup(); self._boxed_bool("__class__" in info.free_names, b)
         b.invokestatic(RUNTIME, "setFunctionClassCell", f"({OBJ * 2})V")
+        b.dup(); b.ldc_string(",".join(sorted(info.free_names)))
+        b.invokestatic(RUNTIME, "setFunctionFreeNames", f"({OBJ * 2})V")
         if node.returns is not None or any(arg.annotation is not None for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs, *([node.args.vararg] if node.args.vararg else []), *([node.args.kwarg] if node.args.kwarg else [])]):
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAnnotated", f"({OBJ})V")
         if info.is_async_generator:
@@ -1644,7 +1663,7 @@ class Compiler:
         refs={n.id for n in ast.walk(node.body) if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Load)}
         if self._needs_class_cell(node): refs.add("__class__")
         free_names={name for name in refs if name not in local_names and scope.has(name) and name not in scope.global_decl}
-        if "__class__" in refs and scope.namespace_slot is not None:
+        if "__class__" in refs and "__class__" not in local_names and scope.namespace_slot is not None:
             free_names.add("__class__")
         java_name=f"__py_lambda_{self._method_counter}"; self._method_counter += 1
         info=FunctionInfo("<lambda>", java_name, posonly,poskw,kwonly,
@@ -1695,8 +1714,10 @@ class Compiler:
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
         b.dup(); b.ldc_string(self.module_name); b.ldc_string("<lambda>"); b.aconst_null()
         b.invokestatic(RUNTIME,"setFunctionAttributes",f"({OBJ*4})V")
-        b.dup(); self._boxed_bool("__class__" in info.free_names and self._needs_class_cell(node), b)
+        b.dup(); self._boxed_bool("__class__" in info.free_names, b)
         b.invokestatic(RUNTIME, "setFunctionClassCell", f"({OBJ * 2})V")
+        b.dup(); b.ldc_string(",".join(sorted(info.free_names)))
+        b.invokestatic(RUNTIME, "setFunctionFreeNames", f"({OBJ * 2})V")
 
     def _emit_call_parts(self, args: list[ast.expr], keywords: list[ast.keyword], b: CodeBuilder, scope: Scope) -> None:
         b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -2134,6 +2155,9 @@ class Compiler:
                 else: b.aconst_null()
                 b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
                 closure_slot = scope.temp(); b.astore(closure_slot)
+                b.aload(closure_slot); b.ldc_string("__class__")
+                b.invokestatic(RUNTIME, "unbound", f"(){OBJ}")
+                b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
                 for base in info.bases:
                     b.aload(class_slot); self._expr(base, b, scope)
                     b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
@@ -2187,13 +2211,19 @@ class Compiler:
                 b.mark(body_done)
                 scope.next_slot = max(scope.next_slot, body_scope.next_slot)
 
+                # Publish only an actual implicit class cell, after suite execution.
+                # Nested class cells belong to their own class construction.
+                needs_cell = self._class_needs_cell(node)
+                if needs_cell:
+                    b.aload(namespace_slot); b.aload(closure_slot)
+                    b.invokestatic(RUNTIME, "classPublishCell", f"({OBJ * 2})V")
                 b.aload(class_slot)
                 b.aload(metaclass_slot)
                 b.aload(namespace_slot); b.aload(class_kw_slot)
                 b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
                 b.astore(class_slot)
-                b.aload(closure_slot); b.ldc_string("__class__"); b.aload(class_slot)
-                b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
+                b.aload(closure_slot); b.aload(class_slot); self._boxed_bool(needs_cell, b)
+                b.invokestatic(RUNTIME, "classValidateCell", f"({OBJ * 3})V")
                 for decorator_slot in reversed(decorator_slots):
                     b.aload(decorator_slot)
                     b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
