@@ -82,6 +82,9 @@ public final class PyRuntime {
         if (value instanceof Set) return "set";
         if (value instanceof PyRange) return "range";
         if (value instanceof PyFunction) return "function";
+        if (value instanceof PyMethodDescriptor d) return d.kind.equals("class")?"classmethod":"staticmethod";
+        if (value instanceof PyManagedProperty) return "property";
+        if (value instanceof BoundCallable) return "method";
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
         if (value instanceof BuiltinBoundMethod) return "builtin_function_or_method";
         if (value instanceof PyMap) return "map";
@@ -193,6 +196,26 @@ public final class PyRuntime {
     }
     private record PyBuiltinFunction(String name) {}
     private record BuiltinBoundMethod(Object self,String name) {}
+    private record BoundCallable(Object function,Object self) {}
+    private static final class PyMethodDescriptor {
+        final Object function; final String kind;
+        final LinkedHashMap<Object,Object> attrs=new LinkedHashMap<>();
+        PyMethodDescriptor(Object function,String kind){
+            this.function=function;this.kind=kind;
+            for(String name:List.of("__module__","__name__","__qualname__","__doc__")){
+                try{attrs.put(name,getattr(function,name));}catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;}
+            }
+        }
+    }
+    private static final class PyManagedProperty {
+        final Object getter,setter,deleter; Object doc; String name; boolean getterDoc;
+        PyManagedProperty(Object getter,Object setter,Object deleter,Object doc){
+            this.getter=getter;this.setter=setter;this.deleter=deleter;this.doc=doc;
+            this.getterDoc=doc==null;
+            if(doc==null && getter!=null){try{this.doc=getattr(getter,"__doc__");}catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;}}
+        }
+    }
+    public static Object methodDescriptor(Object function,Object kind){return new PyMethodDescriptor(function,(String)kind);}
     public static Object builtinFunction(Object name) { return new PyBuiltinFunction((String)name); }
     private static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
         if(name.equals("print")) {
@@ -335,7 +358,7 @@ public final class PyRuntime {
         if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : builtinType("type");
         return builtinType(typeName(value));
     }
-    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
+    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundCallable || value instanceof PyMethodDescriptor d && d.kind.equals("static") || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType || value instanceof PyInstance instance && instance.cls.lookupAttr("__call__")!=MISSING;}
 
     private enum Singleton { NOT_IMPLEMENTED, ELLIPSIS }
     private static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
@@ -460,6 +483,10 @@ public final class PyRuntime {
     public static String pyStr(Object value) {
         if (value == null) return "None";
         if (value instanceof PyComplex z) return z.toString();
+        if(value instanceof BoundCallable bound){
+            String name=bound.function instanceof PyFunction function?(String)function.metadata.getOrDefault("__qualname__",function.displayName):"?";
+            return "<bound method "+name+" of "+pyRepr(bound.self)+">";
+        }
         if(value==NOT_IMPLEMENTED)return "NotImplemented";
         if(value==ELLIPSIS)return "Ellipsis";
         if (value instanceof Boolean b) return b ? "True" : "False";
@@ -1863,7 +1890,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","complex","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -2149,6 +2176,12 @@ public final class PyRuntime {
     public static void setFunctionMeta(Object functionObj,Object nameObj,Object filenameObj,Object firstlineObj) {
         PyFunction f=(PyFunction)functionObj; f.displayName=(String)nameObj; f.filename=(String)filenameObj; f.firstlineno=bigInt(firstlineObj).longValue();
     }
+    public static void setFunctionAttributes(Object functionObj,Object module,Object qualname,Object doc){
+        PyFunction function=(PyFunction)functionObj;
+        function.metadata.put("__module__",module);function.metadata.put("__qualname__",qualname);
+        function.metadata.put("__name__",function.displayName);function.metadata.put("__doc__",doc);
+    }
+    public static void setFunctionAnnotated(Object function){((PyFunction)function).hasAnnotations=true;}
     public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
     public static void setFunctionAsyncGenerator(Object functionObj) { ((PyFunction)functionObj).asyncGeneratorMode=true; }
 
@@ -2161,12 +2194,37 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") List<Object> args = (List<Object>) argsObj;
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs = (Map<Object,Object>) kwargsObj;
         if (callable instanceof PyFunction f) return f.call(args, kwargs);
+        if(callable instanceof BoundCallable method){
+            ArrayList<Object> actual=new ArrayList<>();actual.add(method.self);actual.addAll(args);
+            return callFunction(method.function,actual,kwargs);
+        }
+        if(callable instanceof PyMethodDescriptor method && method.kind.equals("static"))return callFunction(method.function,args,kwargs);
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
         if (callable instanceof BuiltinBoundMethod method) {
             if(!kwargs.isEmpty())throw new PyException("TypeError","method takes no keyword arguments");
             return callMethod(method.self,method.name,args.toArray());
         }
         if (callable instanceof PyBuiltinType type) {
+            if(type.name.equals("classmethod") || type.name.equals("staticmethod")){
+                if(!kwargs.isEmpty() || args.size()!=1)throw new PyException("TypeError",type.name+"() requires one positional argument");
+                return methodDescriptor(args.get(0),type.name.equals("classmethod")?"class":"static");
+            }
+            if(type.name.equals("property")){
+                if(args.size()>4)throw new PyException("TypeError","property() takes at most 4 arguments");
+                Object[] values=new Object[4];for(int i=0;i<args.size();i++)values[i]=args.get(i);
+                List<String> names=List.of("fget","fset","fdel","doc");
+                for(var entry:kwargs.entrySet()){
+                    int index=names.indexOf(entry.getKey());
+                    if(index<0 || index<args.size())throw new PyException("TypeError","invalid property() argument");values[index]=entry.getValue();
+                }
+                return new PyManagedProperty(values[0],values[1],values[2],values[3]);
+            }
+            if(type.name.equals("range")){
+                if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3)throw new PyException("TypeError","invalid range() arguments");
+                return args.size()==1?range1(args.get(0)):args.size()==2?range2(args.get(0),args.get(1)):range3(args.get(0),args.get(1),args.get(2));
+            }
+            if(type.name.equals("type") && kwargs.isEmpty() && args.size()==1)return typeOf(args.get(0));
+            if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(type.name.equals("map")) return callBuiltin("map",args,kwargs);
             if(type.name.equals("slice")) {
@@ -2209,10 +2267,16 @@ public final class PyRuntime {
         if (callable instanceof PyClass cls) {
             return instantiate(cls, args.toArray(), kwargs);
         }
+        if(callable instanceof PyInstance instance){
+            PyMethod method=instance.cls.lookupMethod("__call__");
+            if(method!=null)return invokeKw(instance,method,args,kwargs);
+        }
         throw new PyException("TypeError", "object is not callable");
     }
 
     public static final class PyFunction {
+        final LinkedHashMap<Object,Object> attrs=new LinkedHashMap<>();
+        final LinkedHashMap<Object,Object> metadata=new LinkedHashMap<>();
         final String owner, method;
         final List<String> posonly, poskw, kwonly;
         final String vararg, kwarg;
@@ -2220,6 +2284,7 @@ public final class PyRuntime {
         final PyEnv closure;
         final boolean envMode;
         String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
+        boolean hasAnnotations=false;
 
         PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                    String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
@@ -2734,7 +2799,19 @@ public final class PyRuntime {
         throw new PyException("TypeError","class base must be a class");
     }
     public static void classAddAttr(Object cls, Object pyName, Object value) {
-        ((PyClass)cls).attrs.put((String)pyName, value);
+        PyClass target=(PyClass)cls;String name=(String)pyName;
+        if(value instanceof PyFunction && Set.of("__new__","__init_subclass__","__class_getitem__").contains(name))
+            value=methodDescriptor(value,name.equals("__new__")?"static":"class");
+        target.attrs.put(name, value);
+        target.methods.remove(name);target.properties.remove(name);
+        PyMethod method=methodFromDescriptor(value);
+        if(method!=null)target.methods.put(name,method);
+    }
+    private static PyMethod methodFromDescriptor(Object value){
+        String kind="instance";
+        if(value instanceof PyMethodDescriptor descriptor){kind=descriptor.kind;value=descriptor.function;}
+        if(value instanceof PyFunction function)return new PyMethod(function.owner,function.method,kind,function);
+        return null;
     }
 
     private static PyTuple explicitBasesTuple(PyClass cls) {
@@ -2788,6 +2865,7 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)namespace;
         map.put(name,value);
     }
+    public static boolean classNamespaceHas(Object namespace,Object name){return ((Map<?,?>)namespace).containsKey(name);}
 
     public static void classNamespaceSyncMember(Object namespace,Object clsObj,Object nameObj) {
         @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)namespace;
@@ -2795,11 +2873,10 @@ public final class PyRuntime {
     }
 
     private static void syncNamespaceToClass(PyClass cls,Map<?,?> namespace) {
+        cls.attrs.clear();cls.methods.clear();cls.properties.clear();
         for(var e:namespace.entrySet()) {
             if(!(e.getKey() instanceof String name)) continue;
-            if(name.equals("__module__") || name.equals("__qualname__")) continue;
-            if(cls.methods.containsKey(name) || cls.properties.containsKey(name)) continue;
-            cls.attrs.put(name,e.getValue());
+            classAddAttr(cls,name,e.getValue());
         }
     }
 
@@ -2965,6 +3042,7 @@ public final class PyRuntime {
         // PEP 487: descriptors receive their owner/name before __init_subclass__.
         for(var entry:new ArrayList<>(cls.attrs.entrySet())) {
             Object value=entry.getValue();
+            if(value instanceof PyManagedProperty property)property.name=entry.getKey();
             if(value instanceof PyInstance descriptor) {
                 PyMethod setName=descriptor.cls.lookupMethod("__set_name__");
                 if(setName!=null) invoke(descriptor,setName,new Object[]{cls,entry.getKey()});
@@ -2984,10 +3062,10 @@ public final class PyRuntime {
         classFinalizeWithKeywords((PyClass)clsObj,new LinkedHashMap<>());
     }
     public static Object makeSuper(Object currentClass, Object self) {
-        if (!(currentClass instanceof PyClass cls) || !(self instanceof PyInstance instance))
-            throw new PyException("TypeError", "super() arguments must be a class and instance");
-        if (!instance.cls.mro.contains(cls)) throw new PyException("TypeError", "super(type, obj): obj must be an instance or subtype of type");
-        return new PySuper(cls, instance);
+        if (!(currentClass instanceof PyClass cls))throw new PyException("TypeError", "super() argument 1 must be a class");
+        PyClass owner=self instanceof PyInstance instance?instance.cls:self instanceof PyClass type?type:null;
+        if(owner==null || !owner.mro.contains(cls))throw new PyException("TypeError", "super(type, obj): obj must be an instance or subtype of type");
+        return new PySuper(cls, self,owner);
     }
 
     public static Object instantiate0(Object cls) { return instantiate((PyClass)cls, new Object[0]); }
@@ -3053,6 +3131,25 @@ public final class PyRuntime {
     public static Object callMethod4(Object obj, Object name, Object a, Object b, Object c, Object d) { return callMethod(obj, (String)name, new Object[]{a,b,c,d}); }
 
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if(name.equals("__get__") && (obj instanceof PyFunction || obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty)){
+            if(args.length<1 || args.length>2)throw new PyException("TypeError","__get__() requires instance and optional owner");
+            Object owner=args.length==2?args[1]:args[0]==null?null:typeOf(args[0]);
+            if(args[0]==null && owner==null)throw new PyException("TypeError","__get__(None, None) is invalid");
+            return descriptorGet(obj,args[0],owner);
+        }
+        if(obj instanceof PyManagedProperty property){
+            if(Set.of("getter","setter","deleter").contains(name)){
+                requireArgs(name,args,1);
+                PyManagedProperty copy=new PyManagedProperty(name.equals("getter")?args[0]:property.getter,
+                    name.equals("setter")?args[0]:property.setter,name.equals("deleter")?args[0]:property.deleter,property.getterDoc?null:property.doc);
+                copy.name=property.name;copy.getterDoc=property.getterDoc;return copy;
+            }
+            if(name.equals("__set_name__")){requireArgs(name,args,2);property.name=(String)args[1];return null;}
+            if(name.equals("__set__")){requireArgs(name,args,2);if(property.setter==null)throw new PyException("AttributeError","property has no setter");return callFunction(property.setter,new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());}
+            if(name.equals("__delete__")){requireArgs(name,args,1);if(property.deleter==null)throw new PyException("AttributeError","property has no deleter");return callFunction(property.deleter,new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());}
+        }
+        if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable)
+            return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         if(obj instanceof PyComplex z){
             requireArgs(name,args,0);
             return switch(name){
@@ -3065,9 +3162,7 @@ public final class PyRuntime {
             };
         }
         if (obj instanceof PySuper sup) {
-            PyMethod method = sup.self.cls.lookupMethodAfter(sup.currentClass, name);
-            if (method == null) throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
-            return invoke(sup.self, method, args);
+            return callFunction(getattr(sup,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         }
         if (obj instanceof PyBuiltinType builtin) {
             if(builtin.name.equals("object") && name.equals("__new__")) {
@@ -3107,7 +3202,7 @@ public final class PyRuntime {
         }
         if (obj instanceof PyClass cls) {
             PyMethod method=cls.lookupMethod(name);
-            if(method==null) throw new PyException("AttributeError","type object '"+cls.name+"' has no method '"+name+"'");
+            if(method==null)return callFunction(getattr(cls,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
             return invokeOnClass(cls,method,args);
         }
         if (obj instanceof PyAsyncGenerator generator) {
@@ -3305,6 +3400,7 @@ public final class PyRuntime {
             };
         }
         if (!(obj instanceof PyInstance instance)) throw typeError("method call on non-instance", obj);
+        if(instance.fields.containsKey(name))return callFunction(getattr(instance,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         PyMethod method = instance.cls.lookupMethod(name);
         if (method == null) {
             Object callable=getattr(instance,name);
@@ -3365,15 +3461,26 @@ public final class PyRuntime {
     }
 
     private static boolean isDescriptor(Object value) {
-        return value instanceof PySlotDescriptor ||
+        return value instanceof PyFunction || value instanceof PyMethodDescriptor || value instanceof PyManagedProperty || value instanceof PySlotDescriptor ||
             (value instanceof PyInstance descriptor && descriptor.cls.lookupMethod("__get__") != null);
     }
     private static boolean isDataDescriptor(Object value) {
-        return value instanceof PySlotDescriptor ||
+        return value instanceof PyManagedProperty || value instanceof PySlotDescriptor ||
             (value instanceof PyInstance descriptor &&
             (descriptor.cls.lookupMethod("__set__") != null || descriptor.cls.lookupMethod("__delete__") != null));
     }
-    private static Object descriptorGet(Object descriptor, Object instance, PyClass owner) {
+    private static Object descriptorGet(Object descriptor, Object instance, Object owner) {
+        if(descriptor instanceof PyFunction)return instance==null?descriptor:new BoundCallable(descriptor,instance);
+        if(descriptor instanceof PyMethodDescriptor method){
+            if(method.kind.equals("static"))return method.function;
+            if(owner==null){if(instance==null)throw new PyException("TypeError","__get__(None, None) is invalid");owner=typeOf(instance);}
+            return new BoundCallable(method.function,owner);
+        }
+        if(descriptor instanceof PyManagedProperty property){
+            if(instance==null)return property;
+            if(property.getter==null)throw new PyException("AttributeError","property has no getter");
+            return callFunction(property.getter,new ArrayList<>(Arrays.asList(instance)),new LinkedHashMap<>());
+        }
         if(descriptor instanceof PySlotDescriptor slot) {
             if(instance==null) return slot;
             if(!(instance instanceof PyInstance pyInstance))
@@ -3389,6 +3496,44 @@ public final class PyRuntime {
     public static Object getattr(Object obj, Object nameObj) {
         if(!(nameObj instanceof String))throw new PyException("TypeError","attribute name must be string");
         String name = (String)nameObj;
+        if(obj==null && name.equals("__doc__"))return "The type of the None singleton.";
+        if(obj instanceof PyFunction function){
+            if(name.equals("__dict__"))return function.attrs;
+            if(function.hasAnnotations && (name.equals("__annotations__") || name.equals("__annotate__")) && !function.metadata.containsKey(name))
+                throw new PyException("NotImplementedError","deferred function annotations are not implemented");
+            if(name.equals("__annotations__"))return function.metadata.computeIfAbsent(name,key->new LinkedHashMap<>());
+            if(name.equals("__annotate__"))return function.metadata.get(name);
+            if(name.equals("__get__"))return new BuiltinBoundMethod(obj,name);
+            if(function.metadata.containsKey(name))return function.metadata.get(name);
+            if(function.attrs.containsKey(name))return function.attrs.get(name);
+            if(!name.equals("__class__"))throw new PyException("AttributeError","function has no attribute '"+name+"'");
+        }
+        if(obj instanceof PyMethodDescriptor method){
+            if(name.equals("__dict__"))return method.attrs;
+            if(name.equals("__func__") || name.equals("__wrapped__"))return method.function;
+            if(name.equals("__get__"))return new BuiltinBoundMethod(obj,name);
+            if(method.attrs.containsKey(name))return method.attrs.get(name);
+            if(name.equals("__annotations__") || name.equals("__annotate__")){
+                Object value=getattr(method.function,name);method.attrs.put(name,value);return value;
+            }
+            if(!name.equals("__class__"))throw new PyException("AttributeError","method descriptor has no attribute '"+name+"'");
+        }
+        if(obj instanceof BoundCallable bound){
+            if(name.equals("__self__"))return bound.self;
+            if(name.equals("__func__"))return bound.function;
+            if(!name.equals("__class__"))return getattr(bound.function,name);
+        }
+        if(obj instanceof PyManagedProperty property){
+            switch(name){
+                case "fget": return property.getter;
+                case "fset": return property.setter;
+                case "fdel": return property.deleter;
+                case "__doc__": return property.doc;
+                case "__name__": if(property.name!=null)return property.name;if(property.getter!=null)return getattr(property.getter,"__name__");break;
+                case "getter", "setter", "deleter", "__get__", "__set__", "__delete__", "__set_name__": return new BuiltinBoundMethod(obj,name);
+            }
+            if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
+        }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(obj instanceof PyComplex z){
             if(name.equals("real"))return z.real;
@@ -3438,12 +3583,10 @@ public final class PyRuntime {
             return switch(name){case "co_name" -> code.coName; case "co_filename" -> code.coFilename; case "co_firstlineno" -> code.coFirstlineno; default -> throw new PyException("AttributeError","code has no attribute '"+name+"'");};
         }
         if (obj instanceof PySuper sup) {
-            PyProperty prop=sup.self.cls.lookupPropertyAfter(sup.currentClass,name);
-            if(prop!=null) return invoke(sup.self,prop.getterMethod(),new Object[0]);
-            PyMethod method=sup.self.cls.lookupMethodAfter(sup.currentClass,name);
-            if(method!=null) return new BoundSuperMethod(sup.self,sup.currentClass,name);
-            Object attr=sup.self.cls.lookupAttrAfter(sup.currentClass,name);
-            if(attr!=MISSING) return attr;
+            Object attr=sup.owner.lookupAttrAfter(sup.currentClass,name);
+            if(attr!=MISSING)return descriptorGet(attr,sup.self instanceof PyClass?null:sup.self,sup.owner);
+            PyMethod method=sup.owner.lookupMethodAfter(sup.currentClass,name);
+            if(method!=null && sup.self instanceof PyInstance instance)return new BoundSuperMethod(instance,sup.currentClass,name);
             throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
@@ -3467,6 +3610,7 @@ public final class PyRuntime {
             if(name.equals("__dict__")) {
                 LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
                 out.putAll(cls.attrs);
+                for(var entry:cls.methods.entrySet())out.putIfAbsent(entry.getKey(),entry.getValue().function);
                 out.put("__module__",cls.moduleName);
                 out.put("__name__",cls.name);
                 return out;
@@ -3495,14 +3639,14 @@ public final class PyRuntime {
             Object classAttr=instance.cls.lookupAttr(name);
             if(classAttr!=MISSING && isDataDescriptor(classAttr)) return descriptorGet(classAttr, instance, instance.cls);
             if (instance.fields.containsKey(name)) return instance.fields.get(name);
+            if(classAttr!=MISSING) return descriptorGet(classAttr, instance, instance.cls);
             PyMethod method=instance.cls.lookupMethod(name);
             if (method != null) return new BoundMethod(instance, name);
-            if(classAttr!=MISSING) return descriptorGet(classAttr, instance, instance.cls);
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
-        throw typeError("attribute access on unsupported object", obj);
+        throw new PyException("AttributeError","'"+typeName(obj)+"' object has no attribute '"+name+"'");
     }
 
     public static Object getattrDefault(Object obj,Object nameObj,Object defaultValue) {
@@ -3514,6 +3658,18 @@ public final class PyRuntime {
 
     public static void setattr(Object obj, Object nameObj, Object value) {
         String name=(String)nameObj;
+        if(obj instanceof PyFunction function){
+            if(Set.of("__module__","__qualname__","__name__","__doc__","__annotations__","__annotate__").contains(name))function.metadata.put(name,value);
+            else function.attrs.put(name,value);return;
+        }
+        if(obj instanceof PyMethodDescriptor method){
+            if(Set.of("__func__","__wrapped__").contains(name))throw new PyException("AttributeError","readonly attribute");
+            method.attrs.put(name,value);return;
+        }
+        if(obj instanceof PyManagedProperty property && (name.equals("__doc__") || name.equals("__name__"))){
+            if(name.equals("__doc__"))property.doc=value;else property.name=(String)value;return;
+        }
+        if(obj instanceof PyManagedProperty)throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
         if (obj instanceof PyInstance instance) {
             PyProperty prop=instance.cls.lookupProperty(name);
@@ -3522,6 +3678,10 @@ public final class PyRuntime {
                 invoke(instance,prop.setterMethod(),new Object[]{value}); return;
             }
             Object descriptor=instance.cls.lookupAttr(name);
+            if(descriptor instanceof PyManagedProperty property){
+                if(property.setter==null)throw new PyException("AttributeError","property has no setter");
+                callFunction(property.setter,new ArrayList<>(Arrays.asList(instance,value)),new LinkedHashMap<>());return;
+            }
             if(descriptor instanceof PySlotDescriptor slot) {
                 instance.slotValues.put(slot.name,value); return;
             }
@@ -3532,15 +3692,24 @@ public final class PyRuntime {
                 throw new PyException("AttributeError","'"+instance.cls.name+"' object has no attribute '"+name+"'");
             instance.fields.put(name, value); return;
         }
-        if(obj instanceof PyClass cls){cls.attrs.put(name,value);return;}
+        if(obj instanceof PyClass cls){classAddAttr(cls,name,value);return;}
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
+        if(obj instanceof PyFunction function){
+            if(function.metadata.containsKey(nameObj)){function.metadata.remove(nameObj);return;}
+            if(!function.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");function.attrs.remove(nameObj);return;
+        }
+        if(obj instanceof PyMethodDescriptor method){if(!method.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");method.attrs.remove(nameObj);return;}
         if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
         if(obj instanceof PyInstance instance) {
             String name=(String)nameObj;
             if(instance.cls.lookupProperty(name)!=null) throw new PyException("AttributeError","property '"+name+"' has no deleter");
             Object descriptor=instance.cls.lookupAttr(name);
+            if(descriptor instanceof PyManagedProperty property){
+                if(property.deleter==null)throw new PyException("AttributeError","property has no deleter");
+                callFunction(property.deleter,new ArrayList<>(Arrays.asList(instance)),new LinkedHashMap<>());return;
+            }
             if(descriptor instanceof PySlotDescriptor slot) {
                 if(!instance.slotValues.containsKey(slot.name))
                     throw new PyException("AttributeError","attribute not found");
@@ -3553,7 +3722,7 @@ public final class PyRuntime {
                 throw new PyException("AttributeError","attribute not found");
             instance.fields.remove(name); return;
         }
-        if(obj instanceof PyClass cls){String name=(String)nameObj;if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);return;}
+        if(obj instanceof PyClass cls){String name=(String)nameObj;if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);cls.methods.remove(name);cls.properties.remove(name);return;}
         throw typeError("attribute deletion on unsupported object",obj);
     }
 
@@ -3572,6 +3741,9 @@ public final class PyRuntime {
                 case "bool" -> obj instanceof Boolean;
                 case "float" -> obj instanceof Double;
                 case "complex" -> obj instanceof PyComplex;
+                case "classmethod" -> obj instanceof PyMethodDescriptor descriptor && descriptor.kind.equals("class");
+                case "staticmethod" -> obj instanceof PyMethodDescriptor descriptor && descriptor.kind.equals("static");
+                case "property" -> obj instanceof PyManagedProperty;
                 case "str" -> obj instanceof String;
                 case "bytes" -> obj instanceof PyBytes;
                 case "bytearray" -> obj instanceof PyByteArray;
@@ -3625,7 +3797,7 @@ public final class PyRuntime {
     private record BoundClassMethod(PyClass cls,String name) {}
     private record BoundStaticMethod(PyClass cls,String name) {}
     private record UnboundMethod(PyClass cls,String name) {}
-    private record PySuper(PyClass currentClass, PyInstance self) {}
+    private record PySuper(PyClass currentClass, Object self,PyClass owner) {}
 
     public static final class PyInstance {
         final PyClass cls;
@@ -3652,11 +3824,11 @@ public final class PyRuntime {
         boolean finalized = false;
         PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; }
 
-        PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;} return null; }
+        PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;if(c.attrs.containsKey(name))return null;} return null; }
         PyProperty lookupProperty(String name) { for (PyClass c:mro){PyProperty p=c.properties.get(name);if(p!=null)return p;} return null; }
         Object lookupAttr(String name) { for (PyClass c:mro) if(c.attrs.containsKey(name)) return c.attrs.get(name); return MISSING; }
         int mroIndex(PyClass current){int i=mro.indexOf(current);if(i<0)throw new PyException("TypeError","super(type, obj): type is not in MRO");return i;}
-        PyMethod lookupMethodAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyMethod m=mro.get(i).methods.get(name);if(m!=null)return m;}return null;}
+        PyMethod lookupMethodAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyClass cls=mro.get(i);PyMethod m=cls.methods.get(name);if(m!=null)return m;if(cls.attrs.containsKey(name))return null;}return null;}
         PyProperty lookupPropertyAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyProperty p=mro.get(i).properties.get(name);if(p!=null)return p;}return null;}
         Object lookupAttrAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyClass c=mro.get(i);if(c.attrs.containsKey(name))return c.attrs.get(name);}return MISSING;}
 

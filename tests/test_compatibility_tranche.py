@@ -101,6 +101,16 @@ def test_numeric_fixture_preserves_body_without_byte_type_binding():
     assert not any(isinstance(node, ast.Assign) for node in fixture.body)
 
 
+def test_descriptor_fixture_keeps_test_body_and_no_synthetic_bindings():
+    method = ast.parse('def test_value(self):\n    self.assertIsInstance(staticmethod(lambda: 1), staticmethod)\n').body[0]
+    driver = ast.parse(fixture_source(method, 'objects'))
+    fixture = driver.body[0]
+    extracted = next(node for node in fixture.body
+                     if isinstance(node, ast.FunctionDef) and node.name == 'test_value')
+    assert ast.dump(method.body[0]) == ast.dump(extracted.body[0])
+    assert not any(isinstance(node, (ast.Assign, ast.Import, ast.ImportFrom)) for node in fixture.body)
+
+
 def test_probe_coverage_floor_fails_on_regression(tmp_path, capsys):
     from pyjvm315.regression_probe import main
     source = tmp_path / 'test_floor.py'

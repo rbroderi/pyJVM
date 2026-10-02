@@ -52,7 +52,7 @@ jobs:
             --cpython-root cpython-src \
             --output artifacts/cpython-regression-probe.json \
             --top 30 \
-            --fail-on-error --min-compiles 303
+            --fail-on-error --min-compiles 312
       - name: Upload regression probe report
         if: always()
         uses: actions/upload-artifact@v4
