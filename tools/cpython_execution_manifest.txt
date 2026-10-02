@@ -1,5 +1,6 @@
 # Unchanged CPython 3.15 test bodies; run for both bytes and bytearray fixtures.
-# The fixture implements only assertEqual and type2test; no imports are replaced.
+# Fixtures implement type2test, assertEqual, assertIs, and assertRaises; no imports are replaced.
+# Omitted variant runs both bytes and bytearray; explicit variants avoid duplicate subclass bodies.
 Lib/test/test_bytes.py::BaseBytesTest.test_ord
 Lib/test/test_bytes.py::BaseBytesTest.test_from_tuple
 Lib/test/test_bytes.py::BaseBytesTest.test_from_list
@@ -9,3 +10,14 @@ Lib/test/test_bytes.py::BaseBytesTest.test_repeat_1char
 Lib/test/test_bytes.py::BaseBytesTest.test_replace
 Lib/test/test_bytes.py::BaseBytesTest.test_partition
 Lib/test/test_bytes.py::BaseBytesTest.test_rpartition
+Lib/test/test_bytes.py::BaseBytesTest.test_basics
+Lib/test/test_bytes.py::BaseBytesTest.test_concat
+Lib/test/test_bytes.py::BaseBytesTest.test_constructor_exceptions
+Lib/test/test_bytes.py::BaseBytesTest.test_count
+Lib/test/test_bytes.py::ByteArrayTest.test_nohash bytearray
+Lib/test/test_bytes.py::ByteArrayTest.test_fifo_overrun bytearray
+Lib/test/test_bytes.py::ByteArrayTest.test_setslice_extend bytearray
+Lib/test/test_bytes.py::ByteArrayTest.test_irepeat bytearray
+Lib/test/test_bytes.py::ByteArrayTest.test_irepeat_1char bytearray
+Lib/test/test_bytes.py::ByteArrayTest.test_pop bytearray
+Lib/test/test_bytes.py::ByteArrayTest.test_nosort bytearray

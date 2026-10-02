@@ -22,7 +22,7 @@ def build_runtime(output_dir: Path) -> None:
     javac = shutil.which("javac")
     if not javac:
         raise RuntimeError("javac is required once to build the pyjvm315 runtime support class")
-    subprocess.run([javac, "--release", "17", "-d", str(output_dir), str(source)], check=True)
+    subprocess.run([javac, "--release", "21", "-d", str(output_dir), str(source)], check=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--class-name", help="Generated JVM class name, e.g. demo.Main")
     parser.add_argument("--no-runtime", action="store_true", help="Do not build runtime support class")
     parser.add_argument("--target", type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET,
-                        help="Java classfile target (default: 17; runtime requires Java 17+)")
+                        help="Java classfile target (21 only; runtime requires Java 21+)")
     ns = parser.parse_args(argv)
 
     out = Path(ns.output)

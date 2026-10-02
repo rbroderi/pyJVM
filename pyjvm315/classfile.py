@@ -5,8 +5,8 @@ import struct
 
 from .stackmap import FrameError, analyze, encode_frames
 
-JAVA_TARGETS = (5, 8, 11, 17, 21)
-DEFAULT_TARGET = 17
+JAVA_TARGETS = (21,)
+DEFAULT_TARGET = 21
 
 
 def u1(v: int) -> bytes:
@@ -255,18 +255,15 @@ class ClassFile:
 
         header = b"\xCA\xFE\xBA\xBE" + u2(0) + u2(self.target + 44)
         prepared = {}
-        stackmap_name = self.cp.utf8("StackMapTable") if self.target >= 8 else None
+        stackmap_name = self.cp.utf8("StackMapTable")
         for _, _, m in method_metadata:
-            if self.target >= 8:
-                try:
-                    code, exceptions, frames, max_stack = analyze(self.cp, self.name, m)
-                except FrameError as exc:
-                    raise FrameError(f"{self.name}.{m.name}{m.desc}: {exc}") from exc
-                frame_blob = encode_frames(self.cp, frames)
-                attributes = u2(1) + u2(stackmap_name) + u4(len(frame_blob)) + frame_blob
-                prepared[id(m)] = (code, exceptions, max_stack, attributes)
-            else:
-                prepared[id(m)] = (m.code, m.exception_table or [], m.max_stack, u2(0))
+            try:
+                code, exceptions, frames, max_stack = analyze(self.cp, self.name, m)
+            except FrameError as exc:
+                raise FrameError(f"{self.name}.{m.name}{m.desc}: {exc}") from exc
+            frame_blob = encode_frames(self.cp, frames)
+            attributes = u2(1) + u2(stackmap_name) + u4(len(frame_blob)) + frame_blob
+            prepared[id(m)] = (code, exceptions, max_stack, attributes)
         for _, _, m in method_metadata:
             for _, _, _, catch_class in prepared[id(m)][1]:
                 if catch_class is not None:

@@ -8,9 +8,6 @@ on:
 jobs:
   conformance:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [5, 17, 21]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,7 +27,7 @@ jobs:
       - name: Differential conformance
         env:
           PYTHONPATH: .
-        run: python -m pyjvm315.conformance tests/conformance --python python --target ${{ matrix.target }}
+        run: python -m pyjvm315.conformance tests/conformance --python python --target 21
 
 
   cpython-regression-probe:
@@ -55,7 +52,7 @@ jobs:
             --cpython-root cpython-src \
             --output artifacts/cpython-regression-probe.json \
             --top 30 \
-            --fail-on-error --min-compiles 264
+            --fail-on-error --min-compiles 299
       - name: Upload regression probe report
         if: always()
         uses: actions/upload-artifact@v4

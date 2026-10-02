@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -24,7 +25,9 @@ class Result:
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    env = os.environ.copy()
+    env.setdefault("PYTHONHASHSEED", "0")
+    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
 
 
 def _stdout(proc: subprocess.CompletedProcess[str]) -> str:

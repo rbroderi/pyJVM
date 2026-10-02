@@ -20,11 +20,33 @@ from .cli import build_runtime
 from .conformance import Result, compare_file
 
 
-FIXTURE = '''
+FIXTURE = """
 class Fixture:
     def assertEqual(self, actual, expected):
         assert actual == expected, "CPython assertEqual failed"
-'''
+    def assertIs(self, actual, expected):
+        assert actual is expected, "CPython assertIs failed"
+    def assertRaises(self, expected, function=None, *args, **kwargs):
+        context = RaisesContext(expected)
+        if function is None:
+            return context
+        with context:
+            function(*args, **kwargs)
+
+class RaisesContext:
+    def __init__(self, expected):
+        self.expected = expected
+    def __enter__(self):
+        return self
+    def __exit__(self, kind, value, trace):
+        if kind is None:
+            raise AssertionError("expected exception was not raised")
+        if not isinstance(value, self.expected):
+            return False
+        self.exception = value
+        return True
+"""
+
 
 
 def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
@@ -44,12 +66,13 @@ def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
 def fixture_source(method: ast.FunctionDef, variant: str) -> str:
     if variant not in ('bytes', 'bytearray'):
         raise ValueError("unsupported fixture variant")
-    fixture = ast.parse(FIXTURE).body[0]
+    fixtures = ast.parse(FIXTURE).body
+    fixture = fixtures[0]
     fixture.body.insert(0, ast.Assign(targets=[ast.Name(id='type2test', ctx=ast.Store())],
                                       value=ast.Name(id=variant, ctx=ast.Load())))
     fixture.body.append(copy.deepcopy(method))
     driver = ast.parse(f'Fixture().{method.name}()\nprint("CPYTHON CASE PASSED")').body
-    return ast.unparse(ast.fix_missing_locations(ast.Module(body=[fixture, *driver], type_ignores=[]))) + '\n'
+    return ast.unparse(ast.fix_missing_locations(ast.Module(body=[*fixtures, *driver], type_ignores=[]))) + '\n'
 
 
 def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_TARGET) -> dict:
@@ -63,10 +86,16 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
             entry = line.strip()
             if not entry or entry.startswith('#'):
                 continue
-            relative, qualified = entry.split('::', 1)
+            fields = entry.split()
+            if len(fields) not in (1, 2):
+                raise ValueError("execution manifest entry requires a case and optional fixture variant")
+            relative, qualified = fields[0].split('::', 1)
+            variants = ('bytes', 'bytearray') if len(fields) == 1 else (fields[1],)
+            if any(variant not in ('bytes', 'bytearray') for variant in variants):
+                raise ValueError("unsupported fixture variant")
             method = extract_case(root / relative, qualified)
-            for variant in ('bytes', 'bytearray'):
-                name = entry + '[' + variant + ']'
+            for variant in variants:
+                name = fields[0] + '[' + variant + ']'
                 source = work / 'case.py'
                 source.write_text(fixture_source(method, variant), encoding='utf-8')
                 reference = subprocess.run([python, str(source)], text=True, capture_output=True, timeout=60)

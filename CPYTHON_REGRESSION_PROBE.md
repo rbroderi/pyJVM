@@ -69,14 +69,14 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Current |
-|---|---:|---:|
-| Compiles | 125 | 264 |
-| Unsupported | 231 | 94 |
-| Compiler error | 2 | 0 |
-| Total | 358 | 358 |
+| Status | Initial | Local-class tranche | Java 21 / builtin tranche |
+|---|---:|---:|---:|
+| Compiles | 125 | 264 | 299 |
+| Unsupported | 231 | 94 | 59 |
+| Compiler error | 2 | 0 | 0 |
+| Total | 358 | 358 | 358 |
 
-Compile coverage increased from 34.9% to 73.7% (+139 cases). The probe now
+Compile coverage increased from 34.9% to 83.5% (+174 cases; +35 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,10 +90,11 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 139 cases. A separate
-`pyjvm315.cpython_execution` lane executes nine unchanged CPython `BaseBytesTest`
-method bodies for both bytes and bytearray (18 executions), with explicit
-`type2test` and `assertEqual` fixtures. It uses no placeholder imports or None
+The focused differential corpus is now 148 cases. A separate
+`pyjvm315.cpython_execution` lane executes 20 unchanged CPython bytes test
+bodies (33 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+while seven ByteArrayTest bodies use only bytearray. Explicit fixtures implement
+`type2test`, `assertEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
 21, strict JVM verification and publishes the execution report. Local validation also uses CPython 3.15.0rc2; the report records the actual
@@ -112,17 +113,42 @@ cases are rejected by this lane rather than stripping skip/platform semantics.
 
 ### Remaining priorities toward full compatibility
 
-The largest remaining probe blockers are `hash` and name deletion (8 each),
-followed by NotImplemented, id, slice, eval, complex, first-class method
-wrappers, and general class-body statements. External imports still include
+The largest remaining probe blockers are complex values, eval, first-class
+classmethod/staticmethod/property wrappers, and general class-body statements. External imports still include
 copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 94 cases remain visible as unsupported; no
+support strategy. The remaining 59 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 264 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 264`). The old 0.31
+Compiler errors and compilation coverage below 299 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 299`). The old 0.31
 priority list above remains a historical record, not the current work order.
+
+
+### Java 21 and builtin tranche
+
+Java 21 is now the sole generated/runtime target; older targets are rejected,
+and verifier-frame generation is unconditional. Module/local/nonlocal deletion
+uses explicit unbound states rather than conflating deletion with None. Closure
+cells remain assignable after deletion; imported-module attributes and dict
+views omit deleted bindings. Exception-handler targets clear through return,
+raise, yield and close cleanup paths.
+
+All class methods now share function/closure lowering, fixing nested definitions,
+lambdas and comprehensions in top-level methods. Context managers receive an
+exception instance rather than its raw message. Added executable paths cover
+builtin aliases, callable/sentinel iteration, next defaults, lazy reversed,
+modular power, slices, weak identity IDs, and hash(). Numeric hashes and seeded
+SipHash13 match the 64-bit CPython reference; numeric PYTHONHASHSEED is honored,
+and the differential runner defaults it to 0. NotImplemented falls through
+reflected arithmetic/equality protocols and rejects boolean use. In-place
+list/bytearray operations preserve identity, and bytes constructors invoke
+index callbacks. The new execution fixtures reject missing/wrong exceptions.
+
+This does not complete the full builtin/buffer/import model. Hash() support does
+not yet replace Java-backed dict/set key protocols; general writable-buffer
+export tracking and native-extension compatibility remain unfinished. Compile
+coverage and the 33 selected executions stay distinct from full-suite support.

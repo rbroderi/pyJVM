@@ -43,7 +43,11 @@ EXCEPTION_TYPES = {
     "SyntaxWarning", "RuntimeWarning", "FutureWarning", "ImportWarning", "UnicodeWarning",
     "BytesWarning", "ResourceWarning", "KeyboardInterrupt", "SystemExit",
 }
-BUILTIN_FUNCTIONS = {"ord", "chr", "repr", "print"}
+BUILTIN_FUNCTIONS = {
+    "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
+    "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
+    "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
+}
 
 
 @dataclass
@@ -157,6 +161,7 @@ class Scope:
                  parent: "Scope | None" = None, env_mode: bool = False, env_slot: int | None = None,
                  local_names: set[str] | None = None, free_names: set[str] | None = None,
                  nonlocal_names: set[str] | None = None) -> None:
+        self.checked_names: set[str] = set()
         self.slots: dict[str, int] = {}
         self.next_slot = start_slot
         self.module = module
@@ -234,6 +239,9 @@ class Compiler:
     def compile(self, source: str, filename: str = "<string>") -> bytes:
         self.filename = filename
         tree = ast.parse(source, filename=filename, mode="exec", feature_version=(3, 15))
+        self.deleted_names = {name for n in ast.walk(tree) if isinstance(n, ast.Delete)
+                              for t in n.targets for name in self._target_names(t)}
+        self.deleted_names.update(n.name for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name)
         self._register_module_globals(tree.body)
         self._register_definitions(tree.body, [], top_level=True)
 
@@ -263,6 +271,8 @@ class Compiler:
                 bind_target(stmt.target)
             elif isinstance(stmt, ast.AugAssign):
                 bind_target(stmt.target)
+            elif isinstance(stmt, ast.Delete):
+                for target in stmt.targets: bind_target(target)
             elif isinstance(stmt, ast.Import):
                 for alias in stmt.names:
                     names.add(alias.asname or alias.name.split('.')[0])
@@ -316,20 +326,31 @@ class Compiler:
                 b.aload(scope.env_slot); b.ldc_string(name)
                 b.invokestatic(RUNTIME, "envGet", f"({OBJ}{OBJ}){OBJ}")
                 return
+        elif scope.parent is not None and not scope.has_local(name):
+            self._load_name(name, b, scope.parent)
+            return
         elif scope.has(name):
-            b.aload(scope.get(name)); return
+            b.aload(scope.get(name))
+            if name in scope.checked_names:
+                b.ldc_string(name); b.invokestatic(RUNTIME, "requireLocal", f"({OBJ}{OBJ}){OBJ}")
+            return
         if name in self.functions:
             info = self.functions[name]
             assert info.function_field is not None
-            b.getstatic(self.class_name, info.function_field, OBJ); return
+            b.getstatic(self.class_name, info.function_field, OBJ)
+            self._check_deleted_global(name, b); return
         if name in self.classes:
-            b.getstatic(self.class_name, self.classes[name].class_field, OBJ); return
+            b.getstatic(self.class_name, self.classes[name].class_field, OBJ)
+            self._check_deleted_global(name, b); return
         if name in self.global_names:
-            b.getstatic(self.class_name, self.global_fields[name], OBJ); return
+            b.getstatic(self.class_name, self.global_fields[name], OBJ)
+            self._check_deleted_global(name, b); return
+        if name in {"NotImplemented", "Ellipsis"}:
+            b.invokestatic(RUNTIME, "notImplemented" if name == "NotImplemented" else "ellipsis", f"(){OBJ}"); return
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
         if name in {"object", "int", "bool", "float", "str", "bytes", "bytearray", "memoryview",
-                    "list", "tuple", "dict", "set", "range", "type", "map"} | EXCEPTION_TYPES:
+                    "list", "tuple", "dict", "set", "range", "type", "map", "slice"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
@@ -341,7 +362,7 @@ class Compiler:
                 field_name = f"__py_global_{name}"
                 self.global_fields[name] = field_name
                 self.cf.add_field(Field(field_name))
-            b.putstatic(self.class_name, self.global_fields[name], OBJ)
+            b.putstatic(self.class_name, self._global_field(name), OBJ)
         elif scope.env_mode and scope.env_slot is not None:
             alloc_scope = temp_scope or scope
             value_slot = alloc_scope.temp(); b.astore(value_slot)
@@ -350,6 +371,54 @@ class Compiler:
             b.invokestatic(RUNTIME, method, f"({OBJ}{OBJ}{OBJ})V")
         else:
             b.astore(scope.define(name))
+
+    def _alias_global_field(self, name: str, field: str) -> None:
+        previous = self.global_fields.get(name)
+        if previous and previous != field:
+            self.cf.fields = [f for f in self.cf.fields if f.name != previous]
+        self.global_fields[name] = field
+        self.global_names.add(name)
+
+    def _global_field(self, name: str) -> str:
+        return self.global_fields[name]
+
+    def _check_deleted_global(self, name: str, b: CodeBuilder) -> None:
+        if name in self.deleted_names:
+            b.ldc_string(name); b.invokestatic(RUNTIME, "globalGet", f"({OBJ}{OBJ}){OBJ}")
+
+    def _prepare_deletions(self, b: CodeBuilder, scope: Scope, local_names: set[str]) -> None:
+        scope.checked_names = local_names & self.deleted_names
+        if not scope.env_mode:
+            for name in sorted(scope.checked_names):
+                if not scope.has(name):
+                    b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.astore(scope.define(name))
+
+    def _delete_target(self, target: ast.expr, b: CodeBuilder, scope: Scope) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts: self._delete_target(element, b, scope)
+        elif isinstance(target, ast.Name):
+            name = target.id
+            if scope.module or name in scope.global_decl:
+                field = self._global_field(name)
+                b.getstatic(self.class_name, field, OBJ); b.ldc_string(name)
+                b.invokestatic(RUNTIME, "requireGlobal", f"({OBJ}{OBJ}){OBJ}"); b.pop()
+                b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, field, OBJ)
+            elif scope.env_mode:
+                b.aload(scope.env_slot); b.ldc_string(name)
+                b.invokestatic(RUNTIME, "envDelNonlocal" if name in scope.nonlocal_decl else "envDelLocal", f"({OBJ}{OBJ})V")
+            else:
+                b.aload(scope.get(name)); b.ldc_string(name)
+                b.invokestatic(RUNTIME, "requireLocal", f"({OBJ}{OBJ}){OBJ}"); b.pop()
+                b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.astore(scope.get(name))
+            b.ldc_string(name); b.invokestatic(RUNTIME, "frameDelLocal", f"({OBJ})V")
+        elif isinstance(target, ast.Subscript):
+            self._expr(target.value, b, scope); self._expr(target.slice, b, scope)
+            b.invokestatic(RUNTIME, "delitem", f"({OBJ}{OBJ})V")
+        elif isinstance(target, ast.Attribute):
+            self._expr(target.value, b, scope); b.ldc_string(self._class_attr_name(target.attr))
+            b.invokestatic(RUNTIME, "delattr", f"({OBJ}{OBJ})V")
+        else:
+            raise CompileError(f"Unsupported deletion target: {type(target).__name__}")
 
     @staticmethod
     def _target_names(target: ast.AST) -> set[str]:
@@ -375,6 +444,8 @@ class Compiler:
                 for t in stmt.targets: locals_.update(self._target_names(t))
             elif isinstance(stmt, ast.AnnAssign): locals_.update(self._target_names(stmt.target))
             elif isinstance(stmt, ast.AugAssign): locals_.update(self._target_names(stmt.target))
+            elif isinstance(stmt, ast.Delete):
+                for target in stmt.targets: locals_.update(self._target_names(target))
             elif isinstance(stmt, (ast.For, ast.AsyncFor)):
                 locals_.update(self._target_names(stmt.target))
                 for x in stmt.body + stmt.orelse: visit_stmt(x)
@@ -460,10 +531,12 @@ class Compiler:
         if node.args.defaults:
             for name, expr in zip(positional[-len(node.args.defaults):], node.args.defaults): defaults[name] = expr
         kw_defaults = {a.arg: e for a, e in zip(node.args.kwonlyargs, node.args.kw_defaults) if e is not None}
-        java_name = node.name if top_level else f"__py_nested_{self._method_counter}_{node.name}"
-        if not top_level: self._method_counter += 1
-        function_field = f"__py_function_{node.name}" if top_level else None
-        if function_field: self.cf.add_field(Field(function_field))
+        direct_name = top_level and node.name not in self.functions
+        java_name = node.name if direct_name else f"__py_nested_{self._method_counter}_{node.name}"
+        if not direct_name: self._method_counter += 1
+        function_field = self.global_fields.get(node.name, f"__py_function_{node.name}") if top_level else None
+        if function_field and not any(field.name == function_field for field in self.cf.fields):
+            self.cf.add_field(Field(function_field))
         info = FunctionInfo(node.name, java_name, posonly, poskw, kwonly,
             node.args.vararg.arg if node.args.vararg else None,
             node.args.kwarg.arg if node.args.kwarg else None,
@@ -471,7 +544,9 @@ class Compiler:
             local_names, free_names, nonlocal_names, is_generator, is_async, is_async_generator)
         self.function_infos[id(node)] = info
         self.function_nodes.append(node)
-        if top_level: self.functions[node.name] = info
+        if top_level:
+            self.functions[node.name] = info
+            self._alias_global_field(node.name, function_field)
 
         new_enclosing = enclosing_locals + [local_names]
         self._register_definitions(node.body, new_enclosing,
@@ -586,8 +661,8 @@ class Compiler:
                     continue
             raise CompileError("method decorators currently support @property and @name.setter")
         local = not top_level
-        class_field = f"__py_class_{node.name}" if top_level else f"__py_local_class_{len(self.class_nodes)}"
-        if top_level:
+        class_field = self.global_fields.get(node.name, f"__py_class_{node.name}") if top_level else f"__py_local_class_{len(self.class_nodes)}"
+        if top_level and not any(field.name == class_field for field in self.cf.fields):
             self.cf.add_field(Field(class_field))
         info = ClassInfo(node.name, bases, methods, properties, attrs, class_field,
                          metaclass, class_keywords, local, qualname)
@@ -595,20 +670,20 @@ class Compiler:
         self.class_nodes.append(node)
         if top_level:
             self.classes[node.name] = info
-        if local:
-            # Class attributes are not a method lexical scope. Capture the
-            # enclosing function plus a private cell for zero-argument super.
-            for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    self._register_function_tree(item, [*enclosing_locals, {"__class__"}],
-                                                 qualname=qualname + "." + item.name)
-                    self.function_nodes.remove(item)
-                    fn = self.function_infos[id(item)]
-                    fn.free_names.add("__class__")
-                    method = self.class_method_infos[id(item)]
-                    method.java_name = fn.java_name
-                    method.env_mode = True
-                    method.is_async_generator = fn.is_async_generator
+            self._alias_global_field(node.name, class_field)
+        # Class attributes are not a method lexical scope. Capture the
+        # enclosing function plus a private cell for zero-argument super.
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._register_function_tree(item, [*enclosing_locals, {"__class__"}],
+                                             qualname=qualname + "." + item.name)
+                self.function_nodes.remove(item)
+                fn = self.function_infos[id(item)]
+                fn.free_names.add("__class__")
+                method = self.class_method_infos[id(item)]
+                method.java_name = fn.java_name
+                method.env_mode = True
+                method.is_async_generator = fn.is_async_generator
 
     @_preserve_codegen_state
     def _compile_class_methods(self, node: ast.ClassDef) -> None:
@@ -620,53 +695,7 @@ class Compiler:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     method = self.class_method_infos[id(item)]
                     self.current_method_self = method.positional[0] if method.positional else None
-                    saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
-                    self.current_frame_name,self.current_frame_firstlineno=item.name,item.lineno
-                    if info.local:
-                        self._compile_function(item)
-                        self.current_frame_name,self.current_frame_firstlineno=saved_frame
-                        continue
-
-                    suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
-                        self._contains_await(item)
-                        or any(isinstance(x, (ast.AsyncFor,ast.AsyncWith)) for x in ast.walk(item))
-                        or self._contains_async_comprehension(item)
-                    )
-                    if suspendable_async:
-                        lowered=self._lower_async_function(item)
-                        local_names,_,nonlocal_names=self._function_locals(lowered)
-                        local_names.update(method.bound_args)
-                        resume_info=FunctionInfo(
-                            item.name,method.java_name,
-                            method.posonly,method.poskw,method.kwonly,
-                            method.vararg,method.kwarg,method.defaults,method.kw_defaults,
-                            None,False,True,local_names,set(),nonlocal_names,False,True,False,
-                        )
-                        creator=CodeBuilder(self.cf.cp)
-                        creator_scope=Scope(method.bound_args,start_slot=0)
-                        creator.aconst_null(); creator.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
-                        env_slot=creator_scope.temp(); creator.astore(env_slot)
-                        for arg_name in method.bound_args:
-                            creator.aload(env_slot); creator.ldc_string(arg_name); creator.aload(creator_scope.get(arg_name))
-                            creator.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
-                        resume_name=method.java_name+"$resume"
-                        creator.ldc_string(self.class_name.replace('/','.')); creator.ldc_string(resume_name); creator.aload(env_slot)
-                        creator.ldc_string(item.name); creator.ldc_string(self.filename); self._emit_int(item.lineno,creator)
-                        creator.invokestatic(RUNTIME,"makeSuspendableCoroutineEx",f"({OBJ*6}){OBJ}"); creator.areturn()
-                        creator_code=creator.finish()
-                        self.cf.add_method(Method(method.java_name,method.descriptor,creator_code,max_locals=max(8,creator_scope.next_slot+2),exception_table=creator.exception_table))
-                        self._compile_generator_resume(lowered,resume_info,resume_name)
-                    else:
-                        b = CodeBuilder(self.cf.cp)
-                        scope = Scope(method.bound_args, start_slot=0)
-                        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
-                        for stmt in item.body:
-                            self._stmt(stmt, b, scope, in_function=True)
-                        b.aconst_null(); b.areturn()
-                        code = b.finish()
-                        self.cf.add_method(Method(method.java_name, method.descriptor, code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
-
-                    self.current_frame_name,self.current_frame_firstlineno=saved_frame
+                    self._compile_function(item)
         finally:
             self.current_class, self.current_method_self = old_class, old_self
 
@@ -682,6 +711,8 @@ class Compiler:
         self.current_frame_name,self.current_frame_firstlineno="<module>",1
         b = CodeBuilder(self.cf.cp)
         scope = Scope(start_slot=1, module=True)
+        for name in sorted(self.deleted_names & (self.global_names | self.functions.keys() | self.classes.keys())):
+            b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, self._global_field(name), OBJ)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
         b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
@@ -753,9 +784,13 @@ class Compiler:
             # slot 0 is the captured parent environment. Create this invocation's child environment.
             b.aload(0); b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
             env_slot = scope.temp(); b.astore(env_slot); scope.env_slot = env_slot
+            for name in sorted(info.local_names & self.deleted_names):
+                b.aload(env_slot); b.ldc_string(name); b.invokestatic(RUNTIME,"unbound",f"(){OBJ}")
+                b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ*3})V")
             for name in info.bound_args:
                 b.aload(env_slot); b.ldc_string(name); b.aload(scope.get(name))
                 b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ}{OBJ}{OBJ})V")
+        self._prepare_deletions(b, scope, info.local_names)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []; self.cleanup_stack = []; self.finally_stack = []
         for stmt in node.body:
             self._stmt(stmt, b, scope, in_function=True)
@@ -1008,6 +1043,9 @@ class Compiler:
                     free_names=info.free_names,nonlocal_names=info.nonlocal_names)
         b.aload(0); b.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
         env_slot=scope.temp(); b.astore(env_slot); scope.env_slot=env_slot
+        for name in sorted(info.local_names & self.deleted_names):
+            b.aload(env_slot); b.ldc_string(name); b.invokestatic(RUNTIME,"unbound",f"(){OBJ}")
+            b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ*3})V")
         for name in info.bound_args:
             b.aload(env_slot); b.ldc_string(name); b.aload(scope.get(name))
             b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
@@ -1284,7 +1322,7 @@ class Compiler:
                 self._gen_env_store(exc_env, exc_slot, b, scope)
                 self.exception_stack.append(exc_slot)
                 gen_active_exception_env.append(exc_env)
-                for x in handler.body: gen_stmt(x)
+                for x in self._handler_body(handler): gen_stmt(x)
                 gen_active_exception_env.pop()
                 self.exception_stack.pop()
                 b.goto(done)
@@ -2091,12 +2129,10 @@ class Compiler:
                 class_slot = scope.temp(); b.astore(class_slot)
                 b.aload(class_slot); b.ldc_string(info.qualname)
                 b.invokestatic(RUNTIME, "classSetQualname", f"({OBJ}{OBJ})V")
-                closure_slot = None
-                if info.local:
-                    if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
-                    else: b.aconst_null()
-                    b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
-                    closure_slot = scope.temp(); b.astore(closure_slot)
+                if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
+                else: b.aconst_null()
+                b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
+                closure_slot = scope.temp(); b.astore(closure_slot)
                 for base in info.bases:
                     b.aload(class_slot); self._expr(base, b, scope)
                     b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
@@ -2136,11 +2172,8 @@ class Compiler:
                     if method.kwarg is None: b.aconst_null()
                     else: b.ldc_string(method.kwarg)
                     b.aload(defaults_slot); b.ldc_string(self.filename); self._emit_int(method.firstlineno, b)
-                    if info.local:
-                        b.aload(closure_slot)
-                        b.invokestatic(RUNTIME, "classAddMethodClosure", f"({OBJ * 14})V")
-                    else:
-                        b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 13})V")
+                    b.aload(closure_slot)
+                    b.invokestatic(RUNTIME, "classAddMethodClosure", f"({OBJ * 14})V")
                     if method.is_async:
                         b.aload(class_slot); b.ldc_string(method.py_name)
                         async_setter = "classSetMethodAsyncGenerator" if method.is_async_generator else "classSetMethodAsync"
@@ -2151,11 +2184,8 @@ class Compiler:
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
                     else: b.ldc_string(prop.setter.java_name)
-                    if info.local:
-                        b.aload(closure_slot)
-                        b.invokestatic(RUNTIME, "classAddPropertyClosure", f"({OBJ * 6})V")
-                    else:
-                        b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ * 5})V")
+                    b.aload(closure_slot)
+                    b.invokestatic(RUNTIME, "classAddPropertyClosure", f"({OBJ * 6})V")
                     b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(prop.name)
                     b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
 
@@ -2164,9 +2194,8 @@ class Compiler:
                 b.aload(namespace_slot); b.aload(class_kw_slot)
                 b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
                 b.astore(class_slot)
-                if info.local:
-                    b.aload(closure_slot); b.ldc_string("__class__"); b.aload(class_slot)
-                    b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
+                b.aload(closure_slot); b.ldc_string("__class__"); b.aload(class_slot)
+                b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
                 for decorator_slot in reversed(decorator_slots):
                     b.aload(decorator_slot)
                     b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -2184,13 +2213,13 @@ class Compiler:
             case ast.AugAssign(target=ast.Name(id=name), op=op, value=value):
                 self._load_name(name, b, scope)
                 self._expr(value, b, scope)
-                self._binary_runtime(op, b)
+                self._binary_runtime(op, b, inplace=True)
                 self._store_name(name, b, scope)
             case ast.AugAssign(target=ast.Attribute(value=obj, attr=attr), op=op, value=value):
                 obj_slot, result_slot = scope.temp(), scope.temp()
                 self._expr(obj, b, scope); b.astore(obj_slot)
                 b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
-                self._expr(value, b, scope); self._binary_runtime(op, b); b.astore(result_slot)
+                self._expr(value, b, scope); self._binary_runtime(op, b, inplace=True); b.astore(result_slot)
                 b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.aload(result_slot)
                 b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
             case ast.AugAssign(target=ast.Subscript(value=obj, slice=key), op=op, value=value):
@@ -2198,7 +2227,7 @@ class Compiler:
                 self._expr(obj, b, scope); b.astore(obj_slot)
                 self._expr(key, b, scope); b.astore(key_slot)
                 b.aload(obj_slot); b.aload(key_slot); b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
-                self._expr(value, b, scope); self._binary_runtime(op, b); b.astore(result_slot)
+                self._expr(value, b, scope); self._binary_runtime(op, b, inplace=True); b.astore(result_slot)
                 b.aload(obj_slot); b.aload(key_slot); b.aload(result_slot)
                 b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
             case ast.Global(names=names):
@@ -2269,15 +2298,7 @@ class Compiler:
                 if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
                 else: b.goto(target)
             case ast.Delete(targets=targets):
-                for target in targets:
-                    if isinstance(target, ast.Subscript):
-                        self._expr(target.value, b, scope); self._expr(target.slice, b, scope)
-                        b.invokestatic(RUNTIME, "delitem", f"({OBJ}{OBJ})V")
-                    elif isinstance(target, ast.Attribute):
-                        self._expr(target.value, b, scope); b.ldc_string(self._class_attr_name(target.attr))
-                        b.invokestatic(RUNTIME, "delattr", f"({OBJ}{OBJ})V")
-                    else:
-                        raise CompileError("del currently supports attributes and subscripts")
+                for target in targets: self._delete_target(target, b, scope)
             case ast.Assert(test=test, msg=msg):
                 ok = b.label(); self._truthy(test, b, scope); b.ifne(ok)
                 if msg is None: b.aconst_null()
@@ -2311,7 +2332,14 @@ class Compiler:
                 raise CompileError(f"Unsupported statement: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
     def _expr(self, node: ast.expr, b: CodeBuilder, scope: Scope) -> None:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            name = node.func.id
+            if name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
+                self._emit_dynamic_call(node.func, node.args, node.keywords, b, scope)
+                return
         match node:
+            case ast.Constant(value=value) if value is Ellipsis:
+                b.invokestatic(RUNTIME, "ellipsis", f"(){OBJ}")
             case ast.Constant(value=None):
                 b.aconst_null()
             case ast.Constant(value=True): self._boxed_bool(True, b)
@@ -2415,8 +2443,7 @@ class Compiler:
             case ast.Call(func=ast.Name(id="super"), args=[], keywords=[]):
                 if self.current_class is None or self.current_method_self is None:
                     raise CompileError("zero-argument super() is only available inside compiled methods")
-                if self.current_class.local: self._load_name("__class__", b, scope)
-                else: b.getstatic(self.class_name, self.current_class.class_field, OBJ)
+                self._load_name("__class__", b, scope)
                 self._load_name(self.current_method_self, b, scope)
                 b.invokestatic(RUNTIME, "makeSuper", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="super"), args=[cls, obj], keywords=[]):
@@ -2532,6 +2559,16 @@ class Compiler:
             case _:
                 raise CompileError(f"Unsupported expression: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
+    @staticmethod
+    def _handler_body(handler: ast.ExceptHandler) -> list[ast.stmt]:
+        if not handler.name: return handler.body
+        target = ast.Name(id=handler.name, ctx=ast.Store())
+        clear = ast.Assign(targets=[target], value=ast.Constant(value=None))
+        delete = ast.Delete(targets=[ast.Name(id=handler.name, ctx=ast.Del())])
+        wrapped = ast.Try(body=handler.body, handlers=[], orelse=[], finalbody=[clear, delete])
+        ast.copy_location(wrapped, handler)
+        return [ast.fix_missing_locations(wrapped)]
+
     def _compile_try_except(self, body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         start, protected_end, dispatch, done = b.label(), b.label(), b.label(), b.label()
         exc_slot = scope.temp()
@@ -2560,7 +2597,8 @@ class Compiler:
             if handler.name:
                 b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}"); self._store_name(handler.name, b, scope)
             self.exception_stack.append(exc_slot)
-            for stmt in handler.body: self._stmt(stmt, b, scope, in_function)
+            handler_body = self._handler_body(handler)
+            for stmt in handler_body: self._stmt(stmt, b, scope, in_function)
             self.exception_stack.pop()
             b.goto(done)
             b.mark(next_handler)
@@ -2591,9 +2629,10 @@ class Compiler:
     def _boxed_bool(self, value: bool, b: CodeBuilder) -> None:
         b.getstatic("java/lang/Boolean", "TRUE" if value else "FALSE", "Ljava/lang/Boolean;")
 
-    def _binary_runtime(self, op: ast.operator, b: CodeBuilder) -> None:
+    def _binary_runtime(self, op: ast.operator, b: CodeBuilder, *, inplace: bool = False) -> None:
         name = {ast.Add:"add", ast.Sub:"sub", ast.Mult:"mul", ast.Div:"truediv", ast.FloorDiv:"floordiv", ast.Mod:"mod", ast.Pow:"pow", ast.BitAnd:"bitAnd", ast.BitOr:"bitOr", ast.BitXor:"bitXor", ast.LShift:"lshift", ast.RShift:"rshift"}.get(type(op))
         if name is None: raise CompileError(f"Unsupported binary operator: {type(op).__name__}")
+        if inplace and name in {"add", "mul", "pow"}: name = "i" + name
         b.invokestatic(RUNTIME, name, f"({OBJ}{OBJ}){OBJ}")
 
     def _boolop(self, values: list[ast.expr], is_and: bool, b: CodeBuilder, scope: Scope) -> None:

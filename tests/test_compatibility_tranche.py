@@ -98,3 +98,16 @@ def test_probe_coverage_floor_fails_on_regression(tmp_path, capsys):
     assert main([str(source), '--min-compiles', '1']) == 0
     assert main([str(source), '--min-compiles', '2']) == 1
     assert 'below baseline 2' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('body,exception', [('pass', 'AssertionError'), ('raise ValueError("wrong")', 'ValueError')])
+def test_execution_fixture_does_not_accept_absent_or_wrong_exceptions(body, exception):
+    import subprocess
+    import sys
+    method = ast.parse('def test_case(self):\n    def operation():\n        ' + body +
+                       '\n    self.assertRaises(TypeError, operation)\n').body[0]
+    result = subprocess.run([sys.executable, '-c', fixture_source(method, 'bytes')],
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
+    assert exception in result.stderr
+    assert 'CPYTHON CASE PASSED' not in result.stdout
