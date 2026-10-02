@@ -613,3 +613,23 @@ for the recorded baseline and priority order.
 
 The focused differential corpus remains 126/126 passing with 0 unsupported and 0 failed.
 
+
+## Performance benchmarks
+
+The first reproducible performance tranche compares emitted bytecode with
+hand-written Java for bounded integer arithmetic, range/while loops, function
+calls, and list growth/indexing:
+
+```bash
+python benchmarks/run.py
+```
+
+It reports generated/Java, runtime-Java/Java, and generated/runtime-Java ratios,
+checks every result against CPython, and retains warmed multi-fork samples plus
+bytecode disassembly. The runtime control distinguishes current dynamic
+semantics/representation costs from codegen overhead; it is not a claim that
+those costs are unavoidable. A separate benchmark workflow compares the PR
+compiler with its base on the same runner and catches large regressions.
+See [benchmarks/README.md](benchmarks/README.md) for bounds, timing controls,
+interpretation, reproducibility, and gate policy. This tranche changes no
+compiler, runtime, or nested/local-class compatibility behavior.
