@@ -8,6 +8,9 @@ on:
 jobs:
   conformance:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [5, 17, 21]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,7 +29,7 @@ jobs:
       - name: Differential conformance
         env:
           PYTHONPATH: .
-        run: python -m pyjvm315.conformance tests/conformance --python python
+        run: python -m pyjvm315.conformance tests/conformance --python python --target ${{ matrix.target }}
 
 
   cpython-regression-probe:

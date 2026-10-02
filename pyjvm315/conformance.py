@@ -13,6 +13,7 @@ import shutil
 
 from .compiler import CompileError, compile_file
 from .cli import build_runtime
+from .classfile import DEFAULT_TARGET, JAVA_TARGETS
 
 
 @dataclass
@@ -59,14 +60,15 @@ def _jvm_exception(stderr: str) -> str | None:
     return None
 
 
-def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_cache: Path | None = None) -> Result:
+def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_cache: Path | None = None, *,
+                 target: int = DEFAULT_TARGET) -> Result:
     source = source.resolve()
     py = _run([python_exe, str(source)], cwd=source.parent)
 
     with tempfile.TemporaryDirectory(prefix="pyjvm315-") as td:
         out = Path(td)
         try:
-            compile_file(source, out, "ConformanceMain")
+            compile_file(source, out, "ConformanceMain", target=target)
             if runtime_cache is None:
                 build_runtime(out)
             else:
@@ -77,7 +79,7 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
             return Result(source.name, "UNSUPPORTED", str(exc))
         except Exception as exc:
             return Result(source.name, "ERROR", f"build failed: {exc}")
-        jvm = _run([java_exe, "-cp", str(out), "ConformanceMain"], cwd=source.parent)
+        jvm = _run([java_exe, "-Xverify:all", "-cp", str(out), "ConformanceMain"], cwd=source.parent)
 
     if _stdout(jvm) != _stdout(py):
         return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}\nJVM stderr: {jvm.stderr!r}")
@@ -99,7 +101,8 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
     return Result(source.name, "PASS", f"matched exception {py_exc}")
 
 
-def run_suite(path: Path, python_exe: str, java_exe: str = "java") -> list[Result]:
+def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
+              target: int = DEFAULT_TARGET) -> list[Result]:
     if path.is_file():
         files = [path]
     else:
@@ -114,7 +117,7 @@ def run_suite(path: Path, python_exe: str, java_exe: str = "java") -> list[Resul
     with tempfile.TemporaryDirectory(prefix="pyjvm315-runtime-") as td:
         runtime_cache = Path(td)
         build_runtime(runtime_cache)
-        return [compare_file(f, python_exe, java_exe, runtime_cache) for f in files]
+        return [compare_file(f, python_exe, java_exe, runtime_cache, target=target) for f in files]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,8 +127,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--java", default="java")
     ap.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     ap.add_argument("--unsupported-summary", action="store_true", help="Group unsupported cases by compiler reason")
+    ap.add_argument("--target", type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET)
     ns = ap.parse_args(argv)
-    results = run_suite(ns.path, ns.python, ns.java)
+    results = run_suite(ns.path, ns.python, ns.java, target=ns.target)
 
     passed = sum(r.status == "PASS" for r in results)
     unsupported = sum(r.status == "UNSUPPORTED" for r in results)

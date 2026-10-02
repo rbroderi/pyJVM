@@ -91,8 +91,11 @@ direct class-file writer
 small PyRuntime support layer
 ```
 
-Class-file version 49 is still emitted intentionally so the initial backend does
-not require `StackMapTable` generation. Modern JVMs can load these classes.
+Generated classes default to Java 17 (major version 61), with verifier frames
+emitted as `StackMapTable` attributes. `--target 21` selects Java 21 (major 65);
+targets 5, 8, and 11 are also available for backend comparison. The support
+runtime requires Java 17 or newer regardless of the generated-class target.
+See [JVM_BACKEND.md](JVM_BACKEND.md) for frame analysis and validation details.
 
 ## Differential tests
 
@@ -133,7 +136,6 @@ This is still far from full CPython compatibility. Major missing areas include:
 - bytes/bytearray/memoryview and many builtin types
 - full Unicode/string behavior and complete container APIs
 - standard-library compatibility and native/extension-module strategy
-- JVM stack-map generation and modern selectable class targets
 
 ## Direction toward `Lib/test`
 

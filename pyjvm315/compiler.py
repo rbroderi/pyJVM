@@ -5,7 +5,7 @@ import copy
 from dataclasses import dataclass
 from pathlib import Path
 
-from .classfile import ClassFile, CodeBuilder, Field, Method
+from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
 
 
 OBJ = "Ljava/lang/Object;"
@@ -166,13 +166,14 @@ class Scope:
 class Compiler:
     def __init__(self, class_name: str, import_map: dict[str, str] | None = None,
                  import_exports: dict[str, list[str] | None] | None = None, *,
-                 module_name: str = "__main__", package_name: str | None = None) -> None:
+                 module_name: str = "__main__", package_name: str | None = None,
+                 target: int = DEFAULT_TARGET) -> None:
         self.class_name = class_name.replace(".", "/")
         self.import_map = dict(import_map or {})
         self.import_exports = dict(import_exports or {})
         self.module_name = module_name
         self.package_name = module_name.rpartition(".")[0] if package_name is None else package_name
-        self.cf = ClassFile(self.class_name)
+        self.cf = ClassFile(self.class_name, target=target)
         self.functions: dict[str, FunctionInfo] = {}
         self.function_infos: dict[int, FunctionInfo] = {}
         self.function_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
@@ -2501,9 +2502,10 @@ class Compiler:
 def compile_source(source: str, class_name: str = "Main", filename: str = "<string>",
                    import_map: dict[str,str] | None = None,
                    import_exports: dict[str, list[str] | None] | None = None,
-                   module_name: str = "__main__", package_name: str | None = None) -> bytes:
+                   module_name: str = "__main__", package_name: str | None = None,
+                   *, target: int = DEFAULT_TARGET) -> bytes:
     return Compiler(class_name, import_map=import_map, import_exports=import_exports,
-                    module_name=module_name, package_name=package_name).compile(source, filename)
+                    module_name=module_name, package_name=package_name, target=target).compile(source, filename)
 
 
 def _module_context(path: Path, root: Path) -> tuple[str, bool]:
@@ -2660,7 +2662,8 @@ def _build_import_exports(modules: dict[str, Path]) -> dict[str, list[str] | Non
     return cache
 
 
-def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None) -> Path:
+def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None,
+                 *, target: int = DEFAULT_TARGET) -> Path:
     source_path=Path(source_path); output_dir=Path(output_dir)
     class_name=class_name or source_path.stem.title().replace("_","")
     # Walk upward through package markers so imports are resolved from the package root.
@@ -2686,7 +2689,7 @@ def compile_file(source_path: str | Path, output_dir: str | Path, class_name: st
         package_name = module_name if is_pkg else module_name.rpartition('.')[0]
         data=compile_source(path.read_text(encoding="utf-8"),jvm_name,str(path),
                             import_map=import_map,import_exports=import_exports,
-                            module_name=module_name,package_name=package_name)
+                            module_name=module_name,package_name=package_name,target=target)
         rel=Path(*jvm_name.replace('/','.').split('.')); out=output_dir/rel.with_suffix('.class')
         out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data); return out
 
