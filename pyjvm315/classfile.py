@@ -42,7 +42,20 @@ class ConstantPool:
         return idx
 
     def utf8(self, value: str) -> int:
-        raw = value.encode("utf-8")
+        # CONSTANT_Utf8 uses JVM modified UTF-8: NUL is two bytes and
+        # supplementary characters are encoded as UTF-16 surrogate pairs.
+        units = value.encode("utf-16-be", errors="surrogatepass")
+        raw = bytearray()
+        for index in range(0, len(units), 2):
+            unit = int.from_bytes(units[index:index + 2], "big")
+            if 0 < unit < 0x80:
+                raw.append(unit)
+            elif unit < 0x800:
+                raw.extend((0xC0 | (unit >> 6), 0x80 | (unit & 0x3F)))
+            else:
+                raw.extend((0xE0 | (unit >> 12), 0x80 | ((unit >> 6) & 0x3F), 0x80 | (unit & 0x3F)))
+        if len(raw) > 65535:
+            raise ValueError("JVM UTF8 constant exceeds 65535 bytes")
         return self._add(("utf8", value), u1(1) + u2(len(raw)) + raw)
 
     def class_(self, name: str) -> int:

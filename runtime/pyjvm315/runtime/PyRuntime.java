@@ -78,6 +78,8 @@ public final class PyRuntime {
         if (value instanceof Set) return "set";
         if (value instanceof PyRange) return "range";
         if (value instanceof PyFunction) return "function";
+        if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
+        if (value instanceof PyMap) return "map";
         if (value instanceof PyGenerator) return "generator";
         if (value instanceof PyCoroutine) return "coroutine";
         if (value instanceof PyAsyncGenerator) return "async_generator";
@@ -181,13 +183,87 @@ public final class PyRuntime {
         @Override public boolean equals(Object other){return other instanceof PyBuiltinType t && name.equals(t.name);}
         @Override public int hashCode(){return name.hashCode();}
     }
-    public static Object builtinType(Object nameObj){return new PyBuiltinType((String)nameObj);}
+    private record PyBuiltinFunction(String name) {}
+    public static Object builtinFunction(Object name) { return new PyBuiltinFunction((String)name); }
+    private static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
+        if(name.equals("print")) {
+            for(Object key:kwargs.keySet()) if(!key.equals("sep") && !key.equals("end"))
+                throw new PyException("TypeError","unsupported print keyword");
+            return printArgs(args,kwargs.get("sep"),kwargs.get("end"));
+        }
+        if(!kwargs.isEmpty()) throw new PyException("TypeError",name+"() does not accept keyword arguments");
+        if(name.equals("map")) {
+            if(args.size()<2) throw new PyException("TypeError","map() must have at least two arguments");
+            return new PyMap(args.get(0),args.subList(1,args.size()));
+        }
+        if(args.size()!=1) throw new PyException("TypeError",name+"() takes exactly one argument");
+        Object value=args.get(0);
+        return switch(name) {
+            case "ord" -> ord(value);
+            case "chr" -> chr(value);
+            case "repr" -> repr_(value);
+            default -> throw new PyException("RuntimeError","unknown builtin "+name);
+        };
+    }
+    public static Object ord(Object value) {
+        if(value instanceof String text) {
+            if(text.codePointCount(0,text.length())!=1) throw new PyException("TypeError","ord() requires one character");
+            return (long)text.codePointAt(0);
+        }
+        if(value instanceof PyBytes || value instanceof PyByteArray) {
+            PyByteSequence bytes=(PyByteSequence)value;
+            if(bytes.byteSize()!=1) throw new PyException("TypeError","ord() requires one byte");
+            return (long)bytes.unsignedAt(0);
+        }
+        throw new PyException("TypeError","ord() expected a character");
+    }
+    public static Object chr(Object value) {
+        if(value instanceof PyInstance instance) {
+            PyMethod index=instance.cls.lookupMethod("__index__");
+            if(index==null) throw new PyException("TypeError","object cannot be interpreted as an integer");
+            value=invoke(instance,index,new Object[0]);
+        }
+        if(!isIntLike(value)) throw new PyException("TypeError","chr() requires an integer");
+        BigInteger code=bigInt(value);
+        if(code.signum()<0 || code.compareTo(BigInteger.valueOf(0x10ffff))>0)
+            throw new PyException("ValueError","chr() arg not in range(0x110000)");
+        return new String(Character.toChars(code.intValue()));
+    }
+    public static final class PyMap implements Iterator<Object>, Iterable<Object> {
+        final Object function; final ArrayList<Object> iterators=new ArrayList<>();
+        Object buffered; boolean hasBuffered=false;
+        PyMap(Object function,List<Object> sources) {
+            this.function=function;
+            for(Object source:sources) iterators.add(iter(source));
+        }
+        public Iterator<Object> iterator(){return this;}
+        public boolean hasNext() {
+            if(hasBuffered) return true;
+            try { buffered=compute(); hasBuffered=true; return true; }
+            catch(NoSuchElementException end){return false;}
+            catch(PyException end){if(end.typeName.equals("StopIteration"))return false;throw end;}
+        }
+        private Object compute() {
+            ArrayList<Object> args=new ArrayList<>();
+            for(Object iterator:iterators) {
+                try { args.add(next_(iterator)); }
+                catch(PyException end) {if(end.typeName.equals("StopIteration"))throw new NoSuchElementException();throw end;}
+            }
+            return callFunction(function,args,new LinkedHashMap<Object,Object>());
+        }
+        public Object next() {
+            if(hasBuffered){Object out=buffered;buffered=null;hasBuffered=false;return out;}
+            return compute();
+        }
+    }
+    private static final java.util.concurrent.ConcurrentHashMap<String,PyBuiltinType> BUILTIN_TYPES = new java.util.concurrent.ConcurrentHashMap<>();
+    public static Object builtinType(Object nameObj){return BUILTIN_TYPES.computeIfAbsent((String)nameObj,PyBuiltinType::new);}
     public static Object typeOf(Object value){
         if(value instanceof PyInstance i) return i.cls;
-        if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : new PyBuiltinType("type");
-        return new PyBuiltinType(typeName(value));
+        if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : builtinType("type");
+        return builtinType(typeName(value));
     }
-    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
+    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof PyBuiltinFunction || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
 
     // ---------- Display / truth ----------
     public static Object print(Object value) {
@@ -229,8 +305,30 @@ public final class PyRuntime {
         return String.valueOf(value);
     }
 
+    private static String stringRepr(String text) {
+        char quote=text.indexOf('\'')>=0 && text.indexOf('"')<0 ? '"' : '\'';
+        StringBuilder result=new StringBuilder().append(quote);
+        text.codePoints().forEach(code -> {
+            if(code==quote || code=='\\') result.append('\\').appendCodePoint(code);
+            else if(code=='\n') result.append("\\n");
+            else if(code=='\r') result.append("\\r");
+            else if(code=='\t') result.append("\\t");
+            else {
+                int kind=Character.getType(code);
+                boolean printable=code==32 || !(Character.isISOControl(code) ||
+                    kind==Character.UNASSIGNED || kind==Character.FORMAT || kind==Character.SURROGATE ||
+                    kind==Character.PRIVATE_USE || kind==Character.SPACE_SEPARATOR ||
+                    kind==Character.LINE_SEPARATOR || kind==Character.PARAGRAPH_SEPARATOR);
+                if(printable) result.appendCodePoint(code);
+                else if(code<256) result.append(String.format(Locale.ROOT,"\\x%02x",code));
+                else if(code<65536) result.append(String.format(Locale.ROOT,"\\u%04x",code));
+                else result.append(String.format(Locale.ROOT,"\\U%08x",code));
+            }
+        });
+        return result.append(quote).toString();
+    }
     public static String pyRepr(Object value) {
-        if (value instanceof String s) return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
+        if (value instanceof String s) return stringRepr(s);
         if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
         if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__repr__");if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}}
@@ -749,6 +847,7 @@ public final class PyRuntime {
     public static Object range3(Object start, Object stop, Object step) { return new PyRange(bigInt(start), bigInt(stop), bigInt(step)); }
 
     public static Object iter(Object value) {
+        if(value instanceof Iterator<?>) return value;
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__iter__");if(m!=null)return invoke(instance,m,new Object[0]);}
         return iterable(value).iterator();
     }
@@ -798,6 +897,10 @@ public final class PyRuntime {
             }
         }
         if (value instanceof Iterable<?> x) return x;
+        if (value instanceof Iterator<?> iterator) return () -> new Iterator<Object>() {
+            public boolean hasNext(){return iterator.hasNext();}
+            public Object next(){return iterator.next();}
+        };
         if (value instanceof Map<?, ?> m) return m.keySet();
         if (value instanceof String s) {
             ArrayList<String> chars = new ArrayList<>();
@@ -1569,6 +1672,29 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") List<Object> args = (List<Object>) argsObj;
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs = (Map<Object,Object>) kwargsObj;
         if (callable instanceof PyFunction f) return f.call(args, kwargs);
+        if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
+        if (callable instanceof PyBuiltinType type) {
+            if(type.name.equals("map")) return callBuiltin("map",args,kwargs);
+            if(exceptionIsSubclass(type.name,"BaseException")) {
+                if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError","exception accepts zero or one argument in this runtime");
+                return makeException(type.name,args.isEmpty()?null:args.get(0));
+            }
+            if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError","invalid builtin constructor arguments");
+            Object value=args.isEmpty()?null:args.get(0);
+            return switch(type.name) {
+                case "str" -> args.isEmpty()?"":str_(value);
+                case "int" -> args.isEmpty()?0L:int_(value);
+                case "bool" -> args.isEmpty()?false:bool_(value);
+                case "float" -> args.isEmpty()?0.0:float_(value);
+                case "list" -> args.isEmpty()?list0():listFrom(value);
+                case "tuple" -> args.isEmpty()?tuple0():tupleFrom(value);
+                case "dict" -> args.isEmpty()?dict0():dictFrom(value);
+                case "set" -> args.isEmpty()?set0():setFrom(value);
+                case "bytes" -> args.isEmpty()?bytes0():bytes1(value);
+                case "bytearray" -> args.isEmpty()?bytearray0():bytearray1(value);
+                default -> throw new PyException("TypeError","unsupported builtin constructor "+type.name);
+            };
+        }
         if (callable instanceof BoundMethod bm) {
             PyMethod method=bm.self.cls.lookupMethod(bm.name);
             if(method==null) throw new PyException("AttributeError","method not found");
@@ -2009,14 +2135,39 @@ public final class PyRuntime {
         return exceptionIsSubclass(actual, requested);
     }
 
+    private static final Map<String,String> EXCEPTION_PARENTS = Map.ofEntries(
+        Map.entry("Exception","BaseException"), Map.entry("GeneratorExit","BaseException"),
+        Map.entry("KeyboardInterrupt","BaseException"), Map.entry("SystemExit","BaseException"),
+        Map.entry("ArithmeticError","Exception"), Map.entry("LookupError","Exception"),
+        Map.entry("ZeroDivisionError","ArithmeticError"), Map.entry("OverflowError","ArithmeticError"),
+        Map.entry("FloatingPointError","ArithmeticError"), Map.entry("IndexError","LookupError"),
+        Map.entry("KeyError","LookupError"), Map.entry("NameError","Exception"),
+        Map.entry("UnboundLocalError","NameError"), Map.entry("RuntimeError","Exception"),
+        Map.entry("NotImplementedError","RuntimeError"), Map.entry("RecursionError","RuntimeError"),
+        Map.entry("ValueError","Exception"), Map.entry("TypeError","Exception"),
+        Map.entry("AttributeError","Exception"), Map.entry("AssertionError","Exception"),
+        Map.entry("StopIteration","Exception"), Map.entry("StopAsyncIteration","Exception"),
+        Map.entry("ImportError","Exception"), Map.entry("ModuleNotFoundError","ImportError"),
+        Map.entry("MemoryError","Exception"), Map.entry("BufferError","Exception"),
+        Map.entry("SyntaxError","Exception"), Map.entry("IndentationError","SyntaxError"),
+        Map.entry("TabError","IndentationError"), Map.entry("UnicodeError","ValueError"),
+        Map.entry("UnicodeEncodeError","UnicodeError"), Map.entry("UnicodeDecodeError","UnicodeError"),
+        Map.entry("UnicodeTranslateError","UnicodeError"), Map.entry("Warning","Exception"),
+        Map.entry("UserWarning","Warning"), Map.entry("DeprecationWarning","Warning"),
+        Map.entry("PendingDeprecationWarning","Warning"), Map.entry("SyntaxWarning","Warning"),
+        Map.entry("RuntimeWarning","Warning"), Map.entry("FutureWarning","Warning"),
+        Map.entry("ImportWarning","Warning"), Map.entry("UnicodeWarning","Warning"),
+        Map.entry("BytesWarning","Warning"), Map.entry("ResourceWarning","Warning"),
+        Map.entry("OSError","Exception"), Map.entry("FileNotFoundError","OSError"),
+        Map.entry("PermissionError","OSError"), Map.entry("TimeoutError","OSError"),
+        Map.entry("ConnectionError","OSError"), Map.entry("BlockingIOError","OSError"),
+        Map.entry("ChildProcessError","OSError"), Map.entry("InterruptedError","OSError"),
+        Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
+        Map.entry("ProcessLookupError","OSError"));
     private static boolean exceptionIsSubclass(String actual, String requested) {
-        if (actual.equals(requested)) return true;
-        if (requested.equals("BaseException")) return true;
-        if (requested.equals("Exception")) return !actual.equals("KeyboardInterrupt") && !actual.equals("SystemExit") && !actual.equals("GeneratorExit");
-        if (requested.equals("ArithmeticError")) return Set.of("ArithmeticError","ZeroDivisionError","OverflowError","FloatingPointError").contains(actual);
-        if (requested.equals("LookupError")) return Set.of("LookupError","IndexError","KeyError").contains(actual);
-        if (requested.equals("NameError")) return actual.equals("UnboundLocalError");
-        if (requested.equals("OSError")) return Set.of("FileNotFoundError","PermissionError","TimeoutError","ConnectionError","BlockingIOError","ChildProcessError","InterruptedError","IsADirectoryError","NotADirectoryError","ProcessLookupError").contains(actual);
+        if(actual.equals(requested)) return actual.equals("BaseException") || EXCEPTION_PARENTS.containsKey(actual);
+        for(String parent=EXCEPTION_PARENTS.get(actual);parent!=null;parent=EXCEPTION_PARENTS.get(parent))
+            if(parent.equals(requested)) return true;
         return false;
     }
 
@@ -2116,7 +2267,7 @@ public final class PyRuntime {
         cls.metaclass=meta;
         PyClassNamespace namespace=new PyClassNamespace(cls);
         namespace.put("__module__",cls.moduleName);
-        namespace.put("__qualname__",cls.name);
+        namespace.put("__qualname__",cls.qualname);
 
         if(meta!=null) {
             PyMethod prepare=meta.lookupMethod("__prepare__");
@@ -2129,7 +2280,7 @@ public final class PyRuntime {
                 namespace.clear();
                 for(var e:map.entrySet()) namespace.put(e.getKey(),e.getValue());
                 namespace.putIfAbsent("__module__",cls.moduleName);
-                namespace.putIfAbsent("__qualname__",cls.name);
+                namespace.putIfAbsent("__qualname__",cls.qualname);
             }
         }
         return namespace;
@@ -2211,13 +2362,40 @@ public final class PyRuntime {
         function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
         ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
     }
+    public static void classAddMethodClosure(Object cls, Object pyName, Object owner, Object javaName, Object kind,
+                                             Object posonly, Object poskw, Object kwonly,
+                                             Object vararg, Object kwarg, Object defaults, Object filename, Object firstline,
+                                             Object closure) {
+        PyFunction function=(PyFunction)makeFunctionEx(owner,javaName,posonly,poskw,kwonly,
+            vararg,kwarg,defaults,closure,true);
+        function.displayName=(String)pyName; function.filename=(String)filename;
+        function.firstlineno=bigInt(firstline).longValue();
+        ((PyClass)cls).methods.put((String)pyName,
+            new PyMethod((String)owner,(String)javaName,(String)kind,function));
+    }
+    public static void classSetQualname(Object cls,Object qualname) {
+        ((PyClass)cls).qualname=(String)qualname;
+    }
     public static void classSetMethodAsync(Object cls,Object pyName) {
         PyMethod method=((PyClass)cls).methods.get((String)pyName);
         if(method==null || method.function==null) throw new PyException("RuntimeError","method metadata not found");
         method.function.asyncMode=true;
     }
+    public static void classSetMethodAsyncGenerator(Object cls,Object pyName) {
+        PyMethod method=((PyClass)cls).methods.get((String)pyName);
+        if(method==null || method.function==null) throw new PyException("RuntimeError","method metadata not found");
+        method.function.asyncGeneratorMode=true;
+    }
     public static void classAddProperty(Object cls, Object pyName, Object owner, Object getter, Object setter) {
         ((PyClass)cls).properties.put((String)pyName, new PyProperty((String)owner, (String)getter, setter == null ? null : (String)setter));
+    }
+    public static void classAddPropertyClosure(Object cls,Object pyName,Object owner,Object getter,Object setter,Object closure) {
+        PyFunction get=(PyFunction)makeFunctionEx(owner,getter,"","self","",null,null,
+            new LinkedHashMap<Object,Object>(),closure,true);
+        PyFunction set=setter==null ? null : (PyFunction)makeFunctionEx(owner,setter,"","self,value","",null,null,
+            new LinkedHashMap<Object,Object>(),closure,true);
+        ((PyClass)cls).properties.put((String)pyName,
+            new PyProperty((String)owner,(String)getter,setter==null ? null : (String)setter,get,set));
     }
     private static void configureSlots(PyClass cls) {
         Object spec=cls.attrs.get("__slots__");
@@ -2618,7 +2796,10 @@ public final class PyRuntime {
         }
         if (!(obj instanceof PyInstance instance)) throw typeError("method call on non-instance", obj);
         PyMethod method = instance.cls.lookupMethod(name);
-        if (method == null) throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no method '" + name + "'");
+        if (method == null) {
+            Object callable=getattr(instance,name);
+            return callFunction(callable,new ArrayList<Object>(Arrays.asList(args)),new LinkedHashMap<Object,Object>());
+        }
         return invoke(instance, method, args);
     }
 
@@ -2663,9 +2844,6 @@ public final class PyRuntime {
         if(method.function != null) {
             ArrayList<Object> actual=new ArrayList<>();
             if(method.kind.equals("class")) actual.add(cls);
-            else if(method.kind.equals("instance")) {
-                if(args.isEmpty() || !(args.get(0) instanceof PyInstance)) throw new PyException("TypeError","unbound method requires an instance as first argument");
-            }
             actual.addAll(args);
             return method.function.call(actual,kwargs);
         }
@@ -2741,7 +2919,7 @@ public final class PyRuntime {
         }
         if (obj instanceof PySuper sup) {
             PyProperty prop=sup.self.cls.lookupPropertyAfter(sup.currentClass,name);
-            if(prop!=null) return invoke(sup.self,new PyMethod(prop.owner,prop.getter),new Object[0]);
+            if(prop!=null) return invoke(sup.self,prop.getterMethod(),new Object[0]);
             PyMethod method=sup.self.cls.lookupMethodAfter(sup.currentClass,name);
             if(method!=null) return new BoundSuperMethod(sup.self,sup.currentClass,name);
             Object attr=sup.self.cls.lookupAttrAfter(sup.currentClass,name);
@@ -2749,8 +2927,9 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
-            if(name.equals("__class__")) return cls.metaclass != null ? cls.metaclass : new PyBuiltinType("type");
-            if(name.equals("__name__") || name.equals("__qualname__")) return cls.name;
+            if(name.equals("__class__")) return cls.metaclass != null ? cls.metaclass : builtinType("type");
+            if(name.equals("__name__")) return cls.name;
+            if(name.equals("__qualname__")) return cls.qualname;
             if(name.equals("__module__")) return cls.moduleName;
             if(name.equals("__bases__")) {
                 PyTuple t=new PyTuple();
@@ -2792,7 +2971,7 @@ public final class PyRuntime {
                 return instance.fields;
             }
             PyProperty prop=instance.cls.lookupProperty(name);
-            if(prop!=null) return invoke(instance,new PyMethod(prop.owner,prop.getter),new Object[0]);
+            if(prop!=null) return invoke(instance,prop.getterMethod(),new Object[0]);
             Object classAttr=instance.cls.lookupAttr(name);
             if(classAttr!=MISSING && isDataDescriptor(classAttr)) return descriptorGet(classAttr, instance, instance.cls);
             if (instance.fields.containsKey(name)) return instance.fields.get(name);
@@ -2819,7 +2998,7 @@ public final class PyRuntime {
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) {
                 if(prop.setter==null) throw new PyException("AttributeError", "property '"+name+"' of '"+instance.cls.name+"' object has no setter");
-                invoke(instance,new PyMethod(prop.owner,prop.setter),new Object[]{value}); return;
+                invoke(instance,prop.setterMethod(),new Object[]{value}); return;
             }
             Object descriptor=instance.cls.lookupAttr(name);
             if(descriptor instanceof PySlotDescriptor slot) {
@@ -2863,6 +3042,8 @@ public final class PyRuntime {
         }
         if (clsObj instanceof PyClass cls) return obj instanceof PyInstance instance && instance.cls.mro.contains(cls);
         if (clsObj instanceof PyBuiltinType bt) {
+            if(obj instanceof PyExceptionValue error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
+            if(obj instanceof PyException error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
             return switch(bt.name) {
                 case "object" -> true;
                 case "int" -> isIntLike(obj);
@@ -2877,6 +3058,7 @@ public final class PyRuntime {
                 case "dict" -> obj instanceof Map<?,?>;
                 case "set" -> obj instanceof Set<?>;
                 case "range" -> obj instanceof PyRange;
+                case "map" -> obj instanceof PyMap;
                 case "type" -> obj instanceof PyClass || obj instanceof PyBuiltinType;
                 case "BaseException", "Exception" -> obj instanceof PyExceptionValue || obj instanceof PyException;
                 default -> false;
@@ -2890,7 +3072,7 @@ public final class PyRuntime {
         if(subObj instanceof PyBuiltinType a && clsObj instanceof PyBuiltinType b){
             if(a.name.equals(b.name)||b.name.equals("object")) return true;
             if(a.name.equals("bool")&&b.name.equals("int")) return true;
-            return false;
+            return exceptionIsSubclass(a.name,b.name);
         }
         if(subObj instanceof PyClass a && clsObj instanceof PyClass b) return a.mro.contains(b);
         if(subObj instanceof PyClass a && clsObj instanceof PyBuiltinType b && b.name.equals("type"))
@@ -2904,7 +3086,11 @@ public final class PyRuntime {
         PyMethod(String owner,String javaName){this(owner,javaName,"instance",null);}
         PyMethod(String owner,String javaName,String kind){this(owner,javaName,kind,null);}
     }
-    private record PyProperty(String owner, String getter, String setter) {}
+    private record PyProperty(String owner, String getter, String setter, PyFunction getFunction, PyFunction setFunction) {
+        PyProperty(String owner,String getter,String setter){this(owner,getter,setter,null,null);}
+        PyMethod getterMethod(){return new PyMethod(owner,getter,"instance",getFunction);}
+        PyMethod setterMethod(){return new PyMethod(owner,setter,"instance",setFunction);}
+    }
     private static final class PySlotDescriptor {
         final PyClass owner; final String name;
         PySlotDescriptor(PyClass owner,String name){this.owner=owner;this.name=name;}
@@ -2928,6 +3114,7 @@ public final class PyRuntime {
     public static final class PyClass {
         final String moduleName;
         final String name;
+        String qualname;
         final ArrayList<PyClass> bases = new ArrayList<>();
         final LinkedHashMap<String,PyMethod> methods = new LinkedHashMap<>();
         final LinkedHashMap<String,PyProperty> properties = new LinkedHashMap<>();
@@ -2939,7 +3126,7 @@ public final class PyRuntime {
         boolean slotsDeclared = false;
         boolean instanceDictAllowed = true;
         boolean finalized = false;
-        PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; }
+        PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; }
 
         PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;} return null; }
         PyProperty lookupProperty(String name) { for (PyClass c:mro){PyProperty p=c.properties.get(name);if(p!=null)return p;} return null; }
