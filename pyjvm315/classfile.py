@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import struct
 
+from .stackmap import FrameError, analyze, encode_frames
+
+JAVA_TARGETS = (5, 8, 11, 17, 21)
+DEFAULT_TARGET = 17
+
 
 def u1(v: int) -> bytes:
     return struct.pack(">B", v & 0xFF)
@@ -25,6 +30,7 @@ class ConstantPool:
     def __init__(self) -> None:
         self.entries: list[bytes] = []
         self.cache: dict[tuple, int] = {}
+        self.info: dict[int, tuple] = {}
 
     def _add(self, key: tuple, payload: bytes) -> int:
         if key in self.cache:
@@ -32,6 +38,7 @@ class ConstantPool:
         self.entries.append(payload)
         idx = len(self.entries)
         self.cache[key] = idx
+        self.info[idx] = key
         return idx
 
     def utf8(self, value: str) -> int:
@@ -138,10 +145,19 @@ class CodeBuilder:
     def dup(self): self.emit(0x59)
     def aload(self, slot: int):
         if 0 <= slot <= 3: self.emit(0x2A + slot)
-        else: self.emit(0x19, slot)
+        else: self._local(0x19, slot)
     def astore(self, slot: int):
         if 0 <= slot <= 3: self.emit(0x4B + slot)
-        else: self.emit(0x3A, slot)
+        else: self._local(0x3A, slot)
+
+    def _local(self, opcode: int, slot: int) -> None:
+        if not 0 <= slot <= 65535:
+            raise ValueError("JVM local slot outside unsigned 16-bit range")
+        if slot <= 255:
+            self.emit(opcode, slot)
+        else:
+            self.emit(0xC4, opcode)
+            self.code.extend(u2(slot))
 
     def ldc_string(self, value: str) -> None:
         idx = self.cp.string(value)
@@ -198,7 +214,11 @@ class Method:
 
 
 class ClassFile:
-    def __init__(self, name: str, super_name: str = "java/lang/Object") -> None:
+    def __init__(self, name: str, super_name: str = "java/lang/Object", *,
+                 target: int = DEFAULT_TARGET) -> None:
+        if target not in JAVA_TARGETS:
+            raise ValueError(f"Unsupported Java target {target}; choose {JAVA_TARGETS}")
+        self.target = target
         self.name = name
         self.super_name = super_name
         self.cp = ConstantPool()
@@ -220,11 +240,22 @@ class ClassFile:
         for m in self.methods:
             method_metadata.append((self.cp.utf8(m.name), self.cp.utf8(m.desc), m))
 
-        # Version 49 (Java 5) deliberately avoids mandatory StackMapTable
-        # generation while remaining loadable on modern JVMs.
-        header = b"\xCA\xFE\xBA\xBE" + u2(0) + u2(49)
+        header = b"\xCA\xFE\xBA\xBE" + u2(0) + u2(self.target + 44)
+        prepared = {}
+        stackmap_name = self.cp.utf8("StackMapTable") if self.target >= 8 else None
         for _, _, m in method_metadata:
-            for _, _, _, catch_class in (m.exception_table or []):
+            if self.target >= 8:
+                try:
+                    code, exceptions, frames, max_stack = analyze(self.cp, self.name, m)
+                except FrameError as exc:
+                    raise FrameError(f"{self.name}.{m.name}{m.desc}: {exc}") from exc
+                frame_blob = encode_frames(self.cp, frames)
+                attributes = u2(1) + u2(stackmap_name) + u4(len(frame_blob)) + frame_blob
+                prepared[id(m)] = (code, exceptions, max_stack, attributes)
+            else:
+                prepared[id(m)] = (m.code, m.exception_table or [], m.max_stack, u2(0))
+        for _, _, m in method_metadata:
+            for _, _, _, catch_class in prepared[id(m)][1]:
                 if catch_class is not None:
                     self.cp.class_(catch_class)
         cp_blob = self.cp.render()
@@ -236,18 +267,18 @@ class ClassFile:
         body += u2(len(method_metadata))
 
         for name_idx, desc_idx, m in method_metadata:
-            exc = m.exception_table or []
+            code, exc, max_stack, code_attributes = prepared[id(m)]
             exc_blob = u2(len(exc))
             for start_pc, end_pc, handler_pc, catch_class in exc:
                 catch_type = 0 if catch_class is None else self.cp.class_(catch_class)
                 exc_blob += u2(start_pc) + u2(end_pc) + u2(handler_pc) + u2(catch_type)
             code_attr = (
-                u2(m.max_stack)
+                u2(max_stack)
                 + u2(m.max_locals)
-                + u4(len(m.code))
-                + m.code
+                + u4(len(code))
+                + code
                 + exc_blob
-                + u2(0)  # code attributes
+                + code_attributes
             )
             body += (
                 u2(m.access)
