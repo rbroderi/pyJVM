@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: python/cpython
-          ref: '3.15'
+          ref: '5b28ebd109f08cfc44a3d6e573e087eaf86319b5' # CPython 3.15 corpus
           path: cpython-src
       - uses: actions/setup-python@v5
         with:
@@ -52,10 +52,41 @@ jobs:
             --manifest tools/cpython_probe_manifest.txt \
             --cpython-root cpython-src \
             --output artifacts/cpython-regression-probe.json \
-            --top 30
+            --top 30 \
+            --fail-on-error --min-compiles 264
       - name: Upload regression probe report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cpython-regression-probe
           path: artifacts/cpython-regression-probe.json
+
+  cpython-execution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: python/cpython
+          ref: '5b28ebd109f08cfc44a3d6e573e087eaf86319b5' # CPython 3.15 corpus
+          path: cpython-src
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+          allow-prereleases: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Execute CPython regression bodies
+        env:
+          PYTHONPATH: .
+        run: >-
+          python -m pyjvm315.cpython_execution --cpython-root cpython-src
+          --manifest tools/cpython_execution_manifest.txt --target 21
+          --output artifacts/cpython-execution.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cpython-execution
+          path: artifacts/cpython-execution.json

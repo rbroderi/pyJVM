@@ -2,10 +2,26 @@ from __future__ import annotations
 
 import ast
 import copy
+from functools import wraps
 from dataclasses import dataclass
 from pathlib import Path
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
+
+
+def _preserve_codegen_state(compile_method):
+    """Synthetic/nested methods must not consume the caller's control stacks."""
+    @wraps(compile_method)
+    def wrapped(self, *args, **kwargs):
+        names = ("loop_stack", "exception_stack", "cleanup_stack", "finally_stack",
+                 "current_frame_name", "current_frame_firstlineno")
+        saved = {name: getattr(self, name) for name in names}
+        try:
+            return compile_method(self, *args, **kwargs)
+        finally:
+            for name, value in saved.items():
+                setattr(self, name, value)
+    return wrapped
 
 
 OBJ = "Ljava/lang/Object;"
@@ -14,6 +30,20 @@ RUNTIME = "pyjvm315/runtime/PyRuntime"
 
 class CompileError(SyntaxError):
     pass
+
+
+EXCEPTION_TYPES = {
+    "BaseException", "Exception", "ArithmeticError", "LookupError", "ValueError", "TypeError",
+    "ZeroDivisionError", "OverflowError", "FloatingPointError", "IndexError", "KeyError",
+    "AssertionError", "RuntimeError", "NotImplementedError", "RecursionError", "NameError",
+    "UnboundLocalError", "AttributeError", "StopIteration", "StopAsyncIteration", "GeneratorExit",
+    "OSError", "ImportError", "ModuleNotFoundError", "MemoryError", "BufferError", "SyntaxError",
+    "IndentationError", "TabError", "UnicodeError", "UnicodeEncodeError", "UnicodeDecodeError",
+    "UnicodeTranslateError", "Warning", "UserWarning", "DeprecationWarning", "PendingDeprecationWarning",
+    "SyntaxWarning", "RuntimeWarning", "FutureWarning", "ImportWarning", "UnicodeWarning",
+    "BytesWarning", "ResourceWarning", "KeyboardInterrupt", "SystemExit",
+}
+BUILTIN_FUNCTIONS = {"ord", "chr", "repr", "print"}
 
 
 @dataclass
@@ -70,6 +100,8 @@ class MethodInfo:
     kind: str = "instance"
     firstlineno: int = 0
     is_async: bool = False
+    env_mode: bool = False
+    is_async_generator: bool = False
 
     @property
     def positional(self) -> list[str]:
@@ -86,7 +118,7 @@ class MethodInfo:
 
     @property
     def descriptor(self) -> str:
-        return "(" + (OBJ * len(self.bound_args)) + ")" + OBJ
+        return "(" + (OBJ if self.env_mode else "") + (OBJ * len(self.bound_args)) + ")" + OBJ
 
 
 @dataclass
@@ -99,13 +131,15 @@ class PropertyInfo:
 @dataclass
 class ClassInfo:
     name: str
-    bases: list[str]
+    bases: list[ast.expr]
     methods: dict[str, MethodInfo]
     properties: dict[str, PropertyInfo]
     attrs: list[tuple[str, ast.expr]]
     class_field: str
-    metaclass: str | None = None
+    metaclass: ast.expr | None = None
     keywords: list[tuple[str, ast.expr]] | None = None
+    local: bool = False
+    qualname: str = ""
 
 
 @dataclass
@@ -178,6 +212,8 @@ class Compiler:
         self.function_infos: dict[int, FunctionInfo] = {}
         self.function_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self.classes: dict[str, ClassInfo] = {}
+        self.class_infos: dict[int, ClassInfo] = {}
+        self.class_nodes: list[ast.ClassDef] = []
         self.class_method_infos: dict[int, MethodInfo] = {}
         self.current_class: ClassInfo | None = None
         self.current_method_self: str | None = None
@@ -199,18 +235,13 @@ class Compiler:
         self.filename = filename
         tree = ast.parse(source, filename=filename, mode="exec", feature_version=(3, 15))
         self._register_module_globals(tree.body)
-        for stmt in tree.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self._register_function_tree(stmt, [], top_level=True)
-            elif isinstance(stmt, ast.ClassDef):
-                self._register_class(stmt)
+        self._register_definitions(tree.body, [], top_level=True)
 
         self._add_constructor()
         for node in self.function_nodes:
             self._compile_function(node)
-        for stmt in tree.body:
-            if isinstance(stmt, ast.ClassDef):
-                self._compile_class_methods(stmt)
+        for node in self.class_nodes:
+            self._compile_class_methods(node)
 
         self._compile_main(tree.body)
         return self.cf.to_bytes()
@@ -295,10 +326,10 @@ class Compiler:
             b.getstatic(self.class_name, self.classes[name].class_field, OBJ); return
         if name in self.global_names:
             b.getstatic(self.class_name, self.global_fields[name], OBJ); return
-        if name in {"object","int","bool","float","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type",
-                    "BaseException","Exception","ArithmeticError","LookupError","ValueError","TypeError",
-                    "ZeroDivisionError","OverflowError","IndexError","KeyError","AssertionError","RuntimeError",
-                    "NameError","UnboundLocalError","AttributeError","StopIteration","StopAsyncIteration","GeneratorExit","OSError"}:
+        if name in BUILTIN_FUNCTIONS:
+            b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
+        if name in {"object", "int", "bool", "float", "str", "bytes", "bytearray", "memoryview",
+                    "list", "tuple", "dict", "set", "range", "type", "map"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
@@ -394,7 +425,7 @@ class Compiler:
         Visitor().visit(node)
         return refs
 
-    def _register_function_tree(self, node: ast.FunctionDef | ast.AsyncFunctionDef, enclosing_locals: list[set[str]], *, top_level: bool = False) -> None:
+    def _register_function_tree(self, node: ast.FunctionDef | ast.AsyncFunctionDef, enclosing_locals: list[set[str]], *, top_level: bool = False, qualname: str = "") -> None:
         local_names, global_names, nonlocal_names = self._function_locals(node)
         refs = self._referenced_names_shallow(node)
         free_names = {name for name in refs if name not in local_names and name not in global_names and any(name in s for s in reversed(enclosing_locals))}
@@ -402,7 +433,7 @@ class Compiler:
             if not any(name in s for s in reversed(enclosing_locals)):
                 raise CompileError(f"no binding for nonlocal {name!r} found")
             free_names.add(name)
-        has_nested = any(isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.GeneratorExp)) for st in node.body for x in ast.walk(st) if x is not node)
+        has_nested = any(isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda, ast.GeneratorExp)) for st in node.body for x in ast.walk(st) if x is not node)
         class YieldFinder(ast.NodeVisitor):
             found = False
             def visit_Yield(self, n): self.found = True
@@ -413,6 +444,7 @@ class Compiler:
             def visit_AsyncFunctionDef(self, n):
                 if n is node:
                     for st in n.body: self.visit(st)
+            def visit_ClassDef(self, n): return
             def visit_Lambda(self, n): return
         yf = YieldFinder(); yf.visit(node)
         is_generator = yf.found and isinstance(node, ast.FunctionDef)
@@ -442,9 +474,26 @@ class Compiler:
         if top_level: self.functions[node.name] = info
 
         new_enclosing = enclosing_locals + [local_names]
-        for stmt in node.body:
+        self._register_definitions(node.body, new_enclosing,
+                                   qualname=(qualname or node.name) + ".<locals>.")
+
+    def _register_definitions(self, body, enclosing_locals, *, top_level=False, qualname=""):
+        for stmt in body:
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self._register_function_tree(stmt, new_enclosing, top_level=False)
+                self._register_function_tree(stmt, enclosing_locals, top_level=top_level,
+                                             qualname=qualname + stmt.name)
+            elif isinstance(stmt, ast.ClassDef):
+                self._register_class(stmt, enclosing_locals, top_level=top_level,
+                                     qualname=qualname + stmt.name)
+            else:
+                # Control-flow suites keep their enclosing lexical scope.
+                for child in ast.iter_child_nodes(stmt):
+                    if isinstance(child, ast.stmt):
+                        self._register_definitions([child], enclosing_locals,
+                                                   top_level=top_level, qualname=qualname)
+                    elif isinstance(child, ast.ExceptHandler):
+                        self._register_definitions(child.body, enclosing_locals,
+                                                   top_level=top_level, qualname=qualname)
 
 
     @staticmethod
@@ -461,28 +510,28 @@ class Compiler:
             return name
         return self._mangle_class_private(self.current_class.name, name)
 
-    def _register_class(self, node: ast.ClassDef) -> None:
-        metaclass: str | None = None
+    def _register_class(self, node: ast.ClassDef, enclosing_locals: list[set[str]], *,
+                        top_level: bool, qualname: str) -> None:
+        metaclass: ast.expr | None = None
         class_keywords: list[tuple[str, ast.expr]] = []
         for kw in node.keywords:
             if kw.arg is None:
                 raise CompileError("** class keyword expansion is not implemented yet")
             if kw.arg == "metaclass":
-                if not isinstance(kw.value, ast.Name):
-                    raise CompileError("metaclass must currently be a simple name")
-                metaclass = kw.value.id
-            else:
-                class_keywords.append((kw.arg, kw.value))
-        bases: list[str] = []
-        for base in node.bases:
-            if not isinstance(base, ast.Name):
-                raise CompileError("class bases must currently be simple names")
-            bases.append(base.id)
+                metaclass = kw.value
+            class_keywords.append((kw.arg, kw.value))
+        bases: list[ast.expr] = list(node.bases)
+        if any(isinstance(base, ast.Starred) for base in bases):
+            raise CompileError("starred class bases are not implemented yet")
         methods: dict[str, MethodInfo] = {}
         properties: dict[str, PropertyInfo] = {}
         attrs: list[tuple[str, ast.expr]] = []
         for item in node.body:
             if isinstance(item, ast.Pass):
+                continue
+            if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant):
+                if item is node.body[0] and isinstance(item.value.value, str):
+                    attrs.append(("__doc__", item.value))
                 continue
             if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
                 attrs.append((self._mangle_class_private(node.name, item.targets[0].id), item.value))
@@ -510,8 +559,6 @@ class Compiler:
                 kind = "class"
             elif len(item.decorator_list) == 1 and isinstance(item.decorator_list[0], ast.Name) and item.decorator_list[0].id in {"classmethod", "staticmethod"}:
                 kind = item.decorator_list[0].id.removesuffix("method")
-            if kind != "static" and not positional:
-                raise CompileError(f"method {raw_method_name} must declare an implicit receiver argument")
             java_name = f"__py_method_{self._method_counter}"
             self._method_counter += 1
             method = MethodInfo(
@@ -538,12 +585,34 @@ class Compiler:
                     prop.setter = method
                     continue
             raise CompileError("method decorators currently support @property and @name.setter")
-        class_field = f"__py_class_{node.name}"
-        self.cf.add_field(Field(class_field))
-        self.classes[node.name] = ClassInfo(node.name, bases, methods, properties, attrs, class_field, metaclass, class_keywords)
+        local = not top_level
+        class_field = f"__py_class_{node.name}" if top_level else f"__py_local_class_{len(self.class_nodes)}"
+        if top_level:
+            self.cf.add_field(Field(class_field))
+        info = ClassInfo(node.name, bases, methods, properties, attrs, class_field,
+                         metaclass, class_keywords, local, qualname)
+        self.class_infos[id(node)] = info
+        self.class_nodes.append(node)
+        if top_level:
+            self.classes[node.name] = info
+        if local:
+            # Class attributes are not a method lexical scope. Capture the
+            # enclosing function plus a private cell for zero-argument super.
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self._register_function_tree(item, [*enclosing_locals, {"__class__"}],
+                                                 qualname=qualname + "." + item.name)
+                    self.function_nodes.remove(item)
+                    fn = self.function_infos[id(item)]
+                    fn.free_names.add("__class__")
+                    method = self.class_method_infos[id(item)]
+                    method.java_name = fn.java_name
+                    method.env_mode = True
+                    method.is_async_generator = fn.is_async_generator
 
+    @_preserve_codegen_state
     def _compile_class_methods(self, node: ast.ClassDef) -> None:
-        info = self.classes[node.name]
+        info = self.class_infos[id(node)]
         old_class, old_self = self.current_class, self.current_method_self
         self.current_class = info
         try:
@@ -553,6 +622,10 @@ class Compiler:
                     self.current_method_self = method.positional[0] if method.positional else None
                     saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
                     self.current_frame_name,self.current_frame_firstlineno=item.name,item.lineno
+                    if info.local:
+                        self._compile_function(item)
+                        self.current_frame_name,self.current_frame_firstlineno=saved_frame
+                        continue
 
                     suspendable_async = isinstance(item, ast.AsyncFunctionDef) and (
                         self._contains_await(item)
@@ -639,6 +712,7 @@ class Compiler:
         code = b.finish()
         self.cf.add_method(Method("main", "([Ljava/lang/String;)V", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
 
+    @_preserve_codegen_state
     def _compile_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         info = self.function_infos[id(node)]
         saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
@@ -714,7 +788,12 @@ class Compiler:
         v=V(); v.root=node; v.visit(node); return v.found
 
     def _lower_async_function(self, node: ast.AsyncFunctionDef) -> ast.FunctionDef:
-        original = copy.deepcopy(node)
+        # Nested lexical scopes have registration keyed by AST identity. The
+        # async lowerer transforms only this function, so preserve those nodes.
+        memo = {id(child): child for child in ast.walk(node)
+                if child is not node and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                            ast.ClassDef, ast.Lambda))}
+        original = copy.deepcopy(node, memo)
 
         compiler=self
         class Lower(ast.NodeTransformer):
@@ -744,6 +823,8 @@ class Compiler:
                     return self.generic_visit(n)
                 return n
             def visit_Lambda(self, n):
+                return n
+            def visit_ClassDef(self, n):
                 return n
             def visit_Await(self, n):
                 awaited=self.visit(n.value)
@@ -947,6 +1028,7 @@ class Compiler:
         b.aload(scope.env_slot); b.ldc_string(name)
         b.invokestatic(RUNTIME,"envGet",f"({OBJ}{OBJ}){OBJ}")
 
+    @_preserve_codegen_state
     def _compile_generator_resume(self, node: ast.FunctionDef | ast.AsyncFunctionDef, info: FunctionInfo, resume_name: str, *, async_generator_mode: bool = False) -> None:
         yields=self._generator_yields(node)
         state_for={id(y):i+1 for i,y in enumerate(yields)}
@@ -1556,6 +1638,7 @@ class Compiler:
         self._compile_lambda_method(node, info)
         return info
 
+    @_preserve_codegen_state
     def _compile_lambda_method(self, node: ast.Lambda, info: FunctionInfo) -> None:
         saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
         self.current_frame_name,self.current_frame_firstlineno="<lambda>",node.lineno
@@ -1568,7 +1651,7 @@ class Compiler:
             for name in info.bound_args:
                 b.aload(env_slot); b.ldc_string(name); b.aload(scope.get(name)); b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
         saved_loop,saved_exc,saved_finally=self.loop_stack,self.exception_stack,self.finally_stack
-        self.loop_stack=[]; self.exception_stack=[]; self.finally_stack=[]
+        self.loop_stack=[]; self.exception_stack=[]; self.cleanup_stack=[]; self.finally_stack=[]
         self._expr(node.body,b,scope); b.areturn()
         self.loop_stack,self.exception_stack,self.finally_stack=saved_loop,saved_exc,saved_finally
         code=b.finish(); self.cf.add_method(Method(info.java_name,info.descriptor,code,max_locals=max(8,scope.next_slot+2),exception_table=b.exception_table))
@@ -1998,7 +2081,7 @@ class Compiler:
                         b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
                     self._store_name(alias.asname or alias.name, b, scope)
             case ast.ClassDef(name=name, decorator_list=decorators):
-                info = self.classes[name]
+                info = self.class_infos[id(node)]
                 decorator_slots: list[int] = []
                 for decorator in decorators:
                     self._expr(decorator, b, scope)
@@ -2006,19 +2089,30 @@ class Compiler:
                 b.ldc_string(name); b.ldc_string(self.module_name)
                 b.invokestatic(RUNTIME, "classCreate", f"({OBJ}{OBJ}){OBJ}")
                 class_slot = scope.temp(); b.astore(class_slot)
-                for base_name in info.bases:
-                    b.aload(class_slot); self._load_name(base_name, b, scope)
+                b.aload(class_slot); b.ldc_string(info.qualname)
+                b.invokestatic(RUNTIME, "classSetQualname", f"({OBJ}{OBJ})V")
+                closure_slot = None
+                if info.local:
+                    if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
+                    else: b.aconst_null()
+                    b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
+                    closure_slot = scope.temp(); b.astore(closure_slot)
+                for base in info.bases:
+                    b.aload(class_slot); self._expr(base, b, scope)
                     b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
 
                 b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
                 class_kw_slot = scope.temp(); b.astore(class_kw_slot)
+                metaclass_slot = scope.temp(); b.aconst_null(); b.astore(metaclass_slot)
                 for kw_name, kw_value in (info.keywords or []):
-                    b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
-                    b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
+                    if kw_name == "metaclass":
+                        self._expr(kw_value, b, scope); b.astore(metaclass_slot)
+                    else:
+                        b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
+                        b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
 
                 b.aload(class_slot)
-                if info.metaclass is None: b.aconst_null()
-                else: self._load_name(info.metaclass, b, scope)
+                b.aload(metaclass_slot)
                 b.aload(class_kw_slot)
                 b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}{OBJ}){OBJ}")
                 namespace_slot = scope.temp(); b.astore(namespace_slot)
@@ -2042,26 +2136,37 @@ class Compiler:
                     if method.kwarg is None: b.aconst_null()
                     else: b.ldc_string(method.kwarg)
                     b.aload(defaults_slot); b.ldc_string(self.filename); self._emit_int(method.firstlineno, b)
-                    b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 13})V")
+                    if info.local:
+                        b.aload(closure_slot)
+                        b.invokestatic(RUNTIME, "classAddMethodClosure", f"({OBJ * 14})V")
+                    else:
+                        b.invokestatic(RUNTIME, "classAddMethodEx", f"({OBJ * 13})V")
                     if method.is_async:
                         b.aload(class_slot); b.ldc_string(method.py_name)
-                        b.invokestatic(RUNTIME, "classSetMethodAsync", f"({OBJ}{OBJ})V")
+                        async_setter = "classSetMethodAsyncGenerator" if method.is_async_generator else "classSetMethodAsync"
+                        b.invokestatic(RUNTIME, async_setter, f"({OBJ}{OBJ})V")
                     b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(method.py_name)
                     b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
                 for prop in info.properties.values():
                     b.aload(class_slot); b.ldc_string(prop.name); b.ldc_string(self.class_name.replace('/', '.')); b.ldc_string(prop.getter.java_name)
                     if prop.setter is None: b.aconst_null()
                     else: b.ldc_string(prop.setter.java_name)
-                    b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ}{OBJ}{OBJ}{OBJ}{OBJ})V")
+                    if info.local:
+                        b.aload(closure_slot)
+                        b.invokestatic(RUNTIME, "classAddPropertyClosure", f"({OBJ * 6})V")
+                    else:
+                        b.invokestatic(RUNTIME, "classAddProperty", f"({OBJ * 5})V")
                     b.aload(namespace_slot); b.aload(class_slot); b.ldc_string(prop.name)
                     b.invokestatic(RUNTIME, "classNamespaceSyncMember", f"({OBJ}{OBJ}{OBJ})V")
 
                 b.aload(class_slot)
-                if info.metaclass is None: b.aconst_null()
-                else: self._load_name(info.metaclass, b, scope)
+                b.aload(metaclass_slot)
                 b.aload(namespace_slot); b.aload(class_kw_slot)
                 b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
                 b.astore(class_slot)
+                if info.local:
+                    b.aload(closure_slot); b.ldc_string("__class__"); b.aload(class_slot)
+                    b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
                 for decorator_slot in reversed(decorator_slots):
                     b.aload(decorator_slot)
                     b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
@@ -2069,7 +2174,9 @@ class Compiler:
                     b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
                     b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
                     b.astore(class_slot)
-                b.aload(class_slot); b.putstatic(self.class_name, info.class_field, OBJ)
+                b.aload(class_slot)
+                if info.local: self._store_name(name, b, scope)
+                else: b.putstatic(self.class_name, info.class_field, OBJ)
             case ast.AnnAssign(target=ast.Name(id=name), value=value):
                 if value is None: b.aconst_null()
                 else: self._expr(value, b, scope)
@@ -2308,7 +2415,8 @@ class Compiler:
             case ast.Call(func=ast.Name(id="super"), args=[], keywords=[]):
                 if self.current_class is None or self.current_method_self is None:
                     raise CompileError("zero-argument super() is only available inside compiled methods")
-                b.getstatic(self.class_name, self.current_class.class_field, OBJ)
+                if self.current_class.local: self._load_name("__class__", b, scope)
+                else: b.getstatic(self.class_name, self.current_class.class_field, OBJ)
                 self._load_name(self.current_method_self, b, scope)
                 b.invokestatic(RUNTIME, "makeSuper", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="super"), args=[cls, obj], keywords=[]):
@@ -2378,7 +2486,7 @@ class Compiler:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "enumerate1", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="zip"), args=[a, c], keywords=[]):
                 self._expr(a, b, scope); self._expr(c, b, scope); b.invokestatic(RUNTIME, "zip2", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in {"Exception", "BaseException", "ValueError", "TypeError", "ZeroDivisionError", "OverflowError", "IndexError", "KeyError", "AssertionError", "RuntimeError", "NameError", "UnboundLocalError", "AttributeError", "StopIteration", "StopAsyncIteration", "GeneratorExit", "OSError"}:
+            case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in EXCEPTION_TYPES:
                 if len(args) > 1: raise CompileError("exception constructors currently accept zero or one positional argument")
                 b.ldc_string(name)
                 if args: self._expr(args[0], b, scope)
@@ -2408,15 +2516,15 @@ class Compiler:
             case ast.Call(func=ast.Name(id="issubclass"), args=[sub, cls], keywords=[]):
                 self._expr(sub, b, scope); self._expr(cls, b, scope); b.invokestatic(RUNTIME, "isSubclass", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Attribute(value=obj, attr=attr), args=args, keywords=[]):
-                if len(args) > 4: raise CompileError("dynamic method calls currently support up to 4 arguments")
                 self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr))
-                for arg in args: self._expr(arg, b, scope)
-                b.invokestatic(RUNTIME, f"callMethod{len(args)}", f"({OBJ * (2 + len(args))}){OBJ}")
-            case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in self.classes:
-                if len(args) > 3: raise CompileError("class construction currently supports up to 3 arguments")
-                self._load_name(name, b, scope)
-                for arg in args: self._expr(arg, b, scope)
-                b.invokestatic(RUNTIME, f"instantiate{len(args)}", f"({OBJ * (1 + len(args))}){OBJ}")
+                if len(args) <= 4 and not any(isinstance(arg, ast.Starred) for arg in args):
+                    for arg in args: self._expr(arg, b, scope)
+                    b.invokestatic(RUNTIME, f"callMethod{len(args)}", f"({OBJ * (2 + len(args))}){OBJ}")
+                else:
+                    self._emit_call_parts(args, [], b, scope)
+                    b.invokestatic(RUNTIME, "callMethodDynamic", f"({OBJ * 4}){OBJ}")
+            case ast.Call(func=ast.Name(id=name) as func, args=args, keywords=[]) if name in self.classes:
+                self._emit_dynamic_call(func, args, [], b, scope)
             case ast.Call(func=ast.Name(id=name) as func, args=args, keywords=keywords) if name in self.functions or scope.has(name):
                 self._emit_dynamic_call(func, args, keywords, b, scope)
             case ast.Call(func=func, args=args, keywords=keywords):
@@ -2450,7 +2558,7 @@ class Compiler:
                 else:
                     raise CompileError("except types currently must be exception names or tuples of names")
             if handler.name:
-                b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}"); b.astore(scope.define(handler.name))
+                b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}"); self._store_name(handler.name, b, scope)
             self.exception_stack.append(exc_slot)
             for stmt in handler.body: self._stmt(stmt, b, scope, in_function)
             self.exception_stack.pop()

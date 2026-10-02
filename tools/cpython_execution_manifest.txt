@@ -1,0 +1,11 @@
+# Unchanged CPython 3.15 test bodies; run for both bytes and bytearray fixtures.
+# The fixture implements only assertEqual and type2test; no imports are replaced.
+Lib/test/test_bytes.py::BaseBytesTest.test_ord
+Lib/test/test_bytes.py::BaseBytesTest.test_from_tuple
+Lib/test/test_bytes.py::BaseBytesTest.test_from_list
+Lib/test/test_bytes.py::BaseBytesTest.test_from_int
+Lib/test/test_bytes.py::BaseBytesTest.test_reversed
+Lib/test/test_bytes.py::BaseBytesTest.test_repeat_1char
+Lib/test/test_bytes.py::BaseBytesTest.test_replace
+Lib/test/test_bytes.py::BaseBytesTest.test_partition
+Lib/test/test_bytes.py::BaseBytesTest.test_rpartition
