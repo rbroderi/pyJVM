@@ -69,14 +69,14 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Local-class tranche | Java 21 / builtin tranche |
-|---|---:|---:|---:|
-| Compiles | 125 | 264 | 299 |
-| Unsupported | 231 | 94 | 59 |
-| Compiler error | 2 | 0 | 0 |
-| Total | 358 | 358 | 358 |
+| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche |
+|---|---:|---:|---:|---:|
+| Compiles | 125 | 264 | 299 | 303 |
+| Unsupported | 231 | 94 | 59 | 55 |
+| Compiler error | 2 | 0 | 0 | 0 |
+| Total | 358 | 358 | 358 | 358 |
 
-Compile coverage increased from 34.9% to 83.5% (+174 cases; +35 this tranche). The probe now
+Compile coverage increased from 34.9% to 84.6% (+178 cases; +4 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,11 +90,12 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 148 cases. A separate
-`pyjvm315.cpython_execution` lane executes 20 unchanged CPython bytes test
-bodies (33 executions): shared BaseBytesTest bodies run with bytes and bytearray,
-while seven ByteArrayTest bodies use only bytearray. Explicit fixtures implement
-`type2test`, `assertEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
+The focused differential corpus is now 151 cases. A separate
+`pyjvm315.cpython_execution` lane executes 25 unchanged CPython test
+bodies (38 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
+a numeric fixture with assertion helpers and no substituted module globals. Explicit fixtures implement
+`type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
 21, strict JVM verification and publishes the execution report. Local validation also uses CPython 3.15.0rc2; the report records the actual
@@ -113,18 +114,18 @@ cases are rejected by this lane rather than stripping skip/platform semantics.
 
 ### Remaining priorities toward full compatibility
 
-The largest remaining probe blockers are complex values, eval, first-class
+The largest remaining probe blockers are eval, first-class
 classmethod/staticmethod/property wrappers, and general class-body statements. External imports still include
 copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 59 cases remain visible as unsupported; no
+support strategy. The remaining 55 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 299 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 299`). The old 0.31
+Compiler errors and compilation coverage below 303 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 303`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -152,3 +153,23 @@ This does not complete the full builtin/buffer/import model. Hash() support does
 not yet replace Java-backed dict/set key protocols; general writable-buffer
 export tracking and native-extension compatibility remain unfinished. Compile
 coverage and the 33 selected executions stay distinct from full-suite support.
+
+
+### Complex tranche
+
+The pinned five-file probe gains four compiling cases (299 to 303), with no
+compiler errors. Imaginary literals, complex construction/aliases, numeric
+conversion callbacks, real/imag attributes, conjugation, arithmetic, equality
+and 64-bit numeric hashing now have executable coverage. Mixed arithmetic uses
+real/complex rules to preserve signed zero and avoid unnecessary NaNs; division
+uses scaling, multiplication recovers infinities, and small integer powers use
+repeated squaring. Focused tests also exercise malformed strings, overflow and
+unsupported ordering/floor division/modulo/conversion exception types.
+
+The strict lane adds unchanged `ComplexTest.test_conjugate`, `test_hash`,
+`test_neg`, `test_floordiv` and `test_mod` from the same pinned corpus. Platform-
+decorated tests remain rejected; signed-zero representations are tested in the
+focused suite. Complex subclasses, full numeric descriptors, constructor warning
+behavior, all nonfinite exponent cases and exact binary64 string formatting
+remain unfinished. The compile probe is still distinct from these 38 executions
+and from full CPython-suite support.

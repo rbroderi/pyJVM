@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **299 compiling cases (83.5%)**,
-59 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **303 compiling cases (84.6%)**,
+55 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **148 passing cases**. A new strict execution
-lane runs **33 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **151 passing cases**. A new strict execution
+lane runs **38 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -669,3 +669,19 @@ NotImplemented fallback for addition/subtraction/multiplication/power and
 equality, modern boolean rejection, slices, in-place list/bytearray operations,
 and bytes constructor index callbacks. These are supported paths, not full
 builtin, buffer-protocol or dict/set key-protocol compatibility.
+
+
+## Complex-number compatibility
+
+Complex literals and the first-class `complex` constructor now support numeric
+and string inputs, keyword real/imag parts and conversion callbacks. Arithmetic
+uses CPython 3.15 mixed real/complex rules, including signed zero, scaled division,
+infinity recovery, integer powers, conjugation and numeric hash consistency.
+Five unchanged CPython complex test bodies join the strict execution lane;
+three differential programs exercise arithmetic, construction and hash/equality.
+
+Complex subclasses, complete builtin numeric descriptors, constructor warnings,
+all nonfinite exponent cases, and exact float-to-string parity across the entire
+binary64 range remain work in progress. Dict/set key protocols still use Java
+containers. These checks extend supported paths without establishing full
+CPython compatibility.

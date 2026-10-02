@@ -70,6 +70,7 @@ public final class PyRuntime {
         if (value == null) return "NoneType";
         if (value instanceof Long || value instanceof BigInteger) return "int";
         if (value instanceof Double) return "float";
+        if (value instanceof PyComplex) return "complex";
         if (value instanceof Boolean) return "bool";
         if (value instanceof String) return "str";
         if (value instanceof PyBytes) return "bytes";
@@ -82,6 +83,7 @@ public final class PyRuntime {
         if (value instanceof PyRange) return "range";
         if (value instanceof PyFunction) return "function";
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
+        if (value instanceof BuiltinBoundMethod) return "builtin_function_or_method";
         if (value instanceof PyMap) return "map";
         if(value instanceof PySlice)return "slice";
         if(value==NOT_IMPLEMENTED)return "NotImplementedType";
@@ -190,6 +192,7 @@ public final class PyRuntime {
         @Override public int hashCode(){return name.hashCode();}
     }
     private record PyBuiltinFunction(String name) {}
+    private record BuiltinBoundMethod(Object self,String name) {}
     public static Object builtinFunction(Object name) { return new PyBuiltinFunction((String)name); }
     private static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
         if(name.equals("print")) {
@@ -257,6 +260,8 @@ public final class PyRuntime {
     }
 
     private static Object powMod(Object base,Object exponent,Object modulus) {
+        if(modulus==null)return pow(base,exponent);
+        if(base instanceof PyComplex || exponent instanceof PyComplex)throw new PyException("ValueError","complex modulo");
         if(!isIntLike(base)||!isIntLike(exponent)||!isIntLike(modulus)) throw new PyException("TypeError","pow() with modulus requires integer arguments");
         BigInteger m=bigInt(modulus), e=bigInt(exponent), a=bigInt(base);
         if(m.signum()==0) throw new PyException("ValueError","pow() 3rd argument cannot be 0");
@@ -330,7 +335,7 @@ public final class PyRuntime {
         if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : builtinType("type");
         return builtinType(typeName(value));
     }
-    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof PyBuiltinFunction || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
+    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType;}
 
     private enum Singleton { NOT_IMPLEMENTED, ELLIPSIS }
     private static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
@@ -398,6 +403,11 @@ public final class PyRuntime {
     }
     public static Object hash(Object value) {
         if(isIntLike(value))return numericHash(bigInt(value));
+        if(value instanceof PyComplex z) {
+            long real=Double.isNaN(z.real)?(Long)id(z):((Number)hash(z.real)).longValue();
+            long imag=Double.isNaN(z.imag)?(Long)id(z):((Number)hash(z.imag)).longValue();
+            return normalizeHash(real+1000003L*imag);
+        }
         if(value instanceof Double d) {
             if(d.isNaN())return id(value);
             if(d.isInfinite())return d>0?314159L:-314159L;
@@ -449,6 +459,7 @@ public final class PyRuntime {
 
     public static String pyStr(Object value) {
         if (value == null) return "None";
+        if (value instanceof PyComplex z) return z.toString();
         if(value==NOT_IMPLEMENTED)return "NotImplemented";
         if(value==ELLIPSIS)return "Ellipsis";
         if (value instanceof Boolean b) return b ? "True" : "False";
@@ -531,6 +542,7 @@ public final class PyRuntime {
         if (value instanceof Long n) return n != 0L;
         if (value instanceof BigInteger n) return n.signum() != 0;
         if (value instanceof Double n) return n != 0.0;
+        if (value instanceof PyComplex z) return z.real != 0.0 || z.imag != 0.0;
         if (value instanceof String s) return !s.isEmpty();
         if (value instanceof PyByteSequence seq) return seq.byteSize()!=0;
         if (value instanceof List<?> xs) return !xs.isEmpty();
@@ -557,6 +569,158 @@ public final class PyRuntime {
             Object result=invoke(right,rm,new Object[]{a});if(result!=NOT_IMPLEMENTED)return result;
         }
         return NOT_IMPLEMENTED;
+    }
+
+    // ---------- Complex numbers ----------
+    public static final class PyComplex {
+        final double real, imag;
+        PyComplex(double real,double imag){this.real=real;this.imag=imag;}
+        @Override public String toString(){
+            boolean negativeImag=Double.doubleToRawLongBits(imag)<0 && !Double.isNaN(imag);
+            String imaginary=complexComponent(negativeImag?-imag:imag);
+            if(real==0.0 && Double.doubleToRawLongBits(real)>=0)
+                return (negativeImag?"-":"")+imaginary+"j";
+            return "("+complexComponent(real)+(negativeImag?"-":"+")+imaginary+"j)";
+        }
+    }
+    private static String complexComponent(double value){
+        if(Double.isNaN(value))return "nan";
+        if(Double.isInfinite(value))return value<0?"-inf":"inf";
+        if(value==0)return Double.doubleToRawLongBits(value)<0?"-0":"0";
+        String text=Double.toString(value).toLowerCase(Locale.ROOT);
+        int e=text.indexOf('e');
+        if(e>=0){
+            int exponent=Integer.parseInt(text.substring(e+1));
+            if(exponent>=-4 && exponent<16) return java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
+            String mantissa=text.substring(0,e); if(mantissa.endsWith(".0"))mantissa=mantissa.substring(0,mantissa.length()-2);
+            return mantissa+"e"+(exponent<0?"-":"+")+String.format(Locale.ROOT,"%02d",Math.abs(exponent));
+        }
+        return text.endsWith(".0")?text.substring(0,text.length()-2):text;
+    }
+    public static Object complexLiteral(Object real,Object imag){return new PyComplex(number(real),number(imag));}
+    private static double complexReal(Object value,boolean protocol){
+        if(protocol && value instanceof PyInstance instance){
+            PyMethod method=instance.cls.lookupMethod("__float__");
+            if(method!=null){Object out=invoke(instance,method,new Object[0]);if(!(out instanceof Double))throw new PyException("TypeError","__float__ returned non-float");return (Double)out;}
+            method=instance.cls.lookupMethod("__index__");
+            if(method!=null){Object out=invoke(instance,method,new Object[0]);if(!isIntLike(out))throw new PyException("TypeError","__index__ returned non-int");value=out;}
+        }
+        double out=number(value);
+        if(value instanceof BigInteger && !Double.isFinite(out))throw new PyException("OverflowError","int too large to convert to float");
+        return out;
+    }
+    private static PyComplex complexValue(Object value){return value instanceof PyComplex z?z:new PyComplex(complexReal(value,false),0.0);}
+    private static Object complexConstructor(List<Object> args,Map<Object,Object> kwargs){
+        if(args.size()>2)throw new PyException("TypeError","complex() takes at most 2 arguments");
+        boolean singlePositional=args.size()==1 && kwargs.isEmpty(),converted=false;
+        Object real=args.isEmpty()?0L:args.get(0),imag=args.size()<2?0L:args.get(1);
+        boolean hasImag=args.size()==2;
+        for(Map.Entry<Object,Object> entry:kwargs.entrySet()){
+            if(entry.getKey().equals("real")){if(!args.isEmpty())throw new PyException("TypeError","multiple values for real");real=entry.getValue();}
+            else if(entry.getKey().equals("imag")){if(hasImag)throw new PyException("TypeError","multiple values for imag");imag=entry.getValue();hasImag=true;}
+            else throw new PyException("TypeError","invalid complex() keyword");
+        }
+        if(real instanceof String text){if(!singlePositional)throw new PyException("TypeError","complex() string input requires one positional argument");return parseComplex(text);}
+        if(real instanceof PyInstance instance){
+            PyMethod method=instance.cls.lookupMethod("__complex__");
+            if(method!=null){real=invoke(instance,method,new Object[0]);converted=true;if(!(real instanceof PyComplex))throw new PyException("TypeError","__complex__ returned non-complex");}
+        }
+        if(singlePositional && !converted && real instanceof PyComplex)return real;
+        double r=real instanceof PyComplex z?z.real:complexReal(real,true);
+        double i=hasImag?(imag instanceof PyComplex z?z.real:complexReal(imag,true)):(real instanceof PyComplex z?z.imag:0.0);
+        if(hasImag && imag instanceof PyComplex z)r-=z.imag;
+        if(hasImag && real instanceof PyComplex z)i+=z.imag;
+        return new PyComplex(r,i);
+    }
+    private static final String COMPLEX_NUMBER="(?:[0-9](?:_?[0-9])*(?:\\.(?:[0-9](?:_?[0-9])*)?)?|\\.[0-9](?:_?[0-9])*)(?:[eE][+-]?[0-9](?:_?[0-9])*)?|inf(?:inity)?|nan";
+    private static final java.util.regex.Pattern COMPLEX_TEXT=java.util.regex.Pattern.compile("^([+-]?(?:"+COMPLEX_NUMBER+"))?(?:([+-])((?:"+COMPLEX_NUMBER+"))?)?([jJ])?$",java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static PyComplex parseComplex(String text){
+        text=text.strip();
+        if(text.startsWith("(") && text.endsWith(")"))text=text.substring(1,text.length()-1).strip();
+        if(text.equals("j") || text.equals("+j"))return new PyComplex(0,1);
+        if(text.equals("-j"))return new PyComplex(0,-1);
+        var match=COMPLEX_TEXT.matcher(text);
+        if(!match.matches() || match.group(1)==null || (match.group(2)!=null && match.group(4)==null))throw new PyException("ValueError","complex() arg is a malformed string");
+        double first=(Double)float_(match.group(1).replace("_",""));
+        if(match.group(4)==null)return new PyComplex(first,0);
+        if(match.group(2)==null)return new PyComplex(0,first);
+        double second=match.group(3)==null?1:(Double)float_(match.group(3).replace("_",""));
+        return new PyComplex(first,match.group(2).equals("-")?-second:second);
+    }
+    private static PyComplex complexMultiply(PyComplex z,PyComplex w){
+        double a=z.real,b=z.imag,c=w.real,d=w.imag;
+        double ac=a*c,bd=b*d,ad=a*d,bc=b*c,r=ac-bd,i=ad+bc;
+        if(Double.isNaN(r) && Double.isNaN(i)){
+            boolean recalc=false;
+            if(Double.isInfinite(a) || Double.isInfinite(b)){
+                a=Math.copySign(Double.isInfinite(a)?1:0,a);b=Math.copySign(Double.isInfinite(b)?1:0,b);
+                if(Double.isNaN(c))c=Math.copySign(0,c);if(Double.isNaN(d))d=Math.copySign(0,d);recalc=true;
+            }
+            if(Double.isInfinite(c) || Double.isInfinite(d)){
+                c=Math.copySign(Double.isInfinite(c)?1:0,c);d=Math.copySign(Double.isInfinite(d)?1:0,d);
+                if(Double.isNaN(a))a=Math.copySign(0,a);if(Double.isNaN(b))b=Math.copySign(0,b);recalc=true;
+            }
+            if(!recalc && (Double.isInfinite(ac)||Double.isInfinite(bd)||Double.isInfinite(ad)||Double.isInfinite(bc))){
+                if(Double.isNaN(a))a=Math.copySign(0,a);if(Double.isNaN(b))b=Math.copySign(0,b);
+                if(Double.isNaN(c))c=Math.copySign(0,c);if(Double.isNaN(d))d=Math.copySign(0,d);recalc=true;
+            }
+            if(recalc){r=Double.POSITIVE_INFINITY*(a*c-b*d);i=Double.POSITIVE_INFINITY*(a*d+b*c);}
+        }
+        return new PyComplex(r,i);
+    }
+    private static PyComplex complexDivide(PyComplex a,PyComplex b){
+        if(b.real==0 && b.imag==0)throw new PyException("ZeroDivisionError","complex division by zero");
+        double r,i;
+        if(Math.abs(b.real)>=Math.abs(b.imag)){
+            double ratio=b.imag/b.real,denom=b.real+b.imag*ratio;
+            r=(a.real+a.imag*ratio)/denom;i=(a.imag-a.real*ratio)/denom;
+        }else if(Math.abs(b.imag)>=Math.abs(b.real)){
+            double ratio=b.real/b.imag,denom=b.real*ratio+b.imag;
+            r=(a.real*ratio+a.imag)/denom;i=(a.imag*ratio-a.real)/denom;
+        }else{r=Double.NaN;i=Double.NaN;}
+        if(Double.isNaN(r) && Double.isNaN(i)){
+            if((Double.isInfinite(a.real)||Double.isInfinite(a.imag)) && Double.isFinite(b.real) && Double.isFinite(b.imag)){
+                double x=Math.copySign(Double.isInfinite(a.real)?1:0,a.real),y=Math.copySign(Double.isInfinite(a.imag)?1:0,a.imag);
+                r=Double.POSITIVE_INFINITY*(x*b.real+y*b.imag);i=Double.POSITIVE_INFINITY*(y*b.real-x*b.imag);
+            }else if((Double.isInfinite(b.real)||Double.isInfinite(b.imag)) && Double.isFinite(a.real) && Double.isFinite(a.imag)){
+                double x=Math.copySign(Double.isInfinite(b.real)?1:0,b.real),y=Math.copySign(Double.isInfinite(b.imag)?1:0,b.imag);
+                r=0.0*(a.real*x+a.imag*y);i=0.0*(a.imag*x-a.real*y);
+            }
+        }
+        return new PyComplex(r,i);
+    }
+    private static PyComplex realComplexDivide(double a,PyComplex b){
+        if(b.real==0 && b.imag==0)throw new PyException("ZeroDivisionError","complex division by zero");
+        double r,i;
+        if(Math.abs(b.real)>=Math.abs(b.imag)){
+            double ratio=b.imag/b.real,denom=b.real+b.imag*ratio;
+            r=a/denom;i=(-a*ratio)/denom;
+        }else if(Math.abs(b.imag)>=Math.abs(b.real)){
+            double ratio=b.real/b.imag,denom=b.real*ratio+b.imag;
+            r=(a*ratio)/denom;i=(-a)/denom;
+        }else{r=Double.NaN;i=Double.NaN;}
+        if(Double.isNaN(r) && Double.isNaN(i) && Double.isFinite(a) && (Double.isInfinite(b.real)||Double.isInfinite(b.imag))){
+            double x=Math.copySign(Double.isInfinite(b.real)?1:0,b.real),y=Math.copySign(Double.isInfinite(b.imag)?1:0,b.imag);
+            r=0.0*(a*x);i=0.0*(-a*y);
+        }
+        return new PyComplex(r,i);
+    }
+    private static PyComplex complexPower(PyComplex a,PyComplex b){
+        if(b.real==0 && b.imag==0)return new PyComplex(1,0);
+        if(b.imag==0 && b.real==Math.rint(b.real) && Math.abs(b.real)<=100){
+            int n=(int)Math.abs(b.real);PyComplex result=new PyComplex(1,0),factor=a;
+            while(n!=0){if((n&1)!=0)result=complexMultiply(result,factor);n>>=1;if(n!=0)factor=complexMultiply(factor,factor);}
+            result=b.real<0?complexDivide(new PyComplex(1,0),result):result;
+            if(Double.isInfinite(result.real)||Double.isInfinite(result.imag))throw new PyException("OverflowError","complex exponentiation");
+            return result;
+        }
+        if(a.real==0 && a.imag==0){if(b.imag!=0 || b.real<0)throw new PyException("ZeroDivisionError","0.0 to a negative or complex power");return new PyComplex(0,0);}
+        double magnitude=Math.hypot(a.real,a.imag),angle=Math.atan2(a.imag,a.real);
+        double length=Math.pow(magnitude,b.real),phase=angle*b.real;
+        if(b.imag!=0){length*=Math.exp(-angle*b.imag);phase+=b.imag*Math.log(magnitude);}
+        double r=length*Math.cos(phase),i=length*Math.sin(phase);
+        if(Double.isInfinite(r)||Double.isInfinite(i))throw new PyException("OverflowError","complex exponentiation");
+        return new PyComplex(r,i);
     }
 
     // ---------- Arithmetic ----------
@@ -593,6 +757,8 @@ public final class PyRuntime {
 
     public static Object add(Object a, Object b) {
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__add__","__radd__",false);if(result!=NOT_IMPLEMENTED)return result;}
+        if(a instanceof PyComplex x){if(b instanceof PyComplex y)return new PyComplex(x.real+y.real,x.imag+y.imag);return new PyComplex(x.real+complexReal(b,false),x.imag);}
+        if(b instanceof PyComplex y)return new PyComplex(complexReal(a,false)+y.real,y.imag);
         if (a instanceof String sa && b instanceof String sb) return sa + sb;
         if((a instanceof PyBytes || a instanceof PyByteArray) && b instanceof PyByteSequence bb) {
             byte[] x=((PyByteSequence)a).toByteArray(),y=bb.toByteArray(),out=new byte[x.length+y.length];
@@ -615,6 +781,8 @@ public final class PyRuntime {
 
     public static Object sub(Object a, Object b) {
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__sub__","__rsub__",false);if(result!=NOT_IMPLEMENTED)return result;}
+        if(a instanceof PyComplex x){if(b instanceof PyComplex y)return new PyComplex(x.real-y.real,x.imag-y.imag);return new PyComplex(x.real-complexReal(b,false),x.imag);}
+        if(b instanceof PyComplex y)return new PyComplex(complexReal(a,false)-y.real,-y.imag);
         if (isIntLike(a) && isIntLike(b)) {
             if (a instanceof Long x && b instanceof Long y) {
                 try { return Math.subtractExact(x, y); }
@@ -627,6 +795,8 @@ public final class PyRuntime {
 
     public static Object mul(Object a, Object b) {
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__mul__","__rmul__",false);if(result!=NOT_IMPLEMENTED)return result;}
+        if(a instanceof PyComplex x){if(b instanceof PyComplex y)return complexMultiply(x,y);double real=complexReal(b,false);return new PyComplex(x.real*real,x.imag*real);}
+        if(b instanceof PyComplex y){double real=complexReal(a,false);return new PyComplex(real*y.real,real*y.imag);}
         if (a instanceof String sa && isIntLike(b)) return repeatString(sa, bigInt(b));
         if (b instanceof String sb && isIntLike(a)) return repeatString(sb, bigInt(a));
         if(a instanceof PyBytes bytes && isIntLike(b)) return repeatBytes(bytes,bigInt(b),false);
@@ -658,6 +828,12 @@ public final class PyRuntime {
     }
 
     public static Object truediv(Object a, Object b) {
+        if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__truediv__","__rtruediv__",false);if(result!=NOT_IMPLEMENTED)return result;}
+        if(a instanceof PyComplex x){
+            if(b instanceof PyComplex y)return complexDivide(x,y);
+            double real=complexReal(b,false);if(real==0)throw new PyException("ZeroDivisionError","complex division by zero");return new PyComplex(x.real/real,x.imag/real);
+        }
+        if(b instanceof PyComplex y)return realComplexDivide(complexReal(a,false),y);
         double y = number(b);
         if (y == 0.0) throw new ArithmeticException("division by zero");
         return number(a) / y;
@@ -690,6 +866,7 @@ public final class PyRuntime {
     }
 
     public static Object neg(Object a) {
+        if(a instanceof PyComplex z)return new PyComplex(-z.real,-z.imag);
         if (a instanceof Long n) {
             if (n != Long.MIN_VALUE) return -n;
             return compact(BigInteger.valueOf(n).negate());
@@ -702,18 +879,25 @@ public final class PyRuntime {
 
     public static Object not_(Object a) { return !truth(a); }
     public static Object pos(Object a) {
+        if(a instanceof PyComplex)return a;
         if (isIntLike(a)) return compact(bigInt(a));
         if (a instanceof Double d) return d;
         throw typeError("bad operand type for unary +", a);
     }
     public static Object invert(Object a) { return compact(bigInt(a).not()); }
     public static Object abs(Object a) {
+        if(a instanceof PyComplex z){
+            double result=Math.hypot(z.real,z.imag);
+            if(Double.isInfinite(result) && Double.isFinite(z.real) && Double.isFinite(z.imag))throw new PyException("OverflowError","absolute value too large");
+            return result;
+        }
         if (isIntLike(a)) return compact(bigInt(a).abs());
         if (a instanceof Double d) return Math.abs(d);
         throw typeError("bad operand type for abs()", a);
     }
     public static Object pow(Object a, Object b) {
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__pow__","__rpow__",false);if(result!=NOT_IMPLEMENTED)return result;}
+        if(a instanceof PyComplex || b instanceof PyComplex)return complexPower(complexValue(a),complexValue(b));
         if (isIntLike(a) && isIntLike(b)) {
             BigInteger exp = bigInt(b);
             if (exp.signum() < 0) return Math.pow(number(a), number(b));
@@ -739,6 +923,11 @@ public final class PyRuntime {
     // ---------- Equality / ordering ----------
     public static Object eq(Object a, Object b) {
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__eq__","__eq__",true);if(result!=NOT_IMPLEMENTED)return result;}
+        if(a instanceof PyComplex x){
+            if(b instanceof PyComplex y)return x.real==y.real && x.imag==y.imag;
+            return x.imag==0 && (isIntLike(b)?integerFloatEqual(bigInt(b),x.real):b instanceof Double d && x.real==d);
+        }
+        if(b instanceof PyComplex)return eq(b,a);
         if(isIntLike(a) && isIntLike(b))return bigInt(a).equals(bigInt(b));
         if(a instanceof Double x && b instanceof Double y)return x.doubleValue()==y.doubleValue();
         if(isIntLike(a) && b instanceof Double d)return integerFloatEqual(bigInt(a),d);
@@ -1674,7 +1863,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -1973,7 +2162,12 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs = (Map<Object,Object>) kwargsObj;
         if (callable instanceof PyFunction f) return f.call(args, kwargs);
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
+        if (callable instanceof BuiltinBoundMethod method) {
+            if(!kwargs.isEmpty())throw new PyException("TypeError","method takes no keyword arguments");
+            return callMethod(method.self,method.name,args.toArray());
+        }
         if (callable instanceof PyBuiltinType type) {
+            if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(type.name.equals("map")) return callBuiltin("map",args,kwargs);
             if(type.name.equals("slice")) {
                 if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3) throw new PyException("TypeError","slice() requires 1 to 3 positional arguments");
@@ -2859,6 +3053,17 @@ public final class PyRuntime {
     public static Object callMethod4(Object obj, Object name, Object a, Object b, Object c, Object d) { return callMethod(obj, (String)name, new Object[]{a,b,c,d}); }
 
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if(obj instanceof PyComplex z){
+            requireArgs(name,args,0);
+            return switch(name){
+                case "conjugate" -> new PyComplex(z.real,-z.imag);
+                case "__complex__", "__pos__" -> z;
+                case "__neg__" -> neg(z);
+                case "__abs__" -> abs(z);
+                case "__getnewargs__" -> {PyTuple tuple=new PyTuple();tuple.items.add(z.real);tuple.items.add(z.imag);yield tuple;}
+                default -> throw new PyException("AttributeError","complex has no attribute '"+name+"'");
+            };
+        }
         if (obj instanceof PySuper sup) {
             PyMethod method = sup.self.cls.lookupMethodAfter(sup.currentClass, name);
             if (method == null) throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
@@ -3184,6 +3389,13 @@ public final class PyRuntime {
     public static Object getattr(Object obj, Object nameObj) {
         if(!(nameObj instanceof String))throw new PyException("TypeError","attribute name must be string");
         String name = (String)nameObj;
+        if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(obj instanceof PyComplex z){
+            if(name.equals("real"))return z.real;
+            if(name.equals("imag"))return z.imag;
+            if(Set.of("conjugate","__complex__","__pos__","__neg__","__abs__","__getnewargs__").contains(name))return new BuiltinBoundMethod(obj,name);
+            if(!name.equals("__class__"))throw new PyException("AttributeError","complex has no attribute '"+name+"'");
+        }
         if(obj instanceof PySlice sl) return switch(name){case "start"->sl.start;case "stop"->sl.stop;case "step"->sl.step;case "__class__"->builtinType("slice");default->throw new PyException("AttributeError","slice has no attribute '"+name+"'");};
         if(name.equals("__class__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass)) return typeOf(obj);
         if (obj instanceof PyModule) return moduleGetattr(obj,nameObj);
@@ -3302,6 +3514,7 @@ public final class PyRuntime {
 
     public static void setattr(Object obj, Object nameObj, Object value) {
         String name=(String)nameObj;
+        if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
         if (obj instanceof PyInstance instance) {
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) {
@@ -3323,6 +3536,7 @@ public final class PyRuntime {
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
+        if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
         if(obj instanceof PyInstance instance) {
             String name=(String)nameObj;
             if(instance.cls.lookupProperty(name)!=null) throw new PyException("AttributeError","property '"+name+"' has no deleter");
@@ -3357,6 +3571,7 @@ public final class PyRuntime {
                 case "int" -> isIntLike(obj);
                 case "bool" -> obj instanceof Boolean;
                 case "float" -> obj instanceof Double;
+                case "complex" -> obj instanceof PyComplex;
                 case "str" -> obj instanceof String;
                 case "bytes" -> obj instanceof PyBytes;
                 case "bytearray" -> obj instanceof PyByteArray;

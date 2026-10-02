@@ -349,7 +349,7 @@ class Compiler:
             b.invokestatic(RUNTIME, "notImplemented" if name == "NotImplemented" else "ellipsis", f"(){OBJ}"); return
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
-        if name in {"object", "int", "bool", "float", "str", "bytes", "bytearray", "memoryview",
+        if name in {"object", "int", "bool", "float", "complex", "str", "bytes", "bytearray", "memoryview",
                     "list", "tuple", "dict", "set", "range", "type", "map", "slice"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
@@ -2349,6 +2349,12 @@ class Compiler:
             case ast.Constant(value=float() as value):
                 b.ldc_string(repr(value))
                 b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
+            case ast.Constant(value=complex() as value):
+                for part in (value.real, value.imag):
+                    text = repr(part)
+                    b.ldc_string({"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}.get(text, text))
+                    b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
+                b.invokestatic(RUNTIME, "complexLiteral", f"({OBJ}{OBJ}){OBJ}")
             case ast.Constant(value=str() as value):
                 b.ldc_string(value)
             case ast.Constant(value=bytes() as value):
@@ -2842,4 +2848,3 @@ def compile_file(source_path: str | Path, output_dir: str | Path, class_name: st
 
     for name,path in modules.items(): emit(path,import_map[name],name)
     return emit(source_path,class_name,"__main__")
-

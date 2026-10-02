@@ -1,5 +1,5 @@
-# Unchanged CPython 3.15 test bodies; run for both bytes and bytearray fixtures.
-# Fixtures implement type2test, assertEqual, assertIs, and assertRaises; no imports are replaced.
+# Unchanged CPython 3.15 test bodies with byte-sequence or numeric fixtures.
+# Fixtures implement assertions and optional type2test; no imports are replaced.
 # Omitted variant runs both bytes and bytearray; explicit variants avoid duplicate subclass bodies.
 Lib/test/test_bytes.py::BaseBytesTest.test_ord
 Lib/test/test_bytes.py::BaseBytesTest.test_from_tuple
@@ -21,3 +21,9 @@ Lib/test/test_bytes.py::ByteArrayTest.test_irepeat bytearray
 Lib/test/test_bytes.py::ByteArrayTest.test_irepeat_1char bytearray
 Lib/test/test_bytes.py::ByteArrayTest.test_pop bytearray
 Lib/test/test_bytes.py::ByteArrayTest.test_nosort bytearray
+# Complex tests use assertion helpers only; no module globals are substituted.
+Lib/test/test_complex.py::ComplexTest.test_conjugate numeric
+Lib/test/test_complex.py::ComplexTest.test_hash numeric
+Lib/test/test_complex.py::ComplexTest.test_neg numeric
+Lib/test/test_complex.py::ComplexTest.test_floordiv numeric
+Lib/test/test_complex.py::ComplexTest.test_mod numeric
