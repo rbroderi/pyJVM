@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **323 compiling cases (90.2%)**,
-35 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **324 compiling cases (90.5%)**,
+34 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **180 passing cases**. A new strict execution
-lane runs **63 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **183 passing cases**. A new strict execution
+lane runs **64 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -858,3 +858,28 @@ Native `dir` member lists remain partial. Module-level and suspended-frame zero-
 argument inspection, live module dictionaries and readonly/live class dictionary
 views remain explicitly unsupported. Full proxy, builtin and dynamic-execution
 semantics still need work; this tranche does not establish full CPython support.
+
+
+## Round protocol compatibility
+
+`round(number, ndigits)` supports positional and keyword binding, first-class
+aliases and type-level `__round__` lookup with descriptor/metaclass binding.
+Instance attributes do not override special lookup. Omitted or None `ndigits`
+call custom methods without an argument; other values pass through unchanged.
+Builtin int/bool/float `__round__` descriptors are also available.
+
+Integers round decimal positions with exact half-even arithmetic, preserving
+arbitrary precision. Floats round their exact binary64 value with half-even
+semantics, preserve signed zero when `ndigits` is provided and return integers
+when it is omitted. Index descriptors supply `ndigits`; extreme float precision
+is clipped before allocation, and nonfinite/inexact-overflow cases raise the
+corresponding Python errors.
+
+Three differential programs bring the focused corpus to **183 passing cases**.
+The complete unchanged CPython `BuiltinTest.test_round` body joins the strict
+execution lane, which now passes **51 bodies / 64 executions**. The fixed compile
+probe reaches **324/358 (90.5%)**, **34 unsupported** and zero compiler errors.
+`test_special_method_lookup` gains compilation only; its external module and
+other protocol dependencies still prevent a full runtime claim. Native numeric
+subclasses, full diagnostic fidelity and allocation-heavy extremes remain
+unfinished. Java 21 and the benchmark regression gates remain in place.
