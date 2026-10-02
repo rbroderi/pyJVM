@@ -1,0 +1,54 @@
+name: benchmarks
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: 'Compiler baseline ref (same harness is used for both revisions)'
+        default: main
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || inputs.baseline }}
+          path: base
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Measure base compiler with the current harness
+        run: python head/benchmarks/run.py --compiler-root base --output artifacts/base
+      - name: Measure head and check for large regressions
+        run: >-
+          python head/benchmarks/run.py --compiler-root head --output artifacts/head
+          --baseline artifacts/base/report.json --max-regression 1.5 --fail-on-regression
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f artifacts/head/report.md ]; then
+            cat artifacts/head/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jvm-benchmarks
+          path: artifacts/
