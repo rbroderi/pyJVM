@@ -155,3 +155,14 @@ def test_execution_fixture_assert_hasattr_rejects_missing_attributes():
     assert result.returncode != 0
     assert 'AssertionError' in result.stderr
     assert 'CPYTHON CASE PASSED' not in result.stdout
+
+
+def test_execution_fixture_assert_notin_rejects_present_items():
+    import subprocess
+    import sys
+    method = ast.parse('def test_case(self):\n    self.assertNotIn("present", {"present": 1})\n').body[0]
+    result = subprocess.run([sys.executable, '-c', fixture_source(method, 'objects')],
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
+    assert 'AssertionError' in result.stderr
+    assert 'CPYTHON CASE PASSED' not in result.stdout

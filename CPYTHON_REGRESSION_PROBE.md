@@ -90,12 +90,12 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 165 cases. A separate
-`pyjvm315.cpython_execution` lane executes 43 unchanged CPython test
-bodies (56 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 168 cases. A separate
+`pyjvm315.cpython_execution` lane executes 48 unchanged CPython test
+bodies (61 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Six
-ClassPropertiesAndMethods bodies, five BuiltinTest/TestSorted bodies and seven
+ClassPropertiesAndMethods bodies, five BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
@@ -284,3 +284,34 @@ head/base ratios were 0.95 arithmetic, 0.97 range loop, 1.00 calls and 1.02
 collections, with all checksums and the regression gate passing. Both generated
 and runtime-control timings exposed the dispatch cost; it was not counted as
 unavoidable Python semantics overhead.
+
+
+### Class-cell construction tranche
+
+The fixed compile probe remains **319/358**, with **39 unsupported** and **zero
+compiler errors**. Runtime evidence grows to **168 differential cases**,
+**48 unchanged CPython bodies / 61 executions**, and **40 unit tests**.
+
+Five new unchanged `TestSuper` bodies pass: `test___class___new`,
+`test___class___delayed`, `test___classcell___expected_behaviour`,
+`test___classcell___wrong_cell` and `test_cell_as_self`. The assertion-only
+objects fixture gains `assertNotIn`, with a negative fixture check; no test body,
+import or module global is substituted. The missing-cell and overwritten-cell
+error cases run in focused programs; their original CPython bodies still require
+unsupported regex/subtest fixture facilities and are not counted as passing.
+
+Class construction publishes a shared cell, populates it during `type.__new__`,
+and validates it after metaclass construction and before decorators. A metaclass
+returning a non-class leaves its cell available for delayed construction. Three-
+argument `type` creates a fresh class even when a prepared namespace is reused.
+The created class retains the namespace snapshot used by `type.__new__`, rather
+than being overwritten again after the metaclass returns. Namespace copying and
+zero-argument `object()` are supported for these paths.
+
+Three focused programs cover cell identity and mutation, early and delayed
+access, missing/invalid/wrong cells, copied and reused namespaces, class decorators,
+local-class isolation, local `__class__` shadowing, and empty captured bindings.
+They do not establish full cell construction/equality, code-object introspection,
+transitive free-variable introspection, custom metaclass MRO computation or full
+metaclass selection for three-argument `type`. Those and the previously listed
+formatting, dynamic-execution, external/native-module gaps remain unfinished.
