@@ -69,14 +69,14 @@ Both the compile probe and executable CPython lane now pin the corpus to
 CPython 3.15 commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`.
 The same five-file, 358-case probe now reports:
 
-| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche |
-|---|---:|---:|---:|---:|---:|---:|
-| Compiles | 125 | 264 | 299 | 303 | 312 | 315 |
-| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 |
-| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 |
-| Total | 358 | 358 | 358 | 358 | 358 | 358 |
+| Status | Initial | Local-class tranche | Java 21 / builtin tranche | Complex tranche | Descriptor tranche | Class-body tranche | Ordered-builtin tranche |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Compiles | 125 | 264 | 299 | 303 | 312 | 315 | 317 |
+| Unsupported | 231 | 94 | 59 | 55 | 46 | 43 | 41 |
+| Compiler error | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Total | 358 | 358 | 358 | 358 | 358 | 358 | 358 |
 
-Compile coverage increased from 34.9% to 88.0% (+190 cases; +3 this tranche). The probe now
+Compile coverage increased from 34.9% to 88.5% (+192 cases; +2 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -90,12 +90,13 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 157 cases. A separate
-`pyjvm315.cpython_execution` lane executes 30 unchanged CPython test
-bodies (43 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 161 cases. A separate
+`pyjvm315.cpython_execution` lane executes 36 unchanged CPython test
+bodies (49 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
-a numeric fixture with assertion helpers and no substituted module globals. Five
-ClassPropertiesAndMethods bodies use an objects fixture with assertions only. Explicit fixtures implement
+a numeric fixture with assertion helpers and no substituted module globals. Six
+ClassPropertiesAndMethods bodies and five BuiltinTest/TestSorted bodies use an
+objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -121,11 +122,11 @@ copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 43 cases remain visible as unsupported; no
+support strategy. The remaining 41 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 315 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 315`). The old 0.31
+Compiler errors and compilation coverage below 317 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 317`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -220,3 +221,30 @@ strict lane to **30 bodies / 43 passing executions**. Annotation-only assignment
 are rejected explicitly rather than producing a binding to None. Deferred
 annotations, builtin descriptor metadata and the external dependencies remain
 unfinished; this does not establish full CPython regression-suite support.
+
+
+### Ordered-builtin tranche
+
+The fixed five-file probe reaches **317/358 (88.5%)**, 41 unsupported and zero
+compiler errors. `test_properties_plus` and `test_basic_inheritance` now compile;
+compilation alone remains distinct from runtime success. The strict execution
+lane adds unchanged `test_properties_plus`, `BuiltinTest.test_hex`, `test_oct`,
+`test_bin`, and `TestSorted.test_bad_arguments`/`test_baddecorator`. This expands
+execution evidence to **36 bodies / 49 passing executions**, including the
+additional `test_builtin.py` source. No module globals or imports are replaced.
+The new `assertHasAttr` helper checks the actual attribute and has a negative
+fixture test to prevent false passes.
+
+Four focused programs bring the differential suite to **161 passing cases**.
+They cover extrema signatures, defaults, keys, first-winner ties, generator
+consumption, callable keys, errors, stable sorting, rich comparison reflection,
+NaNs, integer/float precision, Unicode/sequence ordering and integer base
+formatting through `__index__`. Builtin function objects are cached so repeated
+lookups preserve identity. Sorted keys run after input consumption; reverse
+truth conversion occurs between those phases, as in Python 3.15.
+
+Sorting uses stable merge sorting with only less-than comparisons, not a Java
+Comparator contract. It does not reproduce CPython Timsort's exact comparison
+trace or every result for stateful/inconsistent orderings. Deferred annotations,
+dynamic execution, external/native modules and remaining builtin semantics
+still need implementation and broader runtime evidence.

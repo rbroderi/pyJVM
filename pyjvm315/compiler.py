@@ -45,6 +45,7 @@ EXCEPTION_TYPES = {
 }
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
+    "min", "max", "sorted", "hex", "oct", "bin",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
 }
@@ -2294,7 +2295,7 @@ class Compiler:
     def _expr(self, node: ast.expr, b: CodeBuilder, scope: Scope) -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id
-            if scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
+            if name in {"min", "max", "sorted", "hex", "oct", "bin"} or scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
                 self._emit_dynamic_call(node.func, node.args, node.keywords, b, scope)
                 return
         match node:

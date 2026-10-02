@@ -216,13 +216,16 @@ public final class PyRuntime {
         }
     }
     public static Object methodDescriptor(Object function,Object kind){return new PyMethodDescriptor(function,(String)kind);}
-    public static Object builtinFunction(Object name) { return new PyBuiltinFunction((String)name); }
+    private static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
+    public static Object builtinFunction(Object name) { return BUILTIN_FUNCTIONS.computeIfAbsent((String)name,PyBuiltinFunction::new); }
     private static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
         if(name.equals("print")) {
             for(Object key:kwargs.keySet()) if(!key.equals("sep") && !key.equals("end"))
                 throw new PyException("TypeError","unsupported print keyword");
             return printArgs(args,kwargs.get("sep"),kwargs.get("end"));
         }
+        if(name.equals("min") || name.equals("max")) return extreme(args,kwargs,name.equals("min"));
+        if(name.equals("sorted")) return sortedCall(args,kwargs);
         if(!kwargs.isEmpty()) throw new PyException("TypeError",name+"() does not accept keyword arguments");
         if(name.equals("map")) {
             if(args.size()<2) throw new PyException("TypeError","map() must have at least two arguments");
@@ -250,6 +253,9 @@ public final class PyRuntime {
         if(n!=1) throw new PyException("TypeError","invalid arguments to "+name+"()");
         Object value=args.get(0);
         return switch(name) {
+            case "hex" -> integerBase(value,16,"0x");
+            case "oct" -> integerBase(value,8,"0o");
+            case "bin" -> integerBase(value,2,"0b");
             case "ord" -> ord(value);
             case "chr" -> chr(value);
             case "repr" -> repr_(value);
@@ -983,14 +989,46 @@ public final class PyRuntime {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static int cmp(Object a, Object b) {
         if (isIntLike(a) && isIntLike(b)) return bigInt(a).compareTo(bigInt(b));
+        if(isIntLike(a) && b instanceof Double number)return compareIntegerFloat(bigInt(a),number);
+        if(a instanceof Double number && isIntLike(b))return -compareIntegerFloat(bigInt(b),number);
+        if(a instanceof Double x && b instanceof Double y)return x.doubleValue()==y.doubleValue()?0:Double.compare(x,y);
         if (a instanceof Number && b instanceof Number) return Double.compare(number(a), number(b));
+        if(a instanceof String x && b instanceof String y) {
+            java.util.PrimitiveIterator.OfInt xi=x.codePoints().iterator(),yi=y.codePoints().iterator();
+            while(xi.hasNext() && yi.hasNext()){int c=Integer.compare(xi.nextInt(),yi.nextInt());if(c!=0)return c;}
+            return Boolean.compare(xi.hasNext(),yi.hasNext());
+        }
+        if(a instanceof PyByteSequence x && b instanceof PyByteSequence y && !(a instanceof PyMemoryView) && !(b instanceof PyMemoryView)) {
+            for(int i=0;i<Math.min(x.byteSize(),y.byteSize());i++){int c=Integer.compare(x.unsignedAt(i),y.unsignedAt(i));if(c!=0)return c;}
+            return Integer.compare(x.byteSize(),y.byteSize());
+        }
         if (a != null && b != null && a.getClass() == b.getClass() && a instanceof Comparable c) return c.compareTo(b);
         throw new IllegalArgumentException("comparison not supported between '" + typeName(a) + "' and '" + typeName(b) + "'");
     }
 
+    private static int compareIntegerFloat(BigInteger integer,double number) {
+        if(Double.isInfinite(number))return number>0?-1:1;
+        if(Double.isNaN(number))return -1;
+        return new java.math.BigDecimal(integer).compareTo(new java.math.BigDecimal(number));
+    }
+
     private static Object richCompare(Object a,Object b,String left,String right,int fallback){
-        if(a instanceof PyInstance ia){PyMethod m=ia.cls.lookupMethod(left);if(m!=null)return invoke(ia,m,new Object[]{b});}
-        if(b instanceof PyInstance ib){PyMethod m=ib.cls.lookupMethod(right);if(m!=null)return invoke(ib,m,new Object[]{a});}
+        if(a instanceof PyInstance || b instanceof PyInstance) {
+            Object result=binarySpecial(a,b,left,right,true);
+            if(result!=NOT_IMPLEMENTED)return result;
+        }
+        List<?> xs=a instanceof PyTuple tuple?tuple.items:a instanceof List<?> list?list:null;
+        List<?> ys=b instanceof PyTuple tuple?tuple.items:b instanceof List<?> list?list:null;
+        if(xs!=null && ys!=null && (a instanceof PyTuple)==(b instanceof PyTuple)) {
+            int size=Math.min(xs.size(),ys.size());
+            for(int i=0;i<size;i++) {
+                Object x=xs.get(i),y=ys.get(i);
+                if(x!=y && !truth(eq(x,y)))return richCompare(x,y,left,right,fallback);
+            }
+            a=(long)xs.size();b=(long)ys.size();
+        }
+        if((isIntLike(a)||a instanceof Double) && (isIntLike(b)||b instanceof Double)
+            && (a instanceof Double x && Double.isNaN(x) || b instanceof Double y && Double.isNaN(y)))return false;
         int c=cmp(a,b); return switch(fallback){case -2->c<0;case -1->c<=0;case 1->c>=0;default->c>0;};
     }
     public static Object lt(Object a, Object b) { return richCompare(a,b,"__lt__","__gt__",-2); }
@@ -1030,17 +1068,42 @@ public final class PyRuntime {
         for (Object x : iterable(value)) if (!truth(x)) return false;
         return true;
     }
-    public static Object min(Object value) { return extreme(value, true); }
-    public static Object max(Object value) { return extreme(value, false); }
-    private static Object extreme(Object value, boolean wantMin) {
-        Iterator<?> it = iterable(value).iterator();
-        if (!it.hasNext()) throw new IllegalArgumentException((wantMin ? "min" : "max") + "() arg is an empty sequence");
-        Object best = it.next();
-        while (it.hasNext()) {
-            Object x = it.next(); int c = cmp(x, best);
-            if ((wantMin && c < 0) || (!wantMin && c > 0)) best = x;
+    public static Object min(Object value) { return extreme(Collections.singletonList(value),Collections.emptyMap(),true); }
+    public static Object max(Object value) { return extreme(Collections.singletonList(value),Collections.emptyMap(),false); }
+    private static Object unaryCall(Object callable,Object value) {
+        return callFunction(callable,new ArrayList<>(Collections.singletonList(value)),new LinkedHashMap<>());
+    }
+    private static Object extreme(List<Object> args,Map<Object,Object> kwargs,boolean wantMin) {
+        String name=wantMin?"min":"max";
+        if(args.isEmpty()) throw new PyException("TypeError",name+" expected at least 1 argument, got 0");
+        for(Object keyword:kwargs.keySet()) if(!keyword.equals("key") && !keyword.equals("default"))
+            throw new PyException("TypeError","invalid keyword argument for "+name+"()");
+        boolean hasDefault=kwargs.containsKey("default");
+        if(args.size()>1 && hasDefault) throw new PyException("TypeError","Cannot specify a default for "+name+"() with multiple positional arguments");
+        Object key=kwargs.get("key"),best=null,bestKey=null;
+        Iterator<?> it=(args.size()==1?iterable(args.get(0)):args).iterator();
+        if(!it.hasNext()) {
+            if(hasDefault)return kwargs.get("default");
+            throw new PyException("ValueError",name+"() iterable argument is empty");
+        }
+        best=it.next();bestKey=key==null?best:unaryCall(key,best);
+        while(it.hasNext()) {
+            Object candidate=it.next(),candidateKey=key==null?candidate:unaryCall(key,candidate);
+            if(truth(wantMin?lt(candidateKey,bestKey):gt(candidateKey,bestKey))) {
+                best=candidate;bestKey=candidateKey;
+            }
         }
         return best;
+    }
+    private static Object integerBase(Object value,int radix,String prefix) {
+        if(value instanceof PyInstance instance) {
+            PyMethod index=instance.cls.lookupMethod("__index__");
+            if(index==null)throw new PyException("TypeError","object cannot be interpreted as an integer");
+            value=invoke(instance,index,new Object[0]);
+        }
+        if(!isIntLike(value))throw new PyException("TypeError","__index__ must return an integer");
+        BigInteger integer=bigInt(value);
+        return (integer.signum()<0?"-":"")+prefix+integer.abs().toString(radix);
     }
 
     @SuppressWarnings("unchecked")
@@ -1291,9 +1354,34 @@ public final class PyRuntime {
         while (ia.hasNext() && ib.hasNext()) { PyTuple t=new PyTuple(); t.items.add(ia.next()); t.items.add(ib.next()); out.add(t); }
         return out;
     }
-    public static Object sorted(Object value) {
-        ArrayList<Object> out=new ArrayList<>(); for(Object x:iterable(value)) out.add(x);
-        out.sort((a,b)->cmp(a,b)); return out;
+    public static Object sorted(Object value) { return sortedCall(Collections.singletonList(value),Collections.emptyMap()); }
+    private record SortItem(Object value,Object key) {}
+    private static Object sortedCall(List<Object> args,Map<Object,Object> kwargs) {
+        if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 positional argument");
+        ArrayList<Object> values=new ArrayList<>();for(Object value:iterable(args.get(0)))values.add(value);
+        for(Object keyword:kwargs.keySet()) if(!keyword.equals("key") && !keyword.equals("reverse"))
+            throw new PyException("TypeError","invalid keyword argument for sorted()");
+        boolean reverse=truth(kwargs.get("reverse"));
+        Object key=kwargs.get("key");
+        ArrayList<SortItem> items=new ArrayList<>();
+        for(Object value:values)items.add(new SortItem(value,key==null?value:unaryCall(key,value)));
+        // Stable merge sort asks only <, like Python, and does not impose Java's
+        // comparator contract on user-defined partial/inconsistent orderings.
+        ArrayList<SortItem> scratch=new ArrayList<>(items);
+        int size=items.size();
+        for(long width=1;width<size;width*=2) {
+            for(long start=0;start<size;start+=2*width) {
+                int left=(int)start,middle=(int)Math.min(start+width,size),right=middle,end=(int)Math.min(start+2*width,size);
+                for(int output=(int)start;output<end;output++) {
+                    boolean takeRight=left>=middle || right<end && truth(reverse?
+                        lt(items.get(left).key,items.get(right).key):lt(items.get(right).key,items.get(left).key));
+                    scratch.set(output,takeRight?items.get(right++):items.get(left++));
+                }
+            }
+            ArrayList<SortItem> old=items;items=scratch;scratch=old;
+        }
+        values.clear();for(SortItem item:items)values.add(item.value);
+        return values;
     }
     public static Object reversed(Object value) {
         if(value instanceof PyInstance instance) {
@@ -1889,7 +1977,7 @@ public final class PyRuntime {
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
-        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum").contains(name)) return builtinFunction(name);
+        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }

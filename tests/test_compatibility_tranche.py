@@ -144,3 +144,14 @@ def test_annotation_only_class_assignment_remains_explicitly_unsupported():
     from pyjvm315.compiler import CompileError
     with pytest.raises(CompileError, match='annotation-only'):
         compile_source('class Annotated:\n    value: int\n')
+
+
+def test_execution_fixture_assert_hasattr_rejects_missing_attributes():
+    import subprocess
+    import sys
+    method = ast.parse('def test_case(self):\n    self.assertHasAttr(object(), "missing")\n').body[0]
+    result = subprocess.run([sys.executable, '-c', fixture_source(method, 'objects')],
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
+    assert 'AssertionError' in result.stderr
+    assert 'CPYTHON CASE PASSED' not in result.stdout
