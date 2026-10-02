@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **320 compiling cases (89.4%)**,
-38 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **323 compiling cases (90.2%)**,
+35 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **176 passing cases**. A new strict execution
-lane runs **62 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **180 passing cases**. A new strict execution
+lane runs **63 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -831,3 +831,30 @@ next missing builtin, `dir`. Full format-spec support, fractional grouping, loca
 aware `n`, complex formatting, string/numeric subclasses, brace `.format()` parsing,
 extreme allocation parity and external modules remain unfinished. Java 21 remains
 the only target.
+
+
+## Namespace inspection and sequence descriptors
+
+`dir(value)` binds type-level `__dir__` descriptors, supports inherited methods and
+metaclass hooks, consumes their iterables and sorts the results without removing
+callback duplicates. Its default user-class view combines inherited class members,
+slots and instance fields. `vars(value)` returns the actual instance/function
+attribute dictionary and honors custom `__dict__` descriptors and attribute access.
+
+In ordinary functions, `dir()` lists current bindings and `vars()` returns a fresh
+snapshot, including referenced closure cells and excluding declared globals.
+Class-suite inspection uses the existing live class namespace. Descriptor-backed
+`__getitem__` now supplies lazy sequence iteration when `__iter__` is absent,
+stopping at IndexError/StopIteration and propagating other callback exceptions.
+
+Four differential programs bring the corpus to **180 passing cases**. The full,
+unchanged CPython property test joins the execution lane: **50 bodies / 63 passing
+executions**. The pinned compile probe reaches **323/358 (90.2%)**, with **35
+unsupported** and zero compiler errors; CI requires at least 323 compiling cases.
+The other gains, `test_dir` and `SharedKeyTests.test_subclasses`, are compilation
+only; module-subclass and CPython dictionary-memory-layout semantics are unfinished.
+
+Native `dir` member lists remain partial. Module-level and suspended-frame zero-
+argument inspection, live module dictionaries and readonly/live class dictionary
+views remain explicitly unsupported. Full proxy, builtin and dynamic-execution
+semantics still need work; this tranche does not establish full CPython support.
