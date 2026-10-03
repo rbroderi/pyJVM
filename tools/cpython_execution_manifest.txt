@@ -62,3 +62,13 @@ Lib/test/test_descr.py::ClassPropertiesAndMethods.test_properties objects
 
 # Numeric rounding and generic protocol delegation; unchanged body.
 Lib/test/test_builtin.py::BuiltinTest.test_round objects
+
+# Shared set bodies use explicit constructor/setup fixtures; bodies are unchanged.
+Lib/test/test_set.py::TestJointOps.test_len set
+Lib/test/test_set.py::TestJointOps.test_len frozenset
+Lib/test/test_set.py::TestJointOps.test_contains set
+Lib/test/test_set.py::TestJointOps.test_contains frozenset
+Lib/test/test_set.py::TestJointOps.test_equality set
+Lib/test/test_set.py::TestJointOps.test_equality frozenset
+Lib/test/test_set.py::TestJointOps.test_setOfFrozensets set
+Lib/test/test_set.py::TestJointOps.test_setOfFrozensets frozenset

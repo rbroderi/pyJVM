@@ -82,8 +82,9 @@ The same five-file, 358-case probe now reports:
 | Format | 320 | 38 | 0 |
 | Introspection | 323 | 35 | 0 |
 | Round | 324 | 34 | 0 |
+| Frozen sets | 325 | 33 | 0 |
 
-Compile coverage increased from 34.9% to 90.5% (+199 cases; +1 this tranche). The probe now
+Compile coverage increased from 34.9% to 90.8% (+200 cases; +1 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -97,13 +98,14 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 183 cases. A separate
-`pyjvm315.cpython_execution` lane executes 51 unchanged CPython test
-bodies (64 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 186 cases. A separate
+`pyjvm315.cpython_execution` lane executes 55 unchanged CPython test
+bodies (72 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Eight
 ClassPropertiesAndMethods bodies, six BuiltinTest/TestSorted bodies and twelve
-TestSuper bodies use an objects fixture with assertions only. Explicit fixtures implement
+TestSuper bodies use an objects fixture with assertions only. Four TestJointOps bodies
+run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -129,11 +131,11 @@ copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 34 cases remain visible as unsupported; no
+support strategy. The remaining 33 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 324 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 324`). The old 0.31
+Compiler errors and compilation coverage below 325 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 325`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -415,3 +417,26 @@ manifest; its large integral-float boundary is covered by differential inputs.
 Native numeric subclasses, exact diagnostic parity and allocation-heavy extremes
 remain unfinished. This tranche does not complete CPython compatibility; dynamic
 execution, namespace views, external modules and native extensions remain visible.
+
+
+### Frozen sets and set-algebra tranche
+
+The fixed compile probe reaches **325/358 (90.8%)**, **33 unsupported** and **zero
+compiler errors**. The class-assignment case previously blocked by `frozenset`
+now compiles; it still depends on unfinished native class/layout semantics, so no
+runtime success is claimed. CI requires at least 325 compiling cases.
+
+Three differential programs cover immutable construction, hashability and cached
+hashes, numeric key equivalence, nesting, dictionary keys, bound/native descriptors,
+mutable membership probes, mixed algebra and comparisons, iterable methods,
+mutability rejection and callback exceptions. The focused corpus reaches **186**.
+Four unchanged `TestJointOps` bodies (`test_len`, `test_contains`, `test_equality`,
+`test_setOfFrozensets`) run with set and frozenset setup fixtures. Their statements
+and imports are unchanged: the strict lane reaches **55 bodies / 72 executions**.
+The fixture supplies the original word/letters/constructor values and a dictionary
+with the same keys/None values, without substituting unsupported module imports.
+
+Native collection subclasses, CPython storage/layout, complete mutation/iteration
+and diagnostic parity remain unfinished. Dynamic execution, namespace views,
+external modules and native extensions remain visible; compile coverage is still
+separate from full runtime regression-suite compatibility.

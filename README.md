@@ -637,16 +637,16 @@ compiler, runtime, or nested/local-class compatibility behavior.
 
 ## CPython compatibility after backend modernization
 
-The pinned 358-case compile probe now reaches **324 compiling cases (90.5%)**,
-34 unsupported, and **zero compiler errors**, up from 125 compiling / 231
+The pinned 358-case compile probe now reaches **325 compiling cases (90.8%)**,
+33 unsupported, and **zero compiler errors**, up from 125 compiling / 231
 unsupported / 2 errors. Local class methods/properties capture their enclosing
 function and a distinct class cell for each creation; registration now traverses
 control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **183 passing cases**. A new strict execution
-lane runs **64 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **186 passing cases**. A new strict execution
+lane runs **72 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -883,3 +883,26 @@ probe reaches **324/358 (90.5%)**, **34 unsupported** and zero compiler errors.
 other protocol dependencies still prevent a full runtime claim. Native numeric
 subclasses, full diagnostic fidelity and allocation-heavy extremes remain
 unfinished. Java 21 and the benchmark regression gates remain in place.
+
+
+## Frozen sets and set algebra
+
+`frozenset` is an immutable, hashable native collection. Construction validates
+member hashes, preserves numeric key equality (including int/bool/float/complex),
+reuses existing exact frozen sets and caches the order-independent CPython hash.
+Frozen sets can be nested or used as dictionary keys. Mutable sets now use the
+same Python hash/equality keys instead of Java element equality.
+
+Both types support union, intersection, difference, symmetric difference, subset/
+superset/disjoint checks and mixed set operators; the left operand determines the
+result type. Methods accept iterables where Python does, while operators require
+sets. Mutable methods remain unavailable on frozenset. Bound collection methods,
+native descriptors, copying and conversion of mutable membership probes are covered.
+
+Three differential programs bring the corpus to **186 passing cases**. Four complete
+unchanged CPython `TestJointOps` bodies run against explicit set/frozenset setup
+fixtures, adding eight executions: **55 bodies / 72 passing executions**. The fixed
+probe reaches **325/358 (90.8%)**, **33 unsupported** and zero compiler errors.
+The class-assignment case gains compilation only; native collection subclasses,
+CPython memory/layout behavior, complete mutation/iterator/diagnostic parity and
+external modules remain unfinished. Java 21 remains the sole target.

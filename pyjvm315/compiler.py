@@ -333,7 +333,7 @@ class Compiler:
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
         if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
-                    "list", "tuple", "dict", "set", "range", "type", "map", "slice", "super"} | EXCEPTION_TYPES:
+                    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "slice", "super"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
