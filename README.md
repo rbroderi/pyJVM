@@ -645,8 +645,8 @@ control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **189 passing cases**. A new strict execution
-lane runs **77 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **192 passing cases**. A new strict execution
+lane runs **82 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -927,3 +927,25 @@ passing executions**. The fixed compile probe remains **325/358**, 33 unsupporte
 and zero compiler errors. This improves runtime semantics without claiming new
 compile coverage. Native collection subclasses, full mutation/iterator/diagnostic
 parity, dynamic execution and external/native modules remain unfinished.
+
+
+## Set iterator lifetime and mutation
+
+Set and frozenset iterators expose `__iter__`, `__next__` and
+`__length_hint__`. A size change raises `RuntimeError` with the Python diagnostic
+and remains invalid even if the original size is restored later. Length hints
+reflect remaining elements without advancing or invalidating the iterator;
+exhaustion remains permanent after later mutations.
+
+Same-size clear/refill and no-op augmented operations avoid Java structural
+modification errors. Normal traversal stays linear, with cursor recovery only
+when a same-size structural mutation occurs. Order across mutations is unspecified;
+this does not reproduce CPython's hash-table layout or concurrent/reentrant mutation
+behavior. Deletion and pop retain cached member hashes.
+
+Three differential programs bring the corpus to **192 passing cases**. Five more
+unchanged CPython bodies bring the strict execution lane to **65 bodies / 82 passing
+executions**, including the clear/refill iterator regression and deletion/pop tests.
+Compilation remains **325/358**, 33 unsupported and zero compiler errors. Java 21
+and performance regression gates remain in place; full CPython compatibility is
+still unfinished.

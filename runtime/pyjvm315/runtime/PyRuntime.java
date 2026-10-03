@@ -83,6 +83,7 @@ public final class PyRuntime {
         if (value instanceof List) return "list";
         if (value instanceof Map) return "dict";
         if(value instanceof PyFrozenSet)return "frozenset";
+        if(value instanceof PySetIterator)return "set_iterator";
         if (value instanceof Set) return "set";
         if (value instanceof PyRange) return "range";
         if (value instanceof PyFunction) return "function";
@@ -1044,6 +1045,7 @@ public final class PyRuntime {
             case "dict" -> names.addAll(List.of("keys","values","items","get","pop","popitem","setdefault","update","clear","copy"));
             case "set" -> names.addAll(List.of("add","remove","discard","pop","clear","copy","union","intersection","difference","symmetric_difference","update","intersection_update","difference_update","symmetric_difference_update","issubset","issuperset","isdisjoint"));
             case "frozenset" -> names.addAll(List.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__"));
+            case "set_iterator" -> names.addAll(List.of("__iter__","__next__","__length_hint__"));
             case "int", "bool", "float" -> names.add("__round__");
             case "complex" -> names.addAll(List.of("real","imag","conjugate"));
             case "object" -> names.addAll(List.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__"));
@@ -1736,7 +1738,7 @@ public final class PyRuntime {
         PySet(){}
         PySet(Object values){if(values instanceof PySet set)entries.putAll(set.entries);else for(Object value:iterable(values))entries.putIfAbsent(new SetKey(value),value);}
         @Override public int size(){return entries.size();}
-        @Override public Iterator<Object> iterator(){return entries.values().iterator();}
+        @Override public Iterator<Object> iterator(){return new PySetIterator(this);}
         private SetKey lookupKey(Object value){return new SetKey(value instanceof Set<?> && !(value instanceof PyFrozenSet)?new PyFrozenSet(value):value);}
         @Override public boolean contains(Object value){return entries.containsKey(lookupKey(value));}
         @Override public boolean add(Object value){SetKey key=new SetKey(value);if(entries.containsKey(key))return false;entries.put(key,value);return true;}
@@ -1757,7 +1759,39 @@ public final class PyRuntime {
         @Override public boolean add(Object value){throw new PyException("AttributeError","frozenset has no attribute 'add'");}
         @Override public boolean remove(Object value){throw new PyException("AttributeError","frozenset has no attribute 'remove'");}
         @Override public void clear(){throw new PyException("AttributeError","frozenset has no attribute 'clear'");}
-        @Override public Iterator<Object> iterator(){return Collections.unmodifiableCollection(entries.values()).iterator();}
+    }
+    private static final class PySetIterator implements Iterator<Object> {
+        PySet source;
+        Iterator<Object> cursor;
+        final int expectedSize;
+        int position;
+        boolean invalid;
+        PySetIterator(PySet source){this.source=source;expectedSize=source.size();cursor=source.entries.values().iterator();}
+        private void checkSize(){
+            if(invalid || source.size()!=expectedSize){invalid=true;throw new PyException("RuntimeError","Set changed size during iteration");}
+        }
+        long lengthHint(){return source==null || invalid || source.size()!=expectedSize?0:Math.max(0,expectedSize-position);}
+        public boolean hasNext(){
+            if(source==null)return false;
+            checkSize();
+            if(cursor.hasNext())return true;
+            source=null;cursor=null;return false;
+        }
+        public Object next(){
+            if(!hasNext())throw new NoSuchElementException();
+            Object result;
+            try{result=cursor.next();}
+            catch(java.util.ConcurrentModificationException changed){
+                // Python checks size, not Java's structural modification count.
+                // Resume in the live contents after a same-size mutation. Set
+                // traversal order across such mutations is unspecified.
+                cursor=source.entries.values().iterator();
+                for(int i=0;i<position && cursor.hasNext();i++)cursor.next();
+                if(!cursor.hasNext()){source=null;cursor=null;throw new NoSuchElementException();}
+                result=cursor.next();
+            }
+            position++;return result;
+        }
     }
     private static boolean setMethodKnown(String name,boolean frozen){
         return Set.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__").contains(name)
@@ -1798,7 +1832,7 @@ public final class PyRuntime {
                 else for(Object value:iterable(argument))set.add(value);
                 return null;
             case "clear":requireArgs(name,args,0);set.clear();return null;
-            case "pop":requireArgs(name,args,0);if(set.isEmpty())throw new PyException("KeyError","pop from an empty set");Iterator<Object> iterator=set.iterator();Object value=iterator.next();iterator.remove();return value;
+            case "pop":requireArgs(name,args,0);if(set.isEmpty())throw new PyException("KeyError","pop from an empty set");Iterator<?> iterator=set instanceof PySet nativeSet?nativeSet.entries.values().iterator():set.iterator();Object value=iterator.next();iterator.remove();return value;
             case "issubset":case "issuperset":case "isdisjoint":requireArgs(name,args,1);PySet other=new PySet(args[0]);return name.equals("issubset")?other.containsAll(set):name.equals("issuperset")?set.containsAll(other):Collections.disjoint(set,other);
             default:
                 String operation=name.equals("update")?"union":name.endsWith("_update")?name.substring(0,name.length()-7):name;
@@ -4108,6 +4142,10 @@ public final class PyRuntime {
     }
 
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if(obj instanceof PySetIterator iterator && Set.of("__iter__","__next__","__length_hint__").contains(name)){
+            requireArgs(name,args,0);
+            return name.equals("__iter__")?iterator:name.equals("__next__")?next_(iterator):iterator.lengthHint();
+        }
         if(name.equals("__round__") && (obj instanceof PyInstance || isIntLike(obj) || obj instanceof Double)){
             if(obj instanceof PyInstance)return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
             if(args.length>1)throw new PyException("TypeError","__round__ takes at most one argument");
@@ -4491,6 +4529,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof Set<?> && setMethodKnown(name,obj instanceof PyFrozenSet))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__dir__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);

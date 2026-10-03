@@ -98,14 +98,14 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 189 cases. A separate
-`pyjvm315.cpython_execution` lane executes 60 unchanged CPython test
-bodies (77 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 192 cases. A separate
+`pyjvm315.cpython_execution` lane executes 65 unchanged CPython test
+bodies (82 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Eight
 ClassPropertiesAndMethods bodies, six BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Four TestJointOps bodies
-run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Five TestSet bodies run with the same set setup fixture. Explicit fixtures implement
+run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Nine TestSet bodies run with the same set setup fixture; one TestWeirdBugs iterator body uses only assertion helpers. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -460,3 +460,25 @@ executions**. No test statements/imports or module fixtures are neutralized.
 Native collection subclasses and complete mutation/iterator/diagnostic semantics
 remain unfinished, alongside dynamic execution, namespace views and external/native
 modules. Java 21 and the benchmark regression gates remain in place.
+
+
+### Set iterator tranche
+
+Three differential programs bring the focused corpus to **192 passing cases**,
+covering size-change diagnostics and sticky invalidation, length hints, bound
+iteration methods, mutable/frozen exhaustion, clear/refill at the same size,
+no-op augmented operations and cached member hashes. Length-hint observation
+does not itself invalidate a temporarily resized iterator. A size change after
+the final yield still raises unless exhaustion has already been observed.
+
+Five unchanged bodies join the strict lane without fixture changes:
+`TestWeirdBugs.test_iter_and_mutate` and `TestSet.test_pop`, `test_remove`,
+`test_discard`, `test_remove_keyerror_unpacking`. This brings the lane to
+**65 bodies / 82 executions**. No test statements or imports are neutralized.
+
+The fixed probe remains **325 compiling / 33 unsupported / zero compiler errors**;
+the CI floor remains 325. Iterator recovery uses live contents after same-size
+structural mutation; normal traversal stays linear. CPython hash-table layout,
+concurrent/reentrant mutation, iterator pickling and native collection subclasses
+remain unfinished, alongside dynamic execution, namespaces and external/native
+modules. Java 21 and the benchmark gates remain unchanged.

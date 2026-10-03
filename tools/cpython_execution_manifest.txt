@@ -79,3 +79,10 @@ Lib/test/test_set.py::TestSet.test_iand set
 Lib/test/test_set.py::TestSet.test_isub set
 Lib/test/test_set.py::TestSet.test_ixor set
 Lib/test/test_set.py::TestSet.test_inplace_on_self set
+
+# Set iterator size/lifetime regression and unchanged deletion bodies.
+Lib/test/test_set.py::TestWeirdBugs.test_iter_and_mutate objects
+Lib/test/test_set.py::TestSet.test_pop set
+Lib/test/test_set.py::TestSet.test_remove set
+Lib/test/test_set.py::TestSet.test_discard set
+Lib/test/test_set.py::TestSet.test_remove_keyerror_unpacking set
