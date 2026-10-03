@@ -1,9 +1,54 @@
 # CPython 3.15 Regression Probe Baseline
 
-This report records the first case-level pyJVM compatibility probe against a curated
-subset of the CPython 3.15 regression suite.
+This report tracks a pinned 3,000-body CPython 3.15 compilation corpus and the
+original 358-body probe retained for historical comparison. Both are compile triage,
+not full CPython execution-suite compatibility.
 
-## Probe set
+
+## Current 3,000-body selection
+
+`tools/cpython_probe_3000_manifest.txt` pins exactly 3,000 unique
+`Lib/test/path.py::Class.test_method` (or top-level function) identities across
+47 files at commit `5b28ebd109f08cfc44a3d6e573e087eaf86319b5`. It includes every
+original 358-body identity. Core language/builtin files and shared collection
+mixins are selected in the manifest's documented priority order; all bodies in
+each file are included except `test_math.py`, whose first 21 complete bodies fill
+the selection to 3,000. There is no replacement with reduced snippets.
+
+| Expanded scan | Compiles | Unsupported | Compiler errors | Total |
+|---|---:|---:|---:|---:|
+| Before conditional-local fixes | 2,208 | 769 | 23 | 3,000 |
+| Current baseline | **2,247** | **753** | **0** | **3,000** |
+
+The 23 errors were JVM frame-analysis failures on conditionally bound locals.
+Non-argument slots now start with UNBOUND and checked loads preserve lexical
+UnboundLocalError behavior. Assignment-expression bindings, including comprehension
+outputs, are recognized in the enclosing function. Another 16 bodies move from
+unsupported to compiling. Three new differential programs cover skipped branches,
+empty loops/comprehensions, exception targets and suppressed/nested with bindings.
+
+The strict execution lane separately verifies **68 selected unchanged bodies /
+85 executions**; three new bodies cover assignment expressions and unbound lexical
+variables. The project differential suite has **195 passing cases**. These runtime
+results must not be conflated with the 2,247 compiling bodies. Decorators are removed
+and module globals are placeholders in the compile-only probe. Shared mixins and
+source bodies do not equal dynamically discovered unittest cases.
+
+`tools/cpython_probe_3000_baseline.json` records statuses by identity and fingerprints
+the selection and pinned corpus. CI retains the original 325/358 gate, adds an
+exact-3,000 cardinality check and 2,247 compilation floor, rejects any previously
+compiling body that regresses, and rejects ERROR/SYNTAX/NO_CASES outcomes. Both
+reports are uploaded under the compatibility artifact. A compile gain cannot
+offset another case's regression.
+
+The remaining unsupported reasons are led by Match (283), exec (63), eval (51),
+compile (51), contextmanager (26), open (25) and frozendict (19). Some names depend
+on unsupported module/fixture machinery. Pattern matching and dynamic execution
+are major next language gaps; runtime assertions and fixtures must be expanded
+as support is added. **74.9% is compilation coverage of this selected corpus, not
+a full-CPython compatibility percentage.** Java 21 and benchmark gates are retained.
+
+## Original 358-body probe set
 
 - `Lib/test/test_bytes.py`
 - `Lib/test/test_descr.py`
@@ -98,14 +143,14 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 189 cases. A separate
-`pyjvm315.cpython_execution` lane executes 60 unchanged CPython test
-bodies (77 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 195 cases. A separate
+`pyjvm315.cpython_execution` lane executes 68 unchanged CPython test
+bodies (85 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Eight
 ClassPropertiesAndMethods bodies, six BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Four TestJointOps bodies
-run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Five TestSet bodies run with the same set setup fixture. Explicit fixtures implement
+run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Nine TestSet bodies run with the same set setup fixture; one TestWeirdBugs iterator body uses only assertion helpers. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -460,3 +505,25 @@ executions**. No test statements/imports or module fixtures are neutralized.
 Native collection subclasses and complete mutation/iterator/diagnostic semantics
 remain unfinished, alongside dynamic execution, namespace views and external/native
 modules. Java 21 and the benchmark regression gates remain in place.
+
+
+### Set iterator tranche
+
+Three differential programs bring the focused corpus to **192 passing cases**,
+covering size-change diagnostics and sticky invalidation, length hints, bound
+iteration methods, mutable/frozen exhaustion, clear/refill at the same size,
+no-op augmented operations and cached member hashes. Length-hint observation
+does not itself invalidate a temporarily resized iterator. A size change after
+the final yield still raises unless exhaustion has already been observed.
+
+Five unchanged bodies join the strict lane without fixture changes:
+`TestWeirdBugs.test_iter_and_mutate` and `TestSet.test_pop`, `test_remove`,
+`test_discard`, `test_remove_keyerror_unpacking`. This brings the lane to
+**65 bodies / 82 executions**. No test statements or imports are neutralized.
+
+The fixed probe remains **325 compiling / 33 unsupported / zero compiler errors**;
+the CI floor remains 325. Iterator recovery uses live contents after same-size
+structural mutation; normal traversal stays linear. CPython hash-table layout,
+concurrent/reentrant mutation, iterator pickling and native collection subclasses
+remain unfinished, alongside dynamic execution, namespaces and external/native
+modules. Java 21 and the benchmark gates remain unchanged.

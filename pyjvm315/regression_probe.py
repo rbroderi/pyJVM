@@ -6,7 +6,9 @@ from pathlib import Path
 import argparse
 import ast
 import json
+import hashlib
 import re
+import subprocess
 import sys
 
 from .compiler import CompileError, compile_source
@@ -117,7 +119,7 @@ def probe_case(path: Path, tree: ast.Module, qualname: str, node: ast.FunctionDe
     return CaseResult(str(path), qualname, getattr(node, "lineno", 0), "COMPILES")
 
 
-def probe_files(paths: list[Path]) -> dict:
+def probe_files(paths: list[Path], *, selections: dict[Path, list[str]] | None = None) -> dict:
     results: list[CaseResult] = []
     for path in paths:
         try:
@@ -125,7 +127,16 @@ def probe_files(paths: list[Path]) -> dict:
         except Exception as exc:
             results.append(CaseResult(str(path), "<file>", 0, "ERROR", f"{type(exc).__name__}: {exc}"))
             continue
+        if selections and path in selections:
+            available = dict(cases)
+            requested = selections[path]
+            for name in requested:
+                if name not in available:
+                    results.append(CaseResult(str(path), name, 0, "ERROR", "selected case not found"))
+            cases = [(name, available[name]) for name in requested if name in available]
         if not cases:
+            if selections and path in selections:
+                continue
             results.append(CaseResult(str(path), "<no-tests>", 0, "NO_CASES", ""))
             continue
         for qualname, node in cases:
@@ -144,14 +155,42 @@ def probe_files(paths: list[Path]) -> dict:
     }
 
 
-def _read_manifest(manifest: Path, cpython_root: Path) -> list[Path]:
+def _read_manifest(manifest: Path, cpython_root: Path) -> tuple[list[Path], dict[Path, list[str]]]:
     paths: list[Path] = []
+    selections: dict[Path, list[str]] = {}
     for raw in manifest.read_text(encoding="utf-8").splitlines():
         item = raw.strip()
         if not item or item.startswith("#"):
             continue
-        paths.append(cpython_root / item)
-    return paths
+        relative, separator, case = item.partition("::")
+        path = cpython_root / relative
+        if separator and not case:
+            raise ValueError(f"empty case selection: {item}")
+        if path in paths:
+            if not separator or path not in selections:
+                raise ValueError(f"mixed or duplicate whole-file selection: {item}")
+            if case in selections[path]:
+                raise ValueError(f"duplicate selected case: {item}")
+        else:
+            paths.append(path)
+        if separator:
+            selections.setdefault(path, []).append(case)
+    return paths, selections
+
+
+def baseline_regressions(report: dict, baseline: dict) -> list[str]:
+    current = {f"{r['file']}::{r['case']}": r['status'] for r in report['results']}
+    expected = baseline['statuses']
+    failures = []
+    if current.keys() != expected.keys():
+        failures.append("selected case identities differ from baseline")
+    for field in ('cpython_commit', 'manifest_sha256'):
+        if report.get(field) != baseline.get(field):
+            failures.append(f"{field} differs from baseline")
+    for name, status in expected.items():
+        if status == 'COMPILES' and current.get(name) != 'COMPILES':
+            failures.append(f"previously compiling case regressed: {name}")
+    return failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -166,15 +205,36 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--top", type=int, default=25, help="Number of unsupported/error reasons to print")
     ap.add_argument("--fail-on-error", action="store_true", help="Exit non-zero when compiler errors are observed")
     ap.add_argument("--min-compiles", type=int, default=0, help="Fail if fewer cases compile than this pinned baseline")
+    ap.add_argument("--expect-cases", type=int, help="Fail if the selected corpus cardinality changes")
+    ap.add_argument("--baseline", type=Path, help="Pinned identity/status baseline; reject previously compiling case regressions")
     ns = ap.parse_args(argv)
 
     paths = list(ns.paths)
+    selections = {}
     if ns.manifest:
-        paths.extend(_read_manifest(ns.manifest, ns.cpython_root))
+        try:
+            manifest_paths, selections = _read_manifest(ns.manifest, ns.cpython_root)
+        except ValueError as exc:
+            ap.error(str(exc))
+        if set(paths) & set(manifest_paths):
+            ap.error("positional files duplicate manifest selections")
+        paths.extend(manifest_paths)
     if not paths:
         ap.error("provide at least one path or --manifest")
 
-    report = probe_files(paths)
+    report = probe_files(paths, selections=selections)
+    if ns.manifest:
+        for result in report['results']:
+            if Path(result['file']) in manifest_paths:
+                result['file'] = str(Path(result['file']).relative_to(ns.cpython_root))
+        report['manifest_sha256'] = hashlib.sha256(ns.manifest.read_bytes()).hexdigest()
+        commit = subprocess.run(['git', '-C', str(ns.cpython_root), 'rev-parse', 'HEAD'],
+                                text=True, capture_output=True)
+        report['cpython_commit'] = commit.stdout.strip() if commit.returncode == 0 else None
+    failures = baseline_regressions(report, json.loads(ns.baseline.read_text())) if ns.baseline else []
+    if ns.expect_cases is not None and len(report['results']) != ns.expect_cases:
+        failures.append(f"expected {ns.expect_cases} cases, found {len(report['results'])}")
+    report['baseline_regressions'] = failures
     encoded = json.dumps(report, indent=2, sort_keys=True)
     if ns.output:
         ns.output.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +263,10 @@ def main(argv: list[str] | None = None) -> int:
     below_baseline = report["summary"].get("COMPILES", 0) < ns.min_compiles
     if below_baseline:
         print(f"Compilation coverage fell below baseline {ns.min_compiles}", file=sys.stderr)
-    return int(below_baseline or (ns.fail_on_error and report["summary"].get("ERROR", 0)))
+    for failure in failures:
+        print(failure, file=sys.stderr)
+    return int(bool(failures) or below_baseline or (ns.fail_on_error and
+               any(report['summary'].get(status, 0) for status in ('ERROR', 'SYNTAX', 'NO_CASES'))))
 
 
 if __name__ == "__main__":
