@@ -72,3 +72,10 @@ Lib/test/test_set.py::TestJointOps.test_equality set
 Lib/test/test_set.py::TestJointOps.test_equality frozenset
 Lib/test/test_set.py::TestJointOps.test_setOfFrozensets set
 Lib/test/test_set.py::TestJointOps.test_setOfFrozensets frozenset
+
+# Mutable augmented set operations and self aliasing; unchanged bodies.
+Lib/test/test_set.py::TestSet.test_ior set
+Lib/test/test_set.py::TestSet.test_iand set
+Lib/test/test_set.py::TestSet.test_isub set
+Lib/test/test_set.py::TestSet.test_ixor set
+Lib/test/test_set.py::TestSet.test_inplace_on_self set

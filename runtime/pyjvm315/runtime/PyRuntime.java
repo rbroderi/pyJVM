@@ -1463,9 +1463,29 @@ public final class PyRuntime {
         }
         return Math.pow(number(a), number(b));
     }
-    public static Object bitAnd(Object a, Object b) { if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
-    public static Object bitOr(Object a, Object b) { if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");return compact(bigInt(a).or(bigInt(b))); }
-    public static Object bitXor(Object a, Object b) { if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
+    public static Object isub(Object a,Object b){return inplaceSetBinary(a,b,"difference","__isub__");}
+    public static Object ibitAnd(Object a,Object b){return inplaceSetBinary(a,b,"intersection","__iand__");}
+    public static Object ibitOr(Object a,Object b){return inplaceSetBinary(a,b,"union","__ior__");}
+    public static Object ibitXor(Object a,Object b){return inplaceSetBinary(a,b,"symmetric_difference","__ixor__");}
+    private static Object inplaceSetBinary(Object a,Object b,String operation,String special){
+        if(a instanceof PyInstance instance){
+            Object method=instance.cls.lookupAttr(special);
+            if(method!=MISSING){Object result=callFunction(descriptorGet(method,a,instance.cls),new ArrayList<>(Arrays.asList(b)),new LinkedHashMap<>());if(result!=NOT_IMPLEMENTED)return result;}
+        }
+        if(a instanceof Set<?> set && !(a instanceof PyFrozenSet) && b instanceof Set<?>){
+            replaceSetContents(set,(Set<?>)setAlgebra(a,b,operation));return a;
+        }
+        return switch(operation){case "difference"->sub(a,b);case "intersection"->bitAnd(a,b);case "union"->bitOr(a,b);default->bitXor(a,b);};
+    }
+    @SuppressWarnings("unchecked")
+    private static void replaceSetContents(Set<?> destination,Set<?> source){
+        if(destination instanceof PySet target && source instanceof PySet values){target.entries.clear();target.entries.putAll(values.entries);}
+        else {Set<Object> target=(Set<Object>)destination;target.clear();target.addAll(source);}
+    }
+
+    public static Object bitAnd(Object a, Object b) { if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__and__","__rand__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
+    public static Object bitOr(Object a, Object b) { if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");return compact(bigInt(a).or(bigInt(b))); }
+    public static Object bitXor(Object a, Object b) { if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__xor__","__rxor__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
     public static Object lshift(Object a, Object b) {
         BigInteger n = bigInt(b); if (n.signum() < 0) throw new ArithmeticException("negative shift count");
         if (n.bitLength() > 31) throw new ArithmeticException("shift count too large");
@@ -1741,7 +1761,7 @@ public final class PyRuntime {
     }
     private static boolean setMethodKnown(String name,boolean frozen){
         return Set.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__").contains(name)
-            || !frozen && Set.of("add","remove","discard","clear","pop","update","intersection_update","difference_update","symmetric_difference_update").contains(name);
+            || !frozen && Set.of("add","remove","discard","clear","pop","update","intersection_update","difference_update","symmetric_difference_update","__ior__","__iand__","__ixor__","__isub__").contains(name);
     }
     private static Object setAlgebra(Object left,Object right,String operation){
         PySet a=new PySet(left),b=new PySet(right),result=new PySet();
@@ -1763,7 +1783,20 @@ public final class PyRuntime {
             case "__contains__":requireArgs(name,args,1);return set.contains(args[0]);
             case "add":requireArgs(name,args,1);set.add(args[0]);return null;
             case "remove":case "discard":requireArgs(name,args,1);boolean removed=set.remove(args[0]);if(!removed && name.equals("remove"))throw new PyException("KeyError",args[0]);return null;
-            case "update":for(Object argument:args)for(Object value:iterable(argument))set.add(value);return null;
+            case "__ior__":case "__iand__":case "__ixor__":case "__isub__":
+                requireArgs(name,args,1);if(!(args[0] instanceof Set<?>))return NOT_IMPLEMENTED;
+                return inplaceSetBinary(set,args[0],name.equals("__ior__")?"union":name.equals("__iand__")?"intersection":name.equals("__ixor__")?"symmetric_difference":"difference",name);
+            case "difference_update":
+                for(Object argument:args){
+                    if(argument==set){set.clear();continue;}
+                    if(set instanceof PySet target && argument instanceof PySet other){for(SetKey key:other.entries.keySet())target.entries.remove(key);}
+                    else for(Object value:iterable(argument)){SetKey key=new SetKey(value);if(set instanceof PySet target)target.entries.remove(key);else set.remove(value);}
+                }
+                return null;
+            case "update":
+                for(Object argument:args)if(set instanceof PySet target && argument instanceof PySet other){for(var entry:other.entries.entrySet())target.entries.putIfAbsent(entry.getKey(),entry.getValue());}
+                else for(Object value:iterable(argument))set.add(value);
+                return null;
             case "clear":requireArgs(name,args,0);set.clear();return null;
             case "pop":requireArgs(name,args,0);if(set.isEmpty())throw new PyException("KeyError","pop from an empty set");Iterator<Object> iterator=set.iterator();Object value=iterator.next();iterator.remove();return value;
             case "issubset":case "issuperset":case "isdisjoint":requireArgs(name,args,1);PySet other=new PySet(args[0]);return name.equals("issubset")?other.containsAll(set):name.equals("issuperset")?set.containsAll(other):Collections.disjoint(set,other);
@@ -1772,7 +1805,7 @@ public final class PyRuntime {
                 if(operation.equals("symmetric_difference"))requireArgs(name,args,1);
                 boolean mutate=name.equals("update") || name.endsWith("_update");
                 Object result=new PySet(set);for(Object argument:args)result=setAlgebra(result,argument,operation);
-                if(mutate){set.clear();set.addAll((Set<?>)result);return null;}
+                if(mutate){replaceSetContents(set,(Set<?>)result);return null;}
                 return frozen?new PyFrozenSet(result):result;
         }
     }

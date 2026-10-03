@@ -84,7 +84,7 @@ The same five-file, 358-case probe now reports:
 | Round | 324 | 34 | 0 |
 | Frozen sets | 325 | 33 | 0 |
 
-Compile coverage increased from 34.9% to 90.8% (+200 cases; +1 this tranche). The probe now
+Compile coverage increased from 34.9% to 90.8% (+200 cases; unchanged this runtime tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -98,14 +98,14 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 186 cases. A separate
-`pyjvm315.cpython_execution` lane executes 55 unchanged CPython test
-bodies (72 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 189 cases. A separate
+`pyjvm315.cpython_execution` lane executes 60 unchanged CPython test
+bodies (77 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Eight
 ClassPropertiesAndMethods bodies, six BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Four TestJointOps bodies
-run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Explicit fixtures implement
+run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Five TestSet bodies run with the same set setup fixture. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -440,3 +440,23 @@ Native collection subclasses, CPython storage/layout, complete mutation/iteratio
 and diagnostic parity remain unfinished. Dynamic execution, namespace views,
 external modules and native extensions remain visible; compile coverage is still
 separate from full runtime regression-suite compatibility.
+
+
+### Mutable-set augmentation tranche
+
+Compile coverage remains **325/358**, **33 unsupported** and **zero compiler
+errors**; the CI floor stays 325. This tranche fixes runtime aliasing and exception
+state rather than adding names solely to increase compilation counts.
+
+Three differential programs bring the focused corpus to **189 passing cases**.
+They cover mutable identity versus frozen replacement, self-operations, attribute/
+subscript aliases, in-place descriptors, instance-attribute bypass, NotImplemented
+and reflected fallback, native descriptor signatures, partial difference-update
+failures and reuse of cached member hashes. Five complete unchanged `TestSet`
+bodies (`test_ior`, `test_iand`, `test_isub`, `test_ixor`, `test_inplace_on_self`)
+join the existing setup fixture, bringing the strict lane to **60 bodies / 77
+executions**. No test statements/imports or module fixtures are neutralized.
+
+Native collection subclasses and complete mutation/iterator/diagnostic semantics
+remain unfinished, alongside dynamic execution, namespace views and external/native
+modules. Java 21 and the benchmark regression gates remain in place.

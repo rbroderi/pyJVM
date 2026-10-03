@@ -2664,7 +2664,7 @@ class Compiler:
     def _binary_runtime(self, op: ast.operator, b: CodeBuilder, *, inplace: bool = False) -> None:
         name = {ast.Add:"add", ast.Sub:"sub", ast.Mult:"mul", ast.Div:"truediv", ast.FloorDiv:"floordiv", ast.Mod:"mod", ast.Pow:"pow", ast.BitAnd:"bitAnd", ast.BitOr:"bitOr", ast.BitXor:"bitXor", ast.LShift:"lshift", ast.RShift:"rshift"}.get(type(op))
         if name is None: raise CompileError(f"Unsupported binary operator: {type(op).__name__}")
-        if inplace and name in {"add", "mul", "pow"}: name = "i" + name
+        if inplace and name in {"add", "mul", "pow", "sub", "bitAnd", "bitOr", "bitXor"}: name = "i" + name
         b.invokestatic(RUNTIME, name, f"({OBJ}{OBJ}){OBJ}")
 
     def _boolop(self, values: list[ast.expr], is_and: bool, b: CodeBuilder, scope: Scope) -> None:
