@@ -427,6 +427,24 @@ class Compiler:
             if node.args.kwarg: locals_.add(node.args.kwarg.arg)
         globals_: set[str] = set(); nonlocals: set[str] = set()
 
+        class NamedAssignments(ast.NodeVisitor):
+            def visit_NamedExpr(visitor, expression):
+                locals_.update(self._target_names(expression.target))
+                visitor.visit(expression.value)
+            def visit_Lambda(visitor, expression):
+                for default in expression.args.defaults + [x for x in expression.args.kw_defaults if x is not None]:
+                    visitor.visit(default)
+            def visit_FunctionDef(visitor, definition):
+                for expression in definition.decorator_list + definition.args.defaults + [x for x in definition.args.kw_defaults if x is not None]:
+                    visitor.visit(expression)
+            visit_AsyncFunctionDef = visit_FunctionDef
+            def visit_ClassDef(visitor, definition):
+                for expression in definition.decorator_list + definition.bases + [x.value for x in definition.keywords]:
+                    visitor.visit(expression)
+
+        for statement in node.body:
+            NamedAssignments().visit(statement)
+
         def visit_stmt(stmt: ast.stmt) -> None:
             if isinstance(stmt, ast.Global): globals_.update(stmt.names); return
             if isinstance(stmt, ast.Nonlocal): nonlocals.update(stmt.names); return
@@ -772,6 +790,14 @@ class Compiler:
                 b.aload(env_slot); b.ldc_string(name); b.aload(scope.get(name))
                 b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ}{OBJ}{OBJ})V")
         self._prepare_deletions(b, scope, info.local_names)
+        if not info.env_mode:
+            # JVM slots must have a reference type on every control-flow path.
+            # UNBOUND also preserves Python's local-before-assignment behavior
+            # when a branch, loop, or exception path skips the binding.
+            for name in sorted(info.local_names - set(info.bound_args)):
+                if not scope.has_local(name):
+                    b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.astore(scope.define(name))
+                scope.checked_names.add(name)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []; self.cleanup_stack = []; self.finally_stack = []
         for stmt in node.body:
             self._stmt(stmt, b, scope, in_function=True)

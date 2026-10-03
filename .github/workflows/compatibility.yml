@@ -53,12 +53,22 @@ jobs:
             --output artifacts/cpython-regression-probe.json \
             --top 30 \
             --fail-on-error --min-compiles 325
+      - name: Pinned 3,000-body CPython compilation corpus
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pyjvm315.regression_probe \
+            --manifest tools/cpython_probe_3000_manifest.txt \
+            --cpython-root cpython-src \
+            --baseline tools/cpython_probe_3000_baseline.json \
+            --output artifacts/cpython-regression-probe-3000.json \
+            --expect-cases 3000 --min-compiles 2247 --fail-on-error --top 30
       - name: Upload regression probe report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cpython-regression-probe
-          path: artifacts/cpython-regression-probe.json
+          path: artifacts/cpython-regression-probe*.json
 
   cpython-execution:
     runs-on: ubuntu-latest

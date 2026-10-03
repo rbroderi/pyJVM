@@ -645,8 +645,8 @@ control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **192 passing cases**. A new strict execution
-lane runs **82 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **195 passing cases**. A new strict execution
+lane runs **85 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -949,3 +949,58 @@ executions**, including the clear/refill iterator regression and deletion/pop te
 Compilation remains **325/358**, 33 unsupported and zero compiler errors. Java 21
 and performance regression gates remain in place; full CPython compatibility is
 still unfinished.
+
+
+## Pinned 3,000-body CPython compatibility target
+
+The selected compilation corpus now contains **3,000 explicit test-body identities
+from 47 files**, pinned to CPython 3.15 commit
+`5b28ebd109f08cfc44a3d6e573e087eaf86319b5`. It retains all original 358 bodies and
+adds core builtins, numeric/string/collection operations, shared collection mixins,
+iteration, generators/coroutines, exceptions, scoping, assignment expressions,
+context managers, pattern matching and formatting. The final math file contributes
+its first 21 bodies; all preceding files contribute every discoverable body.
+
+| Evidence | Current result |
+|---|---:|
+| Selected bodies compiling independently | **2,247 / 3,000 (74.9%)** |
+| Explicitly unsupported selected bodies | **753** |
+| Unexpected compiler errors | **0** |
+| Unchanged CPython bodies verified at runtime | **68 bodies / 85 executions** |
+| Project differential cases | **195 passing** |
+
+Compilation neutralizes module-global dependencies and removes case decorators;
+it does not execute fixtures, imports or assertions. These are selected source
+bodies, including mixins, rather than CPython's dynamically discovered execution
+cases. **The 74.9% figure is compilation coverage of this selection, not overall
+CPython compatibility.** The strict runtime lane is a separate, much smaller set.
+
+The first expanded scan found 2,208 compiling, 769 unsupported and 23 compiler
+errors. Initializing non-argument JVM locals to the unbound sentinel and recognizing
+assignment-expression bindings removes all 23 verifier failures and gains another
+16 previously unsupported bodies. Skipped bindings raise UnboundLocalError;
+initialization does not invent a Python value. Nested/local-class closure work
+and Java 21 targeting remain intact.
+
+CI checks exactly 3,000 unique pinned identities, corpus/manifest fingerprints,
+zero compiler errors and a 2,247 compilation floor. A per-case baseline also rejects
+any previously compiling body that regresses, even if another body improves. The
+legacy 358-body probe remains at 325 compiling / 33 unsupported, with its existing
+gate retained. New runtime bodies cover assignment expressions and lexical
+unbound errors without placeholder bindings or fixture changes.
+
+Run the expanded gate with Python 3.15:
+
+```sh
+python -m pyjvm315.regression_probe \
+  --cpython-root /path/to/cpython \
+  --manifest tools/cpython_probe_3000_manifest.txt \
+  --baseline tools/cpython_probe_3000_baseline.json \
+  --expect-cases 3000 --min-compiles 2247 --fail-on-error \
+  --output artifacts/cpython-regression-probe-3000.json
+```
+
+Pattern matching (283 unsupported bodies) is the largest next language gap. Dynamic
+execution (`exec`, `eval`, `compile`), external modules and other missing builtins
+also remain. Baseline updates must record deliberate progress or corpus changes;
+they must not hide regressions. The benchmark regression gates remain enabled.
