@@ -62,7 +62,7 @@ jobs:
             --cpython-root cpython-src \
             --baseline tools/cpython_probe_3000_baseline.json \
             --output artifacts/cpython-regression-probe-3000.json \
-            --expect-cases 3000 --min-compiles 2247 --fail-on-error --top 30
+            --expect-cases 3000 --min-compiles 2373 --fail-on-error --top 30
       - name: Upload regression probe report
         if: always()
         uses: actions/upload-artifact@v4

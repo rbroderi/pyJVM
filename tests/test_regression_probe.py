@@ -14,7 +14,7 @@ class Tests:
 
     def test_unsupported(self):
         match 1:
-            case 1:
+            case [1]:
                 pass
 """.strip()
         + "\n",
@@ -35,7 +35,7 @@ def test_explicit_manifest_selects_only_requested_body(tmp_path):
     from pyjvm315.regression_probe import main
     import json
     source = tmp_path / 'test_selection.py'
-    source.write_text('class Cases:\n    def test_not_selected(self):\n        match 1:\n            case 1: pass\n    def test_selected(self):\n        assert 1 == 1\n')
+    source.write_text('class Cases:\n    def test_not_selected(self):\n        match 1:\n            case [1]: pass\n    def test_selected(self):\n        assert 1 == 1\n')
     manifest = tmp_path / 'manifest.txt'
     manifest.write_text('test_selection.py::Cases.test_selected\n')
     output = tmp_path / 'report.json'

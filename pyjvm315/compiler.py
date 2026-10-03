@@ -253,6 +253,12 @@ class Compiler:
                 for child in stmt.body + stmt.orelse: visit_stmt(child)
             elif isinstance(stmt, (ast.If, ast.While)):
                 for child in stmt.body + stmt.orelse: visit_stmt(child)
+            elif isinstance(stmt, ast.Match):
+                names.update(self._assignment_expr_names(stmt.subject))
+                for case in stmt.cases:
+                    names.update(self._pattern_names(case.pattern))
+                    names.update(self._assignment_expr_names(case.guard))
+                    for child in case.body: visit_stmt(child)
             elif isinstance(stmt, ast.Try):
                 for child in stmt.body + stmt.orelse + stmt.finalbody: visit_stmt(child)
                 for handler in stmt.handlers:
@@ -478,6 +484,11 @@ class Compiler:
             elif isinstance(stmt, (ast.If, ast.While)):
                 for x in stmt.body + stmt.orelse: visit_stmt(x)
                 return
+            elif isinstance(stmt, ast.Match):
+                for case in stmt.cases:
+                    locals_.update(self._pattern_names(case.pattern))
+                    for x in case.body: visit_stmt(x)
+                return
             for child in ast.iter_child_nodes(stmt):
                 if isinstance(child, ast.stmt): visit_stmt(child)
 
@@ -613,7 +624,7 @@ class Compiler:
                     if isinstance(child, ast.stmt):
                         self._register_definitions([child], enclosing_locals,
                                                    top_level=top_level, qualname=qualname)
-                    elif isinstance(child, ast.ExceptHandler):
+                    elif isinstance(child, (ast.ExceptHandler, ast.match_case)):
                         self._register_definitions(child.body, enclosing_locals,
                                                    top_level=top_level, qualname=qualname)
 
@@ -682,7 +693,7 @@ class Compiler:
                 for child in ast.iter_child_nodes(item):
                     if isinstance(child, ast.stmt):
                         yield from self._class_method_nodes([child])
-                    elif isinstance(child, ast.ExceptHandler):
+                    elif isinstance(child, (ast.ExceptHandler, ast.match_case)):
                         yield from self._class_method_nodes(child.body)
 
 
@@ -2299,6 +2310,19 @@ class Compiler:
                     ctx = self.finally_stack[-1]; b.astore(ctx.return_slot); b.goto(ctx.return_entry)
                 else:
                     b.areturn()
+            case ast.Match(subject=subject, cases=cases):
+                self._validate_scalar_match(cases)
+                subject_slot = scope.temp()
+                self._expr(subject, b, scope); b.astore(subject_slot)
+                done = b.label()
+                for case in cases:
+                    failed = b.label()
+                    self._scalar_pattern(case.pattern, subject_slot, failed, b, scope)
+                    if case.guard is not None:
+                        self._truthy(case.guard, b, scope); b.ifeq(failed)
+                    for statement in case.body: self._stmt(statement, b, scope, in_function)
+                    b.goto(done); b.mark(failed)
+                b.mark(done)
             case ast.If(test=test, body=body, orelse=orelse):
                 else_label, end_label = b.label(), b.label()
                 self._truthy(test, b, scope)
@@ -2663,6 +2687,71 @@ class Compiler:
         b.aload(exc_slot); b.athrow()
         b.mark(done)
 
+    @staticmethod
+    def _assignment_expr_names(expression: ast.AST | None) -> set[str]:
+        names: set[str] = set()
+        class Visitor(ast.NodeVisitor):
+            def visit_NamedExpr(visitor, node):
+                names.update(Compiler._target_names(node.target))
+                visitor.visit(node.value)
+            def visit_Lambda(visitor, node):
+                for default in node.args.defaults + [x for x in node.args.kw_defaults if x is not None]:
+                    visitor.visit(default)
+        if expression is not None: Visitor().visit(expression)
+        return names
+
+    @staticmethod
+    def _pattern_names(pattern: ast.pattern) -> set[str]:
+        return {name for node in ast.walk(pattern)
+                for name in ([node.name] if isinstance(node, (ast.MatchAs, ast.MatchStar))
+                             else [node.rest] if isinstance(node, ast.MatchMapping) else [])
+                if name is not None}
+
+    @staticmethod
+    def _validate_scalar_pattern(pattern: ast.pattern) -> tuple[set[str], bool]:
+        if isinstance(pattern, (ast.MatchValue, ast.MatchSingleton)):
+            return set(), False
+        if isinstance(pattern, ast.MatchAs):
+            names, irrefutable = (set(), True) if pattern.pattern is None else Compiler._validate_scalar_pattern(pattern.pattern)
+            if pattern.name is not None:
+                if pattern.name in names: raise CompileError(f"duplicate capture in match pattern: {pattern.name}")
+                names = names | {pattern.name}
+            return names, irrefutable
+        if isinstance(pattern, ast.MatchOr):
+            alternatives = [Compiler._validate_scalar_pattern(p) for p in pattern.patterns]
+            if any(irrefutable for _, irrefutable in alternatives[:-1]):
+                raise CompileError("irrefutable OR match alternative makes remaining patterns unreachable")
+            if any(names != alternatives[0][0] for names, _ in alternatives):
+                raise CompileError("OR match alternatives bind different names")
+            return alternatives[0][0], alternatives[-1][1]
+        raise CompileError(f"Unsupported match pattern: {type(pattern).__name__}")
+
+    @staticmethod
+    def _validate_scalar_match(cases: list[ast.match_case]) -> None:
+        for index, case in enumerate(cases):
+            _, irrefutable = Compiler._validate_scalar_pattern(case.pattern)
+            if irrefutable and case.guard is None and index != len(cases) - 1:
+                raise CompileError("irrefutable match case makes remaining cases unreachable")
+
+    def _scalar_pattern(self, pattern: ast.pattern, subject_slot: int, failed, b: CodeBuilder, scope: Scope) -> None:
+        if isinstance(pattern, (ast.MatchValue, ast.MatchSingleton)):
+            b.aload(subject_slot)
+            self._expr(pattern.value if isinstance(pattern, ast.MatchValue) else ast.Constant(value=pattern.value), b, scope)
+            b.invokestatic(RUNTIME, "eq" if isinstance(pattern, ast.MatchValue) else "is_", f"({OBJ}{OBJ}){OBJ}")
+            b.invokestatic(RUNTIME, "truth", f"({OBJ})Z"); b.ifeq(failed)
+        elif isinstance(pattern, ast.MatchAs):
+            if pattern.pattern is not None: self._scalar_pattern(pattern.pattern, subject_slot, failed, b, scope)
+            if pattern.name is not None:
+                b.aload(subject_slot); self._store_name(pattern.name, b, scope)
+        elif isinstance(pattern, ast.MatchOr):
+            matched = b.label()
+            for alternative in pattern.patterns[:-1]:
+                next_alternative = b.label()
+                self._scalar_pattern(alternative, subject_slot, next_alternative, b, scope)
+                b.goto(matched); b.mark(next_alternative)
+            self._scalar_pattern(pattern.patterns[-1], subject_slot, failed, b, scope)
+            b.mark(matched)
+
     def _compare_chain(self, left: ast.expr, ops: list[ast.cmpop], comparators: list[ast.expr], b: CodeBuilder, scope: Scope) -> None:
         left_slot = scope.temp(); right_slot = scope.temp(); false = b.label(); end = b.label()
         self._expr(left, b, scope); b.astore(left_slot)
@@ -2817,6 +2906,13 @@ def _static_module_export_info(path: Path, module_name: str, is_package: bool) -
         if isinstance(stmt,(ast.If,ast.While,ast.For,ast.AsyncFor)):
             if isinstance(stmt,(ast.For,ast.AsyncFor)): bind_target(stmt.target)
             for child in stmt.body + stmt.orelse: visit(child)
+            return
+        if isinstance(stmt,ast.Match):
+            own.update(Compiler._assignment_expr_names(stmt.subject))
+            for case in stmt.cases:
+                own.update(Compiler._pattern_names(case.pattern))
+                own.update(Compiler._assignment_expr_names(case.guard))
+                for child in case.body: visit(child)
             return
         if isinstance(stmt,ast.Try):
             for child in stmt.body + stmt.orelse + stmt.finalbody: visit(child)

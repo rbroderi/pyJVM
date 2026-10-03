@@ -18,7 +18,8 @@ the selection to 3,000. There is no replacement with reduced snippets.
 | Expanded scan | Compiles | Unsupported | Compiler errors | Total |
 |---|---:|---:|---:|---:|
 | Before conditional-local fixes | 2,208 | 769 | 23 | 3,000 |
-| Current baseline | **2,247** | **753** | **0** | **3,000** |
+| Conditional-local baseline | 2,247 | 753 | 0 | 3,000 |
+| Scalar-pattern baseline | **2,373** | **627** | **0** | **3,000** |
 
 The 23 errors were JVM frame-analysis failures on conditionally bound locals.
 Non-argument slots now start with UNBOUND and checked loads preserve lexical
@@ -27,25 +28,26 @@ outputs, are recognized in the enclosing function. Another 16 bodies move from
 unsupported to compiling. Three new differential programs cover skipped branches,
 empty loops/comprehensions, exception targets and suppressed/nested with bindings.
 
-The strict execution lane separately verifies **68 selected unchanged bodies /
-85 executions**; three new bodies cover assignment expressions and unbound lexical
-variables. The project differential suite has **195 passing cases**. These runtime
-results must not be conflated with the 2,247 compiling bodies. Decorators are removed
+The strict execution lane separately verifies **108 selected unchanged bodies /
+125 executions**; three new bodies cover assignment expressions and unbound lexical
+variables. The project differential suite has **199 passing cases**. These runtime
+results must not be conflated with the 2,373 compiling bodies. Decorators are removed
 and module globals are placeholders in the compile-only probe. Shared mixins and
 source bodies do not equal dynamically discovered unittest cases.
 
 `tools/cpython_probe_3000_baseline.json` records statuses by identity and fingerprints
 the selection and pinned corpus. CI retains the original 325/358 gate, adds an
-exact-3,000 cardinality check and 2,247 compilation floor, rejects any previously
+exact-3,000 cardinality check and 2,373 compilation floor, rejects any previously
 compiling body that regresses, and rejects ERROR/SYNTAX/NO_CASES outcomes. Both
 reports are uploaded under the compatibility artifact. A compile gain cannot
 offset another case's regression.
 
-The remaining unsupported reasons are led by Match (283), exec (63), eval (51),
-compile (51), contextmanager (26), open (25) and frozendict (19). Some names depend
+The remaining unsupported reasons are led by MatchSequence (76), exec (63),
+eval (51), compile (51), MatchMapping (36), MatchClass (35), contextmanager (26),
+open (25) and frozendict (19). Some names depend
 on unsupported module/fixture machinery. Pattern matching and dynamic execution
 are major next language gaps; runtime assertions and fixtures must be expanded
-as support is added. **74.9% is compilation coverage of this selected corpus, not
+as support is added. **79.1% is compilation coverage of this selected corpus, not
 a full-CPython compatibility percentage.** Java 21 and benchmark gates are retained.
 
 ## Original 358-body probe set
@@ -143,14 +145,14 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 195 cases. A separate
-`pyjvm315.cpython_execution` lane executes 68 unchanged CPython test
-bodies (85 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 199 cases. A separate
+`pyjvm315.cpython_execution` lane executes 108 unchanged CPython test
+bodies (125 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Eight
 ClassPropertiesAndMethods bodies, six BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Four TestJointOps bodies
-run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Nine TestSet bodies run with the same set setup fixture; one TestWeirdBugs iterator body uses only assertion helpers. Explicit fixtures implement
+run with set/frozenset constructor and word/dictionary setup fixtures (eight executions). Nine TestSet bodies run with the same set setup fixture; one TestWeirdBugs iterator body and forty TestPatma scalar-pattern bodies use only assertion helpers. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
 all pass locally. Hosted CI uses actual CPython 3.15 (prerelease allowed), Java
@@ -527,3 +529,29 @@ structural mutation; normal traversal stays linear. CPython hash-table layout,
 concurrent/reentrant mutation, iterator pickling and native collection subclasses
 remain unfinished, alongside dynamic execution, namespaces and external/native
 modules. Java 21 and the benchmark gates remain unchanged.
+
+
+### Scalar-pattern tranche
+
+Literal/value, singleton identity, capture/wildcard, OR, as and guarded cases gain
+compilation. Subject evaluation is single-shot; bindings precede guards and
+comparisons retain Python equality semantics. False guards continue to later cases
+and comparison/guard errors propagate. Capture names are registered in lexical
+scopes and exports; case suites register nested definitions without rewriting AST
+identities, preserving class cells and per-creation closures.
+
+The fixed corpus gains **126 bodies**: **2,373 compiling / 627 unsupported / zero
+compiler errors**. The CI floor becomes 2,373 and the status baseline records the
+gains; all 3,000 identities and both corpus/manifest fingerprints remain unchanged.
+The historical 358-body lane stays **325 / 33 / zero errors**.
+
+Forty unchanged TestPatma bodies (000–009, 036–043, 058–074, 233–237) execute with
+the existing assertion-only fixture: **108 bodies / 125 passing executions**.
+Four differential programs cover literals/identity/captures, side effects/errors,
+closure/private/global/nonlocal scopes and finally control flow, plus multi-file
+exports: **199 passing cases**. Invalid binding/unreachable patterns are tested.
+
+Sequence/mapping/class patterns remain explicit gaps (76/36/35 unsupported bodies),
+as does suspension inside match. Dynamic execution, external modules and full
+fixture/runtime compatibility remain unfinished. Compile results are triage; Java
+21, strict JVM verification and benchmark gates remain in place.
