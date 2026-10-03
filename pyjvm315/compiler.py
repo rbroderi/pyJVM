@@ -254,8 +254,10 @@ class Compiler:
             elif isinstance(stmt, (ast.If, ast.While)):
                 for child in stmt.body + stmt.orelse: visit_stmt(child)
             elif isinstance(stmt, ast.Match):
+                names.update(self._assignment_expr_names(stmt.subject))
                 for case in stmt.cases:
                     names.update(self._pattern_names(case.pattern))
+                    names.update(self._assignment_expr_names(case.guard))
                     for child in case.body: visit_stmt(child)
             elif isinstance(stmt, ast.Try):
                 for child in stmt.body + stmt.orelse + stmt.finalbody: visit_stmt(child)
@@ -2686,6 +2688,19 @@ class Compiler:
         b.mark(done)
 
     @staticmethod
+    def _assignment_expr_names(expression: ast.AST | None) -> set[str]:
+        names: set[str] = set()
+        class Visitor(ast.NodeVisitor):
+            def visit_NamedExpr(visitor, node):
+                names.update(Compiler._target_names(node.target))
+                visitor.visit(node.value)
+            def visit_Lambda(visitor, node):
+                for default in node.args.defaults + [x for x in node.args.kw_defaults if x is not None]:
+                    visitor.visit(default)
+        if expression is not None: Visitor().visit(expression)
+        return names
+
+    @staticmethod
     def _pattern_names(pattern: ast.pattern) -> set[str]:
         return {name for node in ast.walk(pattern)
                 for name in ([node.name] if isinstance(node, (ast.MatchAs, ast.MatchStar))
@@ -2893,8 +2908,10 @@ def _static_module_export_info(path: Path, module_name: str, is_package: bool) -
             for child in stmt.body + stmt.orelse: visit(child)
             return
         if isinstance(stmt,ast.Match):
+            own.update(Compiler._assignment_expr_names(stmt.subject))
             for case in stmt.cases:
                 own.update(Compiler._pattern_names(case.pattern))
+                own.update(Compiler._assignment_expr_names(case.guard))
                 for child in case.body: visit(child)
             return
         if isinstance(stmt,ast.Try):

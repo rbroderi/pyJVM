@@ -33,3 +33,7 @@ try:
     match 1:
         case x if 1 / 0: pass
 except ZeroDivisionError: print('guard raised')
+match 0:
+    case _ if False and (skipped := 1): pass
+try: print(skipped)
+except NameError: print('skipped guard assignment stays unbound')
