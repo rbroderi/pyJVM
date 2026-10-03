@@ -45,7 +45,7 @@ EXCEPTION_TYPES = {
 }
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
-    "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars",
+    "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
 }

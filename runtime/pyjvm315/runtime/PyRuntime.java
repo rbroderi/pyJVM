@@ -229,6 +229,7 @@ public final class PyRuntime {
         }
         if(name.equals("min") || name.equals("max")) return extreme(args,kwargs,name.equals("min"));
         if(name.equals("sorted")) return sortedCall(args,kwargs);
+        if(name.equals("round"))return roundCall(args,kwargs);
         if(!kwargs.isEmpty()) throw new PyException("TypeError",name+"() does not accept keyword arguments");
         if(name.equals("map")) {
             if(args.size()<2) throw new PyException("TypeError","map() must have at least two arguments");
@@ -895,6 +896,68 @@ public final class PyRuntime {
         return Math.floor(x / y);
     }
 
+    private static Object roundCall(List<Object> args,Map<Object,Object> kwargs){
+        if(args.size()>2)throw new PyException("TypeError","round() takes at most 2 arguments");
+        Object value=args.isEmpty()?MISSING:args.get(0),digits=args.size()>1?args.get(1):null;
+        for(var entry:kwargs.entrySet()){
+            if(entry.getKey().equals("number")){
+                if(value!=MISSING)throw new PyException("TypeError","round() got multiple values for argument 'number'");
+                value=entry.getValue();
+            }else if(entry.getKey().equals("ndigits")){
+                if(args.size()>1)throw new PyException("TypeError","round() got multiple values for argument 'ndigits'");
+                digits=entry.getValue();
+            }else throw new PyException("TypeError","invalid keyword argument for round()");
+        }
+        if(value==MISSING)throw new PyException("TypeError","round() missing required argument 'number'");
+        return roundValue(value,digits);
+    }
+    private static Object roundValue(Object value,Object digits){
+        PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
+        if(owner!=null){
+            Object method=owner.lookupAttr("__round__");
+            if(method!=MISSING){
+                ArrayList<Object> arguments=new ArrayList<>();if(digits!=null)arguments.add(digits);
+                return callFunction(descriptorGet(method,value,owner),arguments,new LinkedHashMap<>());
+            }
+        }
+        if(!isIntLike(value) && !(value instanceof Double))throw new PyException("TypeError","type "+typeName(value)+" doesn't define __round__ method");
+        return roundNative(value,digits);
+    }
+    private static BigInteger roundIndex(Object digits){
+        Object value=digits;
+        PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
+        if(owner!=null){
+            Object method=owner.lookupAttr("__index__");
+            if(method==MISSING)throw new PyException("TypeError","object cannot be interpreted as an integer");
+            value=callFunction(descriptorGet(method,value,owner),new ArrayList<>(),new LinkedHashMap<>());
+        }
+        if(!isIntLike(value))throw new PyException("TypeError","__index__ must return an integer");
+        return bigInt(value);
+    }
+    private static Object roundNative(Object value,Object digits){
+        if(isIntLike(value)){
+            BigInteger integer=bigInt(value);
+            if(digits==null)return compact(integer);
+            BigInteger places=roundIndex(digits);
+            if(places.signum()>=0 || integer.signum()==0)return compact(integer);
+            int length=integer.abs().toString().length();
+            if(places.compareTo(BigInteger.valueOf(-length))<0)return 0L;
+            return compact(new java.math.BigDecimal(integer).setScale(places.intValue(),java.math.RoundingMode.HALF_EVEN).toBigIntegerExact());
+        }
+        double number=(Double)value;
+        if(digits==null){
+            if(Double.isNaN(number))throw new PyException("ValueError","cannot convert float NaN to integer");
+            if(Double.isInfinite(number))throw new PyException("OverflowError","cannot convert float infinity to integer");
+            return compact(new java.math.BigDecimal(number).setScale(0,java.math.RoundingMode.HALF_EVEN).toBigIntegerExact());
+        }
+        BigInteger places=roundIndex(digits);
+        if(!Double.isFinite(number) || places.compareTo(BigInteger.valueOf(323))>0)return number;
+        if(places.compareTo(BigInteger.valueOf(-308))<0)return Math.copySign(0.0,number);
+        double result=new java.math.BigDecimal(number).setScale(places.intValue(),java.math.RoundingMode.HALF_EVEN).doubleValue();
+        if(Double.isInfinite(result))throw new PyException("OverflowError","rounded value too large to represent");
+        return result==0?Math.copySign(0.0,number):result;
+    }
+
     // Keep namespace inspection out of shared arithmetic/collection dispatch paths.
     private static Object varsLocals(){
         ActiveFrame frame=currentLogicalFrame();
@@ -976,6 +1039,7 @@ public final class PyRuntime {
             case "list" -> names.addAll(List.of("append","extend","insert","pop","remove","clear","copy","count","index","reverse","sort"));
             case "dict" -> names.addAll(List.of("keys","values","items","get","pop","popitem","setdefault","update","clear","copy"));
             case "set" -> names.addAll(List.of("add","remove","discard","pop","clear","copy","union","intersection","difference","symmetric_difference","update","intersection_update","difference_update","symmetric_difference_update","issubset","issuperset","isdisjoint"));
+            case "int", "bool", "float" -> names.add("__round__");
             case "complex" -> names.addAll(List.of("real","imag","conjugate"));
             case "object" -> names.addAll(List.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__"));
         }
@@ -2490,7 +2554,7 @@ public final class PyRuntime {
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
-        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars").contains(name)) return builtinFunction(name);
+        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
@@ -3758,6 +3822,7 @@ public final class PyRuntime {
         return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
     }
     private static boolean builtinHasMethod(String type,String name) {
+        if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
@@ -3863,6 +3928,11 @@ public final class PyRuntime {
     }
 
     private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(name.equals("__round__")){
+            if(args.length<1 || args.length>2)throw new PyException("TypeError","__round__ takes one or two arguments");
+            if(builtin.name.equals("float")?!(args[0] instanceof Double):!isIntLike(args[0]))throw new PyException("TypeError","__round__ descriptor requires a "+builtin.name+" object");
+            return roundNative(args[0],args.length==1?null:args[1]);
+        }
         if(name.equals("__getattribute__") && builtin.name.equals("object")){requireArgs(name,args,2);return getattr(args[0],args[1]);}
         if(name.equals("__dir__")){requireArgs(name,args,1);return defaultDir(args[0]);}
         if(name.equals("__format__")){
@@ -3921,6 +3991,11 @@ public final class PyRuntime {
     }
 
     private static Object callMethod(Object obj, String name, Object[] args) {
+        if(name.equals("__round__") && (obj instanceof PyInstance || isIntLike(obj) || obj instanceof Double)){
+            if(obj instanceof PyInstance)return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
+            if(args.length>1)throw new PyException("TypeError","__round__ takes at most one argument");
+            return roundValue(obj,args.length==0?null:args[0]);
+        }
         if(name.equals("__dir__") && !(obj instanceof PyBuiltinType) && !(obj instanceof PyClass)){
             if(obj instanceof PyInstance)return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
             requireArgs(name,args,0);return defaultDir(obj);
@@ -4309,6 +4384,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__dir__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__format__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof String && name.equals("__mod__"))return new BuiltinBoundMethod(obj,name);

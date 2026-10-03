@@ -81,8 +81,9 @@ The same five-file, 358-case probe now reports:
 | Super | 319 | 39 | 0 |
 | Format | 320 | 38 | 0 |
 | Introspection | 323 | 35 | 0 |
+| Round | 324 | 34 | 0 |
 
-Compile coverage increased from 34.9% to 90.2% (+198 cases; +3 this tranche). The probe now
+Compile coverage increased from 34.9% to 90.5% (+199 cases; +1 this tranche). The probe now
 attempts local classes rather than pre-rejecting them. Neither passing compilation
 nor neutralized external imports establish that a CPython test passes at runtime.
 
@@ -96,12 +97,12 @@ identities. The two original unexpected compiler errors are eliminated.
 
 ### Executable evidence
 
-The focused differential corpus is now 180 cases. A separate
-`pyjvm315.cpython_execution` lane executes 50 unchanged CPython test
-bodies (63 executions): shared BaseBytesTest bodies run with bytes and bytearray,
+The focused differential corpus is now 183 cases. A separate
+`pyjvm315.cpython_execution` lane executes 51 unchanged CPython test
+bodies (64 executions): shared BaseBytesTest bodies run with bytes and bytearray,
 while seven ByteArrayTest bodies use only bytearray. Five ComplexTest bodies use
 a numeric fixture with assertion helpers and no substituted module globals. Eight
-ClassPropertiesAndMethods bodies, five BuiltinTest/TestSorted bodies and twelve
+ClassPropertiesAndMethods bodies, six BuiltinTest/TestSorted bodies and twelve
 TestSuper bodies use an objects fixture with assertions only. Explicit fixtures implement
 `type2test`, `assertEqual`, `assertNotEqual`, `assertIs`, and callable/context-manager `assertRaises`. It uses no placeholder imports or None
 bindings, and rejects a failing CPython reference run. The initial executions
@@ -128,11 +129,11 @@ copy, weakref, binascii and CPython native test modules such as `_testcapi`.
 The next tranches should implement these semantics with executable differential
 cases, expand the real execution manifest and fixtures, then broaden coverage
 beyond the current five probe files. Native-extension tests need an explicit
-support strategy. The remaining 35 cases remain visible as unsupported; no
+support strategy. The remaining 34 cases remain visible as unsupported; no
 placeholder implementation or skip is counted as full compatibility.
 
-Compiler errors and compilation coverage below 323 now fail the pinned probe
-CI job (`--fail-on-error --min-compiles 323`). The old 0.31
+Compiler errors and compilation coverage below 324 now fail the pinned probe
+CI job (`--fail-on-error --min-compiles 324`). The old 0.31
 priority list above remains a historical record, not the current work order.
 
 
@@ -393,3 +394,24 @@ zero-argument inspection, live module dictionaries and readonly/live class
 mapping views raise explicit NotImplementedError. Existing dynamic execution,
 module subclasses, native extensions and full-suite gaps remain visible. The CI
 compile floor rises to 323; Java 21 and the benchmark regression gates remain.
+
+
+### Round protocol tranche
+
+The fixed compile probe reaches **324/358 (90.5%)**, **34 unsupported** and **zero
+compiler errors**. `ClassPropertiesAndMethods.test_special_method_lookup` now
+compiles; its external module/protocol dependencies remain unfinished, so this is
+not a claim that its complete body passes at runtime. The CI compile floor is 324.
+
+Three differential programs bring the corpus to **183 passing cases**. They cover
+custom/inherited/described/metaclass round dispatch, instance-attribute bypass,
+keyword binding, native descriptors, arbitrary-precision integer ties, binary64
+rounding boundaries, signed zero, nonfinite inputs, overflow and index descriptors.
+The full unchanged `BuiltinTest.test_round` body now passes with the existing
+assertion-only fixture: **51 bodies / 64 executions**. No test statements or module
+imports are replaced, and decorated `test_round_large` remains outside the strict
+manifest; its large integral-float boundary is covered by differential inputs.
+
+Native numeric subclasses, exact diagnostic parity and allocation-heavy extremes
+remain unfinished. This tranche does not complete CPython compatibility; dynamic
+execution, namespace views, external modules and native extensions remain visible.

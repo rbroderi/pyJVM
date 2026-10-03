@@ -59,3 +59,6 @@ Lib/test/test_descr.py::ClassPropertiesAndMethods.test_supers objects
 
 # Property introspection and descriptor-based sequence iteration; unchanged body.
 Lib/test/test_descr.py::ClassPropertiesAndMethods.test_properties objects
+
+# Numeric rounding and generic protocol delegation; unchanged body.
+Lib/test/test_builtin.py::BuiltinTest.test_round objects
