@@ -645,8 +645,8 @@ control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **195 passing cases**. A new strict execution
-lane runs **85 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **199 passing cases**. A new strict execution
+lane runs **125 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -963,16 +963,16 @@ its first 21 bodies; all preceding files contribute every discoverable body.
 
 | Evidence | Current result |
 |---|---:|
-| Selected bodies compiling independently | **2,247 / 3,000 (74.9%)** |
-| Explicitly unsupported selected bodies | **753** |
+| Selected bodies compiling independently | **2,373 / 3,000 (79.1%)** |
+| Explicitly unsupported selected bodies | **627** |
 | Unexpected compiler errors | **0** |
-| Unchanged CPython bodies verified at runtime | **68 bodies / 85 executions** |
-| Project differential cases | **195 passing** |
+| Unchanged CPython bodies verified at runtime | **108 bodies / 125 executions** |
+| Project differential cases | **199 passing** |
 
 Compilation neutralizes module-global dependencies and removes case decorators;
 it does not execute fixtures, imports or assertions. These are selected source
 bodies, including mixins, rather than CPython's dynamically discovered execution
-cases. **The 74.9% figure is compilation coverage of this selection, not overall
+cases. **The 79.1% figure is compilation coverage of this selection, not overall
 CPython compatibility.** The strict runtime lane is a separate, much smaller set.
 
 The first expanded scan found 2,208 compiling, 769 unsupported and 23 compiler
@@ -983,7 +983,7 @@ initialization does not invent a Python value. Nested/local-class closure work
 and Java 21 targeting remain intact.
 
 CI checks exactly 3,000 unique pinned identities, corpus/manifest fingerprints,
-zero compiler errors and a 2,247 compilation floor. A per-case baseline also rejects
+zero compiler errors and a 2,373 compilation floor. A per-case baseline also rejects
 any previously compiling body that regresses, even if another body improves. The
 legacy 358-body probe remains at 325 compiling / 33 unsupported, with its existing
 gate retained. New runtime bodies cover assignment expressions and lexical
@@ -996,11 +996,36 @@ python -m pyjvm315.regression_probe \
   --cpython-root /path/to/cpython \
   --manifest tools/cpython_probe_3000_manifest.txt \
   --baseline tools/cpython_probe_3000_baseline.json \
-  --expect-cases 3000 --min-compiles 2247 --fail-on-error \
+  --expect-cases 3000 --min-compiles 2373 --fail-on-error \
   --output artifacts/cpython-regression-probe-3000.json
 ```
 
-Pattern matching (283 unsupported bodies) is the largest next language gap. Dynamic
-execution (`exec`, `eval`, `compile`), external modules and other missing builtins
-also remain. Baseline updates must record deliberate progress or corpus changes;
+Sequence patterns (76 unsupported bodies), mapping patterns (36) and class
+patterns (35) remain. Dynamic execution (`exec`, `eval`, `compile`), external
+modules and other missing builtins also remain. Baseline updates must record deliberate progress or corpus changes;
 they must not hide regressions. The benchmark regression gates remain enabled.
+
+
+## Scalar pattern matching
+
+`match` now supports literal/value patterns, singleton identity (`None`, `True`,
+`False`), capture/wildcard patterns, OR alternatives, nested `as` bindings and
+guards. The subject is evaluated once. Captures are installed before the guard;
+a false guard moves to the next case, while comparison/guard exceptions propagate.
+Literal comparison follows Python equality; singleton patterns use identity.
+
+Capture names participate in module/class/function/global/nonlocal scopes and
+module exports. Case-local function/class definitions retain per-creation closures
+and class cells. Existing return/break/continue cleanup applies to case bodies.
+Invalid OR binding sets, duplicate captures and unreachable irrefutable cases are
+rejected. Sequence, mapping and class patterns, plus suspension inside match, are
+explicitly unsupported in this tranche.
+
+The 3,000-body corpus gains **126 compiling bodies**: **2,373 compiling / 627
+unsupported / zero compiler errors**. CI raises the floor and per-case baseline
+without changing any selected identity. Forty complete unchanged TestPatma bodies
+join the strict lane, with no fixture changes: **108 bodies / 125 passing executions**.
+Four differential programs bring the project corpus to **199 passing cases**,
+including side effects, closure/private/global/nonlocal scopes, cleanup and exports.
+Compilation coverage is distinct from runtime compatibility. Java 21 and the
+benchmark gates remain enabled.
