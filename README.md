@@ -645,8 +645,8 @@ control-flow suites. The tranche also adds ord/chr, lazy map, first-class
 builtin calls, exception hierarchy coverage, unrestricted call arity, expression
 bases/metaclasses and JVM modified UTF-8 constants.
 
-The focused differential suite is **186 passing cases**. A new strict execution
-lane runs **72 selected CPython test executions** using unchanged test bodies and
+The focused differential suite is **189 passing cases**. A new strict execution
+lane runs **77 selected CPython test executions** using unchanged test bodies and
 explicit fixtures, without placeholder imports. CI runs those against a Python
 3.15 reference and Java 21. Compile coverage remains a triage measure, separate
 from runtime test success. See [CPYTHON_REGRESSION_PROBE.md](CPYTHON_REGRESSION_PROBE.md)
@@ -906,3 +906,24 @@ probe reaches **325/358 (90.8%)**, **33 unsupported** and zero compiler errors.
 The class-assignment case gains compilation only; native collection subclasses,
 CPython memory/layout behavior, complete mutation/iterator/diagnostic parity and
 external modules remain unfinished. Java 21 remains the sole target.
+
+
+## Mutable set augmentation
+
+Mutable set `|=`, `&=`, `^=` and `-=` preserve object identity, so aliases and
+attribute/subscript targets observe the mutation. Frozen operands retain immutable
+result behavior. Augmented dispatch binds type-level in-place descriptors and
+falls back through ordinary/reflected operations when they return NotImplemented;
+instance attributes do not override the in-place protocol. Native in-place set
+methods return NotImplemented for incompatible operands.
+
+`difference_update` now preserves removals made before an iterable callback or
+unhashable member fails. Operations between native sets reuse cached member hashes;
+mutation commits preserve those keys instead of calling member hashes again.
+
+Three differential programs bring the corpus to **189 passing cases**. Five full,
+unchanged CPython mutable-set bodies join the execution lane: **60 bodies / 77
+passing executions**. The fixed compile probe remains **325/358**, 33 unsupported
+and zero compiler errors. This improves runtime semantics without claiming new
+compile coverage. Native collection subclasses, full mutation/iterator/diagnostic
+parity, dynamic execution and external/native modules remain unfinished.
