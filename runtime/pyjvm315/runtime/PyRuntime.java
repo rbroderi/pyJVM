@@ -82,6 +82,7 @@ public final class PyRuntime {
         if (value instanceof PyTuple) return "tuple";
         if (value instanceof List) return "list";
         if (value instanceof Map) return "dict";
+        if(value instanceof PyFrozenSet)return "frozenset";
         if (value instanceof Set) return "set";
         if (value instanceof PyRange) return "range";
         if (value instanceof PyFunction) return "function";
@@ -439,6 +440,7 @@ public final class PyRuntime {
         return bytes;
     }
     public static Object hash(Object value) {
+        if(value instanceof PyFrozenSet frozen)return frozen.pythonHash();
         if(isIntLike(value))return numericHash(bigInt(value));
         if(value instanceof PyComplex z) {
             long real=Double.isNaN(z.real)?(Long)id(z):((Number)hash(z.real)).longValue();
@@ -521,6 +523,7 @@ public final class PyRuntime {
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}
         }
         if (value instanceof List<?> xs) return seqRepr(xs, "[", "]");
+        if(value instanceof PyFrozenSet frozen)return frozen.isEmpty()?"frozenset()":"frozenset("+seqRepr(frozen,"{","}")+")";
         if (value instanceof Set<?> xs) {
             if (xs.isEmpty()) return "set()";
             return seqRepr(xs, "{", "}");
@@ -824,6 +827,7 @@ public final class PyRuntime {
     }
 
     public static Object sub(Object a, Object b) {
+        if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"difference");
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__sub__","__rsub__",false);if(result!=NOT_IMPLEMENTED)return result;}
         if(a instanceof PyComplex x){if(b instanceof PyComplex y)return new PyComplex(x.real-y.real,x.imag-y.imag);return new PyComplex(x.real-complexReal(b,false),x.imag);}
         if(b instanceof PyComplex y)return new PyComplex(complexReal(a,false)-y.real,-y.imag);
@@ -1039,6 +1043,7 @@ public final class PyRuntime {
             case "list" -> names.addAll(List.of("append","extend","insert","pop","remove","clear","copy","count","index","reverse","sort"));
             case "dict" -> names.addAll(List.of("keys","values","items","get","pop","popitem","setdefault","update","clear","copy"));
             case "set" -> names.addAll(List.of("add","remove","discard","pop","clear","copy","union","intersection","difference","symmetric_difference","update","intersection_update","difference_update","symmetric_difference_update","issubset","issuperset","isdisjoint"));
+            case "frozenset" -> names.addAll(List.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__"));
             case "int", "bool", "float" -> names.add("__round__");
             case "complex" -> names.addAll(List.of("real","imag","conjugate"));
             case "object" -> names.addAll(List.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__"));
@@ -1458,9 +1463,9 @@ public final class PyRuntime {
         }
         return Math.pow(number(a), number(b));
     }
-    public static Object bitAnd(Object a, Object b) { return compact(bigInt(a).and(bigInt(b))); }
-    public static Object bitOr(Object a, Object b) { return compact(bigInt(a).or(bigInt(b))); }
-    public static Object bitXor(Object a, Object b) { return compact(bigInt(a).xor(bigInt(b))); }
+    public static Object bitAnd(Object a, Object b) { if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
+    public static Object bitOr(Object a, Object b) { if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");return compact(bigInt(a).or(bigInt(b))); }
+    public static Object bitXor(Object a, Object b) { if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
     public static Object lshift(Object a, Object b) {
         BigInteger n = bigInt(b); if (n.signum() < 0) throw new ArithmeticException("negative shift count");
         if (n.bitLength() > 31) throw new ArithmeticException("shift count too large");
@@ -1536,6 +1541,7 @@ public final class PyRuntime {
             Object result=binarySpecial(a,b,left,right,true);
             if(result!=NOT_IMPLEMENTED)return result;
         }
+        if(a instanceof Set<?> x && b instanceof Set<?> y)return switch(fallback){case -2->x.size()<y.size() && y.containsAll(x);case -1->y.containsAll(x);case 1->x.containsAll(y);default->x.size()>y.size() && x.containsAll(y);};
         List<?> xs=a instanceof PyTuple tuple?tuple.items:a instanceof List<?> list?list:null;
         List<?> ys=b instanceof PyTuple tuple?tuple.items:b instanceof List<?> list?list:null;
         if(xs!=null && ys!=null && (a instanceof PyTuple)==(b instanceof PyTuple)) {
@@ -1699,12 +1705,84 @@ public final class PyRuntime {
     }
     public static Object dictFrom(Object value) { Object out=dict0(); dictUpdate(out,value); return out; }
 
-    public static Object set0() { return new LinkedHashSet<Object>(); }
+    private static final class SetKey {
+        final Object value;final long hash;
+        SetKey(Object value){this.value=value;hash=((Number)PyRuntime.hash(value)).longValue();}
+        @Override public int hashCode(){return Long.hashCode(hash);}
+        @Override public boolean equals(Object other){return other instanceof SetKey key && hash==key.hash && (value==key.value || truth(eq(value,key.value)));}
+    }
+    private static class PySet extends java.util.AbstractSet<Object> {
+        final LinkedHashMap<SetKey,Object> entries=new LinkedHashMap<>();
+        PySet(){}
+        PySet(Object values){if(values instanceof PySet set)entries.putAll(set.entries);else for(Object value:iterable(values))entries.putIfAbsent(new SetKey(value),value);}
+        @Override public int size(){return entries.size();}
+        @Override public Iterator<Object> iterator(){return entries.values().iterator();}
+        private SetKey lookupKey(Object value){return new SetKey(value instanceof Set<?> && !(value instanceof PyFrozenSet)?new PyFrozenSet(value):value);}
+        @Override public boolean contains(Object value){return entries.containsKey(lookupKey(value));}
+        @Override public boolean add(Object value){SetKey key=new SetKey(value);if(entries.containsKey(key))return false;entries.put(key,value);return true;}
+        @Override public boolean remove(Object value){SetKey key=lookupKey(value);if(!entries.containsKey(key))return false;entries.remove(key);return true;}
+        @Override public void clear(){entries.clear();}
+        @Override public int hashCode(){throw new PyException("TypeError","unhashable type: 'set'");}
+    }
+    private static final class PyFrozenSet extends PySet {
+        Long cachedHash;
+        PyFrozenSet(Object values){super(values);}
+        long pythonHash(){
+            if(cachedHash!=null)return cachedHash;long result=0;
+            for(SetKey key:entries.keySet())result^=((key.hash^89869747L)^(key.hash<<16))*3644798167L;
+            result^=(size()+1L)*1927868237L;result^=(result>>>11)^(result>>>25);result=result*69069L+907133923L;
+            cachedHash=result==-1?590923713L:result;return cachedHash;
+        }
+        @Override public int hashCode(){return Long.hashCode(pythonHash());}
+        @Override public boolean add(Object value){throw new PyException("AttributeError","frozenset has no attribute 'add'");}
+        @Override public boolean remove(Object value){throw new PyException("AttributeError","frozenset has no attribute 'remove'");}
+        @Override public void clear(){throw new PyException("AttributeError","frozenset has no attribute 'clear'");}
+        @Override public Iterator<Object> iterator(){return Collections.unmodifiableCollection(entries.values()).iterator();}
+    }
+    private static boolean setMethodKnown(String name,boolean frozen){
+        return Set.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__").contains(name)
+            || !frozen && Set.of("add","remove","discard","clear","pop","update","intersection_update","difference_update","symmetric_difference_update").contains(name);
+    }
+    private static Object setAlgebra(Object left,Object right,String operation){
+        PySet a=new PySet(left),b=new PySet(right),result=new PySet();
+        if(operation.equals("union")){result.entries.putAll(a.entries);for(var entry:b.entries.entrySet())result.entries.putIfAbsent(entry.getKey(),entry.getValue());}
+        else {
+            for(var entry:a.entries.entrySet())if(b.entries.containsKey(entry.getKey())==operation.equals("intersection"))result.entries.put(entry.getKey(),entry.getValue());
+            if(operation.equals("symmetric_difference"))for(var entry:b.entries.entrySet())if(!a.entries.containsKey(entry.getKey()))result.entries.put(entry.getKey(),entry.getValue());
+        }
+        return left instanceof PyFrozenSet?new PyFrozenSet(result):result;
+    }
+    private static Object setMethod(Set<?> raw,String name,Object[] args){
+        boolean frozen=raw instanceof PyFrozenSet;
+        if(!setMethodKnown(name,frozen))throw new PyException("AttributeError",typeName(raw)+" has no attribute '"+name+"'");
+        @SuppressWarnings("unchecked") Set<Object> set=(Set<Object>)raw;
+        switch(name){
+            case "copy":requireArgs(name,args,0);return frozen?raw:new PySet(raw);
+            case "__len__":requireArgs(name,args,0);return (long)set.size();
+            case "__iter__":requireArgs(name,args,0);return set.iterator();
+            case "__contains__":requireArgs(name,args,1);return set.contains(args[0]);
+            case "add":requireArgs(name,args,1);set.add(args[0]);return null;
+            case "remove":case "discard":requireArgs(name,args,1);boolean removed=set.remove(args[0]);if(!removed && name.equals("remove"))throw new PyException("KeyError",args[0]);return null;
+            case "update":for(Object argument:args)for(Object value:iterable(argument))set.add(value);return null;
+            case "clear":requireArgs(name,args,0);set.clear();return null;
+            case "pop":requireArgs(name,args,0);if(set.isEmpty())throw new PyException("KeyError","pop from an empty set");Iterator<Object> iterator=set.iterator();Object value=iterator.next();iterator.remove();return value;
+            case "issubset":case "issuperset":case "isdisjoint":requireArgs(name,args,1);PySet other=new PySet(args[0]);return name.equals("issubset")?other.containsAll(set):name.equals("issuperset")?set.containsAll(other):Collections.disjoint(set,other);
+            default:
+                String operation=name.equals("update")?"union":name.endsWith("_update")?name.substring(0,name.length()-7):name;
+                if(operation.equals("symmetric_difference"))requireArgs(name,args,1);
+                boolean mutate=name.equals("update") || name.endsWith("_update");
+                Object result=new PySet(set);for(Object argument:args)result=setAlgebra(result,argument,operation);
+                if(mutate){set.clear();set.addAll((Set<?>)result);return null;}
+                return frozen?new PyFrozenSet(result):result;
+        }
+    }
+
+    public static Object set0() { return new PySet(); }
     @SuppressWarnings("unchecked")
     public static void setAdd(Object set, Object value) { ((Set<Object>) set).add(value); }
     @SuppressWarnings("unchecked")
     public static void setUpdate(Object set, Object values) { for(Object x:iterable(values)) ((Set<Object>)set).add(x); }
-    public static Object setFrom(Object values) { LinkedHashSet<Object> out=new LinkedHashSet<>(); for(Object x:iterable(values)) out.add(x); return out; }
+    public static Object setFrom(Object values) { return new PySet(values); }
 
     public static Object len(Object value) {
         long n;
@@ -2555,7 +2633,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","range","type","map","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","range","type","map","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -2930,6 +3008,7 @@ public final class PyRuntime {
                 case "tuple" -> args.isEmpty()?tuple0():tupleFrom(value);
                 case "dict" -> args.isEmpty()?dict0():dictFrom(value);
                 case "set" -> args.isEmpty()?set0():setFrom(value);
+                case "frozenset" -> args.isEmpty()?new PyFrozenSet(List.of()):value instanceof PyFrozenSet?value:new PyFrozenSet(value);
                 case "bytes" -> args.isEmpty()?bytes0():bytes1(value);
                 case "bytearray" -> args.isEmpty()?bytearray0():bytearray1(value);
                 default -> throw new PyException("TypeError","unsupported builtin constructor "+type.name);
@@ -3822,6 +3901,7 @@ public final class PyRuntime {
         return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
     }
     private static boolean builtinHasMethod(String type,String name) {
+        if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
@@ -3928,6 +4008,10 @@ public final class PyRuntime {
     }
 
     private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if((builtin.name.equals("set") || builtin.name.equals("frozenset")) && setMethodKnown(name,builtin.name.equals("frozenset"))){
+            if(args.length==0 || !(args[0] instanceof Set<?> set) || builtin.name.equals("frozenset")!=(args[0] instanceof PyFrozenSet))throw new PyException("TypeError","set descriptor requires a "+builtin.name+" object");
+            return setMethod(set,name,Arrays.copyOfRange(args,1,args.length));
+        }
         if(name.equals("__round__")){
             if(args.length<1 || args.length>2)throw new PyException("TypeError","__round__ takes one or two arguments");
             if(builtin.name.equals("float")?!(args[0] instanceof Double):!isIntLike(args[0]))throw new PyException("TypeError","__round__ descriptor requires a "+builtin.name+" object");
@@ -4230,17 +4314,7 @@ public final class PyRuntime {
                 default -> throw new PyException("AttributeError","'dict' object has no attribute '"+name+"'");
             };
         }
-        if (obj instanceof Set<?> raw) {
-            @SuppressWarnings("unchecked") Set<Object> set=(Set<Object>)raw;
-            return switch(name) {
-                case "add" -> { requireArgs(name,args,1); set.add(args[0]); yield null; }
-                case "discard" -> { requireArgs(name,args,1); set.remove(args[0]); yield null; }
-                case "remove" -> { requireArgs(name,args,1); if(!set.remove(args[0])) throw new PyException("KeyError",args[0]); yield null; }
-                case "clear" -> { requireArgs(name,args,0); set.clear(); yield null; }
-                case "copy" -> { requireArgs(name,args,0); yield new LinkedHashSet<Object>(set); }
-                default -> throw new PyException("AttributeError","'set' object has no attribute '"+name+"'");
-            };
-        }
+        if(obj instanceof Set<?> set)return setMethod(set,name,args);
         if (!(obj instanceof PyInstance instance)) throw typeError("method call on non-instance", obj);
         if(instance.fields.containsKey(name))return callFunction(getattr(instance,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         PyMethod method = instance.cls.lookupMethod(name);
@@ -4383,6 +4457,7 @@ public final class PyRuntime {
             }
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
+        if(obj instanceof Set<?> && setMethodKnown(name,obj instanceof PyFrozenSet))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__dir__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
@@ -4626,7 +4701,8 @@ public final class PyRuntime {
                 case "list" -> obj instanceof List<?>;
                 case "tuple" -> obj instanceof PyTuple;
                 case "dict" -> obj instanceof Map<?,?>;
-                case "set" -> obj instanceof Set<?>;
+                case "set" -> obj instanceof Set<?> && !(obj instanceof PyFrozenSet);
+                case "frozenset" -> obj instanceof PyFrozenSet;
                 case "range" -> obj instanceof PyRange;
                 case "map" -> obj instanceof PyMap;
                 case "slice" -> obj instanceof PySlice;

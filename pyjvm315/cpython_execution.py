@@ -80,13 +80,25 @@ def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
 
 
 def fixture_source(method: ast.FunctionDef, variant: str) -> str:
-    if variant not in ('bytes', 'bytearray', 'numeric', 'objects'):
+    if variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset'):
         raise ValueError("unsupported fixture variant")
     fixtures = ast.parse(FIXTURE).body
     fixture = fixtures[0]
     if variant in ('bytes', 'bytearray'):
         fixture.body.insert(0, ast.Assign(targets=[ast.Name(id='type2test', ctx=ast.Store())],
                                           value=ast.Name(id=variant, ctx=ast.Load())))
+    if variant in ('set', 'frozenset'):
+        setup = ast.parse(f"""
+thetype = {variant}
+basetype = {variant}
+def __init__(self):
+    self.word = 'simsalabim'
+    self.otherword = 'madagascar'
+    self.letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    self.s = self.thetype(self.word)
+    self.d = {{letter: None for letter in self.word}}
+""").body
+        fixture.body.extend(setup)
     fixture.body.append(copy.deepcopy(method))
     driver = ast.parse(f'Fixture().{method.name}()\nprint("CPYTHON CASE PASSED")').body
     return ast.unparse(ast.fix_missing_locations(ast.Module(body=[*fixtures, *driver], type_ignores=[]))) + '\n'
@@ -108,7 +120,7 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
                 raise ValueError("execution manifest entry requires a case and optional fixture variant")
             relative, qualified = fields[0].split('::', 1)
             variants = ('bytes', 'bytearray') if len(fields) == 1 else (fields[1],)
-            if any(variant not in ('bytes', 'bytearray', 'numeric', 'objects') for variant in variants):
+            if any(variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset') for variant in variants):
                 raise ValueError("unsupported fixture variant")
             method = extract_case(root / relative, qualified)
             for variant in variants:
