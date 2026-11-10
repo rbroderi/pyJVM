@@ -47,5 +47,7 @@ final class PyRange implements Iterable<Object> {
             }
         };
     }
-    @Override public String toString() { return "range(" + start + ", " + stop + ", " + step + ")"; }
+    @Override public String toString() {
+        return "range(" + start + ", " + stop + (step.equals(BigInteger.ONE) ? "" : ", " + step) + ")";
+    }
 }

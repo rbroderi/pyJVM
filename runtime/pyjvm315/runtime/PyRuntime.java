@@ -1484,6 +1484,11 @@ public final class PyRuntime {
         int i = asIndex(key);
         if (value instanceof List<?> xs) return xs.get(normalizeIndex(i, xs.size()));
         if (value instanceof PyTuple t) return t.items.get(normalizeIndex(i, t.items.size()));
+        if (value instanceof PyRange r) {
+            BigInteger n = r.length();
+            if (n.bitLength() > 31) throw new PyException("OverflowError", "range index too large");
+            return compact(r.start.add(r.step.multiply(BigInteger.valueOf(normalizeIndex(i, n.intValue())))));
+        }
         if (value instanceof String s) {
             int count = s.codePointCount(0, s.length());
             int p = normalizeIndex(i, count);

@@ -166,3 +166,25 @@ def test_execution_fixture_assert_notin_rejects_present_items():
     assert result.returncode != 0
     assert 'AssertionError' in result.stderr
     assert 'CPYTHON CASE PASSED' not in result.stdout
+
+
+import pytest
+
+
+@pytest.mark.parametrize("source,message", [
+    ("match x:\n    case [a, a]: pass\n", "multiple assignments to name 'a' in pattern"),
+    ("match x:\n    case a | b: pass\n", "name capture 'a' makes remaining patterns unreachable"),
+    ("match x:\n    case (1, a) | (a, 1) | (2, b): pass\n", "alternative patterns bind different names"),
+    ("match x:\n    case _: pass\n    case 1: pass\n", "wildcard makes remaining patterns unreachable"),
+    ("match x:\n    case y: pass\n    case 1: pass\n", "name capture 'y' makes remaining patterns unreachable"),
+    ("match x:\n    case _ | 1: pass\n    case 2: pass\n", "wildcard makes remaining patterns unreachable"),
+    ("match x:\n    case {'a': 1, 'a': 2}: pass\n", "mapping pattern checks duplicate key ('a')"),
+    ("match x:\n    case C(a=1, a=2): pass\n", "attribute name repeated in class pattern: a"),
+])
+def test_match_binding_errors(source, message):
+    with pytest.raises(SyntaxError, match=message.replace("(", r"\(").replace(")", r"\)")):
+        compile_source("x = 1\nC = int\n" + source)
+
+
+def test_irrefutable_with_guard_is_not_unreachable():
+    compile_source("x = 1\nmatch x:\n    case y if y > 0: pass\n    case _: pass\n")

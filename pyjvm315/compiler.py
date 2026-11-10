@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
 from .versions import feature_version
+from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
 
 
 def _preserve_codegen_state(compile_method):
@@ -27,6 +28,7 @@ def _preserve_codegen_state(compile_method):
 
 OBJ = "Ljava/lang/Object;"
 RUNTIME = "pyjvm315/runtime/PyRuntime"
+PATMA_RUNTIME = "pyjvm315/runtime/PatternMatch"
 
 
 class CompileError(SyntaxError):
@@ -199,6 +201,7 @@ class Compiler:
     def compile(self, source: str, filename: str = "<string>") -> bytes:
         self.filename = filename
         tree = ast.parse(source, filename=filename, mode="exec", feature_version=feature_version())
+        tree = lower_match(tree)
         self.deleted_names = {name for n in ast.walk(tree) if isinstance(n, ast.Delete)
                               for t in n.targets for name in self._target_names(t)}
         self.deleted_names.update(n.name for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name)
@@ -2518,6 +2521,10 @@ class Compiler:
                 (b.aconst_null() if sep is None else self._expr(sep, b, scope))
                 (b.aconst_null() if endv is None else self._expr(endv, b, scope))
                 b.invokestatic(RUNTIME, "printArgs", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+            case ast.Call(func=ast.Name(id=pm_name), args=pm_args, keywords=[]) if (
+                    pm_name.startswith(PATMA_PREFIX) and PATMA_HELPERS.get(pm_name[len(PATMA_PREFIX):]) == len(pm_args)):
+                for pm_arg in pm_args: self._expr(pm_arg, b, scope)
+                b.invokestatic(PATMA_RUNTIME, pm_name[len(PATMA_PREFIX):], f"({OBJ * len(pm_args)}){OBJ}")
             case ast.Call(func=ast.Name(id="len"), args=[arg], keywords=[]):
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "len", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"abs", "bool", "str", "repr", "int", "float", "sum", "min", "max", "any", "all"}:
