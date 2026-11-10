@@ -1,5 +1,6 @@
 package pyjvm315.runtime;
 
+import static pyjvm315.runtime.PyRuntime.*;
 import java.math.BigInteger;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;

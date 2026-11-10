@@ -45,7 +45,7 @@ def extract(text, name):
 
 def main(names):
     text = SRC.read_text()
-    header = text[:text.index("public final class PyRuntime")]
+    header = text[:text.index("public final class PyRuntime")].replace("import java.math", "import static pyjvm315.runtime.PyRuntime.*;\nimport java.math", 1)
     for name in names:
         s, e = extract(text, name)
         body = text[s:e]
@@ -53,7 +53,9 @@ def main(names):
         lines = [l[4:] if l.startswith("    ") else l for l in body.splitlines()]
         decl = re.sub(r"^(public |private |protected )?(static )?", "", lines[0])
         lines[0] = decl
-        (DIR / f"{name}.java").write_text(header + "\n".join(lines) + "\n")
+        out = header + "\n".join(lines) + "\n"
+        out = re.sub(r"\bprivate (?!static final class)", "", out)
+        (DIR / f"{name}.java").write_text(out)
         print("extracted", name)
     SRC.write_text(text)
 

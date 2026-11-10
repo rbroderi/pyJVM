@@ -20,10 +20,10 @@ import java.util.Objects;
 import java.util.Set;
 
 public final class PyRuntime {
-    private PyRuntime() {}
+    PyRuntime() {}
 
-    private static final BigInteger LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE);
-    private static final BigInteger LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE);
+    static final BigInteger LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE);
+    static final BigInteger LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE);
 
     // ---------- Python integer representation ----------
     // Fast path: java.lang.Long. Slow path: java.math.BigInteger.
@@ -36,25 +36,25 @@ public final class PyRuntime {
         }
     }
 
-    private static Object compact(BigInteger value) {
+    static Object compact(BigInteger value) {
         if (value.compareTo(LONG_MIN) >= 0 && value.compareTo(LONG_MAX) <= 0) {
             return value.longValue();
         }
         return value;
     }
 
-    private static boolean isIntLike(Object value) {
+    static boolean isIntLike(Object value) {
         return value instanceof Long || value instanceof BigInteger || value instanceof Boolean;
     }
 
-    private static BigInteger bigInt(Object value) {
+    static BigInteger bigInt(Object value) {
         if (value instanceof BigInteger n) return n;
         if (value instanceof Long n) return BigInteger.valueOf(n);
         if (value instanceof Boolean b) return b ? BigInteger.ONE : BigInteger.ZERO;
         throw typeError("integer operand required", value);
     }
 
-    private static double number(Object value) {
+    static double number(Object value) {
         if (value instanceof Long n) return n.doubleValue();
         if (value instanceof BigInteger n) return n.doubleValue();
         if (value instanceof Double n) return n;
@@ -62,12 +62,11 @@ public final class PyRuntime {
         throw typeError("numeric operand required", value);
     }
 
-    private static RuntimeException typeError(String message, Object value) {
+    static RuntimeException typeError(String message, Object value) {
         return new IllegalArgumentException(message + ": " + typeName(value));
     }
 
-    private static final class PyObject {}
-    private static String typeName(Object value) {
+    static String typeName(Object value) {
         if(value instanceof PyObject)return "object";
         if(value instanceof PyCell)return "cell";
         if (value == null) return "NoneType";
@@ -116,13 +115,7 @@ public final class PyRuntime {
         return new PyModuleSpec((String)nameObj,(String)originObj,(String)parentObj,(Boolean)packageObj,loaderObj);
     }
 
-    private static final LinkedHashMap<String,PyModule> MODULE_CACHE = new LinkedHashMap<>();
-    public static final class PyModule {
-        final String name, className;
-        final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
-        PyModule(String name,String className){this.name=name;this.className=className;}
-        @Override public String toString(){return "<module '"+name+"'>";}
-    }
+    static final LinkedHashMap<String,PyModule> MODULE_CACHE = new LinkedHashMap<>();
     public static Object importModule(Object nameObj,Object classObj) {
         String name=(String)nameObj, className=(String)classObj;
         PyModule cached=MODULE_CACHE.get(name); if(cached!=null) return cached;
@@ -147,7 +140,7 @@ public final class PyRuntime {
             MODULE_CACHE.remove(name); throw new PyException("ImportError","cannot import module '"+name+"': "+exc.getMessage());
         }
     }
-    private static Object moduleDict(PyModule module) {
+    static Object moduleDict(PyModule module) {
         LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
         out.putAll(module.attrs);
         try {
@@ -177,31 +170,10 @@ public final class PyRuntime {
     }
 
     // ---------- Builtin type objects / introspection ----------
-    private record PyBuiltinFunction(String name) {}
-    private record BuiltinBoundMethod(Object self,String name) {}
-    private record BoundCallable(Object function,Object self) {}
-    private static final class PyMethodDescriptor {
-        final Object function; final String kind;
-        final LinkedHashMap<Object,Object> attrs=new LinkedHashMap<>();
-        PyMethodDescriptor(Object function,String kind){
-            this.function=function;this.kind=kind;
-            for(String name:List.of("__module__","__name__","__qualname__","__doc__")){
-                try{attrs.put(name,getattr(function,name));}catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;}
-            }
-        }
-    }
-    private static final class PyManagedProperty {
-        final Object getter,setter,deleter; Object doc; String name; boolean getterDoc;
-        PyManagedProperty(Object getter,Object setter,Object deleter,Object doc){
-            this.getter=getter;this.setter=setter;this.deleter=deleter;this.doc=doc;
-            this.getterDoc=doc==null;
-            if(doc==null && getter!=null){try{this.doc=getattr(getter,"__doc__");}catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;}}
-        }
-    }
     public static Object methodDescriptor(Object function,Object kind){return new PyMethodDescriptor(function,(String)kind);}
-    private static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
+    static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
     public static Object builtinFunction(Object name) { return BUILTIN_FUNCTIONS.computeIfAbsent((String)name,PyBuiltinFunction::new); }
-    private static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
+    static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
         if(name.equals("print")) {
             for(Object key:kwargs.keySet()) if(!key.equals("sep") && !key.equals("end"))
                 throw new PyException("TypeError","unsupported print keyword");
@@ -258,7 +230,7 @@ public final class PyRuntime {
         };
     }
 
-    private static Object callableIterator(Object function,Object sentinel) {
+    static Object callableIterator(Object function,Object sentinel) {
         if(!truth(callable_(function)) && !(function instanceof PyInstance i && i.cls.lookupMethod("__call__")!=null))
             throw new PyException("TypeError","iter(v, w): v must be callable");
         return new Iterator<Object>() {
@@ -275,7 +247,7 @@ public final class PyRuntime {
         };
     }
 
-    private static Object powMod(Object base,Object exponent,Object modulus) {
+    static Object powMod(Object base,Object exponent,Object modulus) {
         if(modulus==null)return pow(base,exponent);
         if(base instanceof PyComplex || exponent instanceof PyComplex)throw new PyException("ValueError","complex modulo");
         if(!isIntLike(base)||!isIntLike(exponent)||!isIntLike(modulus)) throw new PyException("TypeError","pow() with modulus requires integer arguments");
@@ -317,34 +289,7 @@ public final class PyRuntime {
             throw new PyException("ValueError","chr() arg not in range(0x110000)");
         return new String(Character.toChars(code.intValue()));
     }
-    public static final class PyMap implements Iterator<Object>, Iterable<Object> {
-        final Object function; final ArrayList<Object> iterators=new ArrayList<>();
-        Object buffered; boolean hasBuffered=false;
-        PyMap(Object function,List<Object> sources) {
-            this.function=function;
-            for(Object source:sources) iterators.add(iter(source));
-        }
-        public Iterator<Object> iterator(){return this;}
-        public boolean hasNext() {
-            if(hasBuffered) return true;
-            try { buffered=compute(); hasBuffered=true; return true; }
-            catch(NoSuchElementException end){return false;}
-            catch(PyException end){if(end.typeName.equals("StopIteration"))return false;throw end;}
-        }
-        private Object compute() {
-            ArrayList<Object> args=new ArrayList<>();
-            for(Object iterator:iterators) {
-                try { args.add(next_(iterator)); }
-                catch(PyException end) {if(end.typeName.equals("StopIteration"))throw new NoSuchElementException();throw end;}
-            }
-            return callFunction(function,args,new LinkedHashMap<Object,Object>());
-        }
-        public Object next() {
-            if(hasBuffered){Object out=buffered;buffered=null;hasBuffered=false;return out;}
-            return compute();
-        }
-    }
-    private static final java.util.concurrent.ConcurrentHashMap<String,PyBuiltinType> BUILTIN_TYPES = new java.util.concurrent.ConcurrentHashMap<>();
+    static final java.util.concurrent.ConcurrentHashMap<String,PyBuiltinType> BUILTIN_TYPES = new java.util.concurrent.ConcurrentHashMap<>();
     public static Object builtinType(Object nameObj){return BUILTIN_TYPES.computeIfAbsent((String)nameObj,PyBuiltinType::new);}
     public static Object typeOf(Object value){
         if(value instanceof PySuper sup && sup.cls==SUPER_CLASS)return builtinType("super");
@@ -354,19 +299,12 @@ public final class PyRuntime {
     }
     public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundCallable || value instanceof PyMethodDescriptor d && d.kind.equals("static") || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType || value instanceof PyInstance instance && instance.cls.lookupAttr("__call__")!=MISSING;}
 
-    private enum Singleton { NOT_IMPLEMENTED, ELLIPSIS }
-    private static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
+    static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
     public static Object notImplemented() { return NOT_IMPLEMENTED; }
     public static Object ellipsis() { return ELLIPSIS; }
-    private static final ReferenceQueue<Object> ID_QUEUE=new ReferenceQueue<>();
-    private static final Map<IdentityRef,Long> IDENTITIES=new HashMap<>();
-    private static long nextIdentity=2;
-    private static final class IdentityRef extends WeakReference<Object> {
-        final int hash;
-        IdentityRef(Object value,ReferenceQueue<Object> queue){super(value,queue);hash=System.identityHashCode(value);}
-        public int hashCode(){return hash;}
-        public boolean equals(Object other){return this==other || other instanceof IdentityRef ref && get()!=null && get()==ref.get();}
-    }
+    static final ReferenceQueue<Object> ID_QUEUE=new ReferenceQueue<>();
+    static final Map<IdentityRef,Long> IDENTITIES=new HashMap<>();
+    static long nextIdentity=2;
     public static synchronized Object id(Object value) {
         if(value==null)return 1L;
         IdentityRef expired;
@@ -378,9 +316,9 @@ public final class PyRuntime {
         IDENTITIES.put(new IdentityRef(value,ID_QUEUE),allocated);
         return allocated;
     }
-    private static final BigInteger HASH_MODULUS=BigInteger.ONE.shiftLeft(61).subtract(BigInteger.ONE);
-    private static final long[] HASH_SECRET=hashSecret();
-    private static long[] hashSecret(){
+    static final BigInteger HASH_MODULUS=BigInteger.ONE.shiftLeft(61).subtract(BigInteger.ONE);
+    static final long[] HASH_SECRET=hashSecret();
+    static long[] hashSecret(){
         byte[] bytes=new byte[16];String configured=System.getenv("PYTHONHASHSEED");
         if(configured==null || configured.equals("random"))new java.security.SecureRandom().nextBytes(bytes);
         else {
@@ -391,18 +329,18 @@ public final class PyRuntime {
         }
         return new long[]{littleEndian(bytes,0,8),littleEndian(bytes,8,8)};
     }
-    private static long normalizeHash(long value){return value==-1?-2:value;}
-    private static long numericHash(BigInteger value){return normalizeHash(value.abs().mod(HASH_MODULUS).longValue() * value.signum());}
-    private static long littleEndian(byte[] bytes,int start,int count){
+    static long normalizeHash(long value){return value==-1?-2:value;}
+    static long numericHash(BigInteger value){return normalizeHash(value.abs().mod(HASH_MODULUS).longValue() * value.signum());}
+    static long littleEndian(byte[] bytes,int start,int count){
         long value=0;for(int i=0;i<count;i++)value|=(bytes[start+i]&255L)<<(8*i);return value;
     }
-    private static void sipRound(long[] v){
+    static void sipRound(long[] v){
         v[0]+=v[1];v[1]=Long.rotateLeft(v[1],13);v[1]^=v[0];v[0]=Long.rotateLeft(v[0],32);
         v[2]+=v[3];v[3]=Long.rotateLeft(v[3],16);v[3]^=v[2];
         v[0]+=v[3];v[3]=Long.rotateLeft(v[3],21);v[3]^=v[0];
         v[2]+=v[1];v[1]=Long.rotateLeft(v[1],17);v[1]^=v[2];v[2]=Long.rotateLeft(v[2],32);
     }
-    private static long byteHash(byte[] bytes){
+    static long byteHash(byte[] bytes){
         if(bytes.length==0)return 0;
         long k0=HASH_SECRET[0],k1=HASH_SECRET[1];
         long[] v={k0^0x736f6d6570736575L,k1^0x646f72616e646f6dL,k0^0x6c7967656e657261L,k1^0x7465646279746573L};
@@ -412,7 +350,7 @@ public final class PyRuntime {
         v[3]^=tail;sipRound(v);v[0]^=tail;v[2]^=255;sipRound(v);sipRound(v);sipRound(v);
         return normalizeHash(v[0]^v[1]^v[2]^v[3]);
     }
-    private static byte[] unicodeHashBytes(String text){
+    static byte[] unicodeHashBytes(String text){
         int[] points=text.codePoints().toArray();int maximum=0;for(int point:points)maximum=Math.max(maximum,point);
         int width=maximum<=255?1:maximum<=65535?2:4;byte[] bytes=new byte[points.length*width];
         for(int i=0;i<points.length;i++)for(int j=0;j<width;j++)bytes[i*width+j]=(byte)(points[i]>>>(8*j));
@@ -463,7 +401,7 @@ public final class PyRuntime {
         }
         return id(value);
     }
-    private static Object hashResult(Object result){
+    static Object hashResult(Object result){
         if(!isIntLike(result))throw new PyException("TypeError","__hash__ method should return an integer");
         BigInteger n=bigInt(result);
         return n.bitLength()<64?normalizeHash(n.longValue()):numericHash(n);
@@ -520,7 +458,7 @@ public final class PyRuntime {
         return String.valueOf(value);
     }
 
-    private static String stringRepr(String text) {
+    static String stringRepr(String text) {
         char quote=text.indexOf('\'')>=0 && text.indexOf('"')<0 ? '"' : '\'';
         StringBuilder result=new StringBuilder().append(quote);
         text.codePoints().forEach(code -> {
@@ -584,7 +522,7 @@ public final class PyRuntime {
         return true;
     }
 
-    private static Object binarySpecial(Object a,Object b,String leftName,String rightName,boolean comparison) {
+    static Object binarySpecial(Object a,Object b,String leftName,String rightName,boolean comparison) {
         PyInstance left=a instanceof PyInstance i?i:null, right=b instanceof PyInstance i?i:null;
         PyMethod lm=left==null?null:left.cls.lookupMethod(leftName), rm=right==null?null:right.cls.lookupMethod(rightName);
         boolean rightFirst=left!=null && right!=null && left.cls!=right.cls && right.cls.mro.contains(left.cls)
@@ -598,18 +536,7 @@ public final class PyRuntime {
     }
 
     // ---------- Complex numbers ----------
-    public static final class PyComplex {
-        final double real, imag;
-        PyComplex(double real,double imag){this.real=real;this.imag=imag;}
-        @Override public String toString(){
-            boolean negativeImag=Double.doubleToRawLongBits(imag)<0 && !Double.isNaN(imag);
-            String imaginary=complexComponent(negativeImag?-imag:imag);
-            if(real==0.0 && Double.doubleToRawLongBits(real)>=0)
-                return (negativeImag?"-":"")+imaginary+"j";
-            return "("+complexComponent(real)+(negativeImag?"-":"+")+imaginary+"j)";
-        }
-    }
-    private static String complexComponent(double value){
+    static String complexComponent(double value){
         if(Double.isNaN(value))return "nan";
         if(Double.isInfinite(value))return value<0?"-inf":"inf";
         if(value==0)return Double.doubleToRawLongBits(value)<0?"-0":"0";
@@ -624,7 +551,7 @@ public final class PyRuntime {
         return text.endsWith(".0")?text.substring(0,text.length()-2):text;
     }
     public static Object complexLiteral(Object real,Object imag){return new PyComplex(number(real),number(imag));}
-    private static double complexReal(Object value,boolean protocol){
+    static double complexReal(Object value,boolean protocol){
         if(protocol && value instanceof PyInstance instance){
             PyMethod method=instance.cls.lookupMethod("__float__");
             if(method!=null){Object out=invoke(instance,method,new Object[0]);if(!(out instanceof Double))throw new PyException("TypeError","__float__ returned non-float");return (Double)out;}
@@ -635,8 +562,8 @@ public final class PyRuntime {
         if(value instanceof BigInteger && !Double.isFinite(out))throw new PyException("OverflowError","int too large to convert to float");
         return out;
     }
-    private static PyComplex complexValue(Object value){return value instanceof PyComplex z?z:new PyComplex(complexReal(value,false),0.0);}
-    private static Object complexConstructor(List<Object> args,Map<Object,Object> kwargs){
+    static PyComplex complexValue(Object value){return value instanceof PyComplex z?z:new PyComplex(complexReal(value,false),0.0);}
+    static Object complexConstructor(List<Object> args,Map<Object,Object> kwargs){
         if(args.size()>2)throw new PyException("TypeError","complex() takes at most 2 arguments");
         boolean singlePositional=args.size()==1 && kwargs.isEmpty(),converted=false;
         Object real=args.isEmpty()?0L:args.get(0),imag=args.size()<2?0L:args.get(1);
@@ -658,9 +585,9 @@ public final class PyRuntime {
         if(hasImag && real instanceof PyComplex z)i+=z.imag;
         return new PyComplex(r,i);
     }
-    private static final String COMPLEX_NUMBER="(?:[0-9](?:_?[0-9])*(?:\\.(?:[0-9](?:_?[0-9])*)?)?|\\.[0-9](?:_?[0-9])*)(?:[eE][+-]?[0-9](?:_?[0-9])*)?|inf(?:inity)?|nan";
-    private static final java.util.regex.Pattern COMPLEX_TEXT=java.util.regex.Pattern.compile("^([+-]?(?:"+COMPLEX_NUMBER+"))?(?:([+-])((?:"+COMPLEX_NUMBER+"))?)?([jJ])?$",java.util.regex.Pattern.CASE_INSENSITIVE);
-    private static PyComplex parseComplex(String text){
+    static final String COMPLEX_NUMBER="(?:[0-9](?:_?[0-9])*(?:\\.(?:[0-9](?:_?[0-9])*)?)?|\\.[0-9](?:_?[0-9])*)(?:[eE][+-]?[0-9](?:_?[0-9])*)?|inf(?:inity)?|nan";
+    static final java.util.regex.Pattern COMPLEX_TEXT=java.util.regex.Pattern.compile("^([+-]?(?:"+COMPLEX_NUMBER+"))?(?:([+-])((?:"+COMPLEX_NUMBER+"))?)?([jJ])?$",java.util.regex.Pattern.CASE_INSENSITIVE);
+    static PyComplex parseComplex(String text){
         text=text.strip();
         if(text.startsWith("(") && text.endsWith(")"))text=text.substring(1,text.length()-1).strip();
         if(text.equals("j") || text.equals("+j"))return new PyComplex(0,1);
@@ -673,7 +600,7 @@ public final class PyRuntime {
         double second=match.group(3)==null?1:(Double)float_(match.group(3).replace("_",""));
         return new PyComplex(first,match.group(2).equals("-")?-second:second);
     }
-    private static PyComplex complexMultiply(PyComplex z,PyComplex w){
+    static PyComplex complexMultiply(PyComplex z,PyComplex w){
         double a=z.real,b=z.imag,c=w.real,d=w.imag;
         double ac=a*c,bd=b*d,ad=a*d,bc=b*c,r=ac-bd,i=ad+bc;
         if(Double.isNaN(r) && Double.isNaN(i)){
@@ -694,7 +621,7 @@ public final class PyRuntime {
         }
         return new PyComplex(r,i);
     }
-    private static PyComplex complexDivide(PyComplex a,PyComplex b){
+    static PyComplex complexDivide(PyComplex a,PyComplex b){
         if(b.real==0 && b.imag==0)throw new PyException("ZeroDivisionError","complex division by zero");
         double r,i;
         if(Math.abs(b.real)>=Math.abs(b.imag)){
@@ -715,7 +642,7 @@ public final class PyRuntime {
         }
         return new PyComplex(r,i);
     }
-    private static PyComplex realComplexDivide(double a,PyComplex b){
+    static PyComplex realComplexDivide(double a,PyComplex b){
         if(b.real==0 && b.imag==0)throw new PyException("ZeroDivisionError","complex division by zero");
         double r,i;
         if(Math.abs(b.real)>=Math.abs(b.imag)){
@@ -731,7 +658,7 @@ public final class PyRuntime {
         }
         return new PyComplex(r,i);
     }
-    private static PyComplex complexPower(PyComplex a,PyComplex b){
+    static PyComplex complexPower(PyComplex a,PyComplex b){
         if(b.real==0 && b.imag==0)return new PyComplex(1,0);
         if(b.imag==0 && b.real==Math.rint(b.real) && Math.abs(b.real)<=100){
             int n=(int)Math.abs(b.real);PyComplex result=new PyComplex(1,0),factor=a;
@@ -842,7 +769,7 @@ public final class PyRuntime {
         return number(a) * number(b);
     }
 
-    private static Object repeatBytes(PyByteSequence seq,BigInteger count,boolean mutable){
+    static Object repeatBytes(PyByteSequence seq,BigInteger count,boolean mutable){
         if(count.signum()<=0) return mutable?new PyByteArray():new PyBytes(new byte[0]);
         int n;
         try{n=count.intValueExact();}catch(ArithmeticException e){throw new PyException("OverflowError","repeated bytes are too long");}
@@ -879,7 +806,7 @@ public final class PyRuntime {
         return Math.floor(x / y);
     }
 
-    private static Object roundCall(List<Object> args,Map<Object,Object> kwargs){
+    static Object roundCall(List<Object> args,Map<Object,Object> kwargs){
         if(args.size()>2)throw new PyException("TypeError","round() takes at most 2 arguments");
         Object value=args.isEmpty()?MISSING:args.get(0),digits=args.size()>1?args.get(1):null;
         for(var entry:kwargs.entrySet()){
@@ -894,7 +821,7 @@ public final class PyRuntime {
         if(value==MISSING)throw new PyException("TypeError","round() missing required argument 'number'");
         return roundValue(value,digits);
     }
-    private static Object roundValue(Object value,Object digits){
+    static Object roundValue(Object value,Object digits){
         PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
         if(owner!=null){
             Object method=owner.lookupAttr("__round__");
@@ -906,7 +833,7 @@ public final class PyRuntime {
         if(!isIntLike(value) && !(value instanceof Double))throw new PyException("TypeError","type "+typeName(value)+" doesn't define __round__ method");
         return roundNative(value,digits);
     }
-    private static BigInteger roundIndex(Object digits){
+    static BigInteger roundIndex(Object digits){
         Object value=digits;
         PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
         if(owner!=null){
@@ -917,7 +844,7 @@ public final class PyRuntime {
         if(!isIntLike(value))throw new PyException("TypeError","__index__ must return an integer");
         return bigInt(value);
     }
-    private static Object roundNative(Object value,Object digits){
+    static Object roundNative(Object value,Object digits){
         if(isIntLike(value)){
             BigInteger integer=bigInt(value);
             if(digits==null)return compact(integer);
@@ -942,7 +869,7 @@ public final class PyRuntime {
     }
 
     // Keep namespace inspection out of shared arithmetic/collection dispatch paths.
-    private static Object varsLocals(){
+    static Object varsLocals(){
         ActiveFrame frame=currentLogicalFrame();
         if(frame==null || frame.name.equals("<module>") || !frame.inspectSupported)throw new PyException("NotImplementedError","module and suspended-frame namespace inspection is not implemented");
         if(frame.namespace!=null)return frame.namespace;
@@ -950,7 +877,7 @@ public final class PyRuntime {
         result.values().removeIf(value->value==UNBOUND);
         return result;
     }
-    private static LinkedHashMap<Object,Object> frameLocalSnapshot(ActiveFrame frame){
+    static LinkedHashMap<Object,Object> frameLocalSnapshot(ActiveFrame frame){
         LinkedHashMap<Object,Object> result=new LinkedHashMap<>(frame.locals);
         if(frame.closure!=null)for(String name:frame.freeNames){
             PyEnv environment=frame.argumentEnv!=null?frame.argumentEnv:frame.closure;
@@ -960,13 +887,13 @@ public final class PyRuntime {
         }
         return result;
     }
-    private static Object dirLocals(){
+    static Object dirLocals(){
         ActiveFrame frame=currentLogicalFrame();
         if(frame!=null && (frame.name.equals("<module>") || !frame.inspectSupported))throw new PyException("NotImplementedError","module and suspended-frame namespace inspection is not implemented");
         Object names=frame==null?List.of():frame.namespace!=null?frame.namespace.keySet():frameLocalSnapshot(frame).keySet();
         return sorted(names);
     }
-    private static Object varsValue(Object value){
+    static Object varsValue(Object value){
         if(value instanceof PyModule || value instanceof PyClass)throw new PyException("NotImplementedError","live module/class dictionary views are not implemented");
         if(value instanceof PyInstance instance){
             Object access=instance.cls.lookupAttr("__getattribute__");
@@ -984,7 +911,7 @@ public final class PyRuntime {
         try{return getattr(value,"__dict__");}
         catch(PyException error){if(!error.typeName.equals("AttributeError"))throw error;throw new PyException("TypeError","vars() argument must have __dict__ attribute");}
     }
-    private static Object dirValue(Object value){
+    static Object dirValue(Object value){
         PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
         if(owner!=null){
             Object method=owner.lookupAttr("__dir__");
@@ -992,7 +919,7 @@ public final class PyRuntime {
         }
         return sorted(defaultDir(value));
     }
-    private static Object defaultDir(Object value){
+    static Object defaultDir(Object value){
         LinkedHashSet<Object> names=new LinkedHashSet<>();
         if(value instanceof PyModule module){names.addAll(((Map<?,?>)moduleDict(module)).keySet());return new ArrayList<>(names);}
         if(value instanceof PyClass cls){classDirNames(cls,names);return new ArrayList<>(names);}
@@ -1009,13 +936,13 @@ public final class PyRuntime {
         names.addAll(List.of("__class__","__doc__","__format__","__dir__"));
         return new ArrayList<>(names);
     }
-    private static void classDirNames(PyClass cls,Set<Object> names){
+    static void classDirNames(PyClass cls,Set<Object> names){
         for(PyClass base:cls.mro){names.addAll(base.attrs.keySet());names.addAll(base.methods.keySet());names.addAll(base.properties.keySet());}
         names.addAll(List.of("__module__","__doc__","__class__","__format__","__dir__"));
         if(cls.instanceDictAllowed)names.add("__dict__");
         if(cls.builtinBaseName!=null)nativeDirNames(cls.builtinBaseName,names);
     }
-    private static void nativeDirNames(String type,Set<Object> names){
+    static void nativeDirNames(String type,Set<Object> names){
         names.addAll(List.of("__class__","__doc__","__format__","__dir__"));
         switch(type){
             case "str" -> names.addAll(List.of("strip","lstrip","rstrip","split","rsplit","join","replace","find","rfind","index","rindex","count","startswith","endswith","upper","lower","capitalize","swapcase","title","encode","__mod__"));
@@ -1045,12 +972,12 @@ public final class PyRuntime {
         if(value instanceof String || isIntLike(value) || value instanceof Double)return new FormatSpec(spec).apply(value);
         return objectFormat(value,spec);
     }
-    private static Object objectFormat(Object value,Object specObj){
+    static Object objectFormat(Object value,Object specObj){
         if(!(specObj instanceof String spec))throw new PyException("TypeError","__format__() argument must be str");
         if(!spec.isEmpty())throw new PyException("TypeError","unsupported format string passed to "+typeName(value)+".__format__");
         return pyStr(value);
     }
-    private static String shortestFloat(double value){
+    static String shortestFloat(double value){
         if(Double.isNaN(value))return "nan";
         if(Double.isInfinite(value))return value<0?"-inf":"inf";
         boolean negative=Double.doubleToRawLongBits(value)<0;
@@ -1067,245 +994,12 @@ public final class PyRuntime {
         else body=rounded.movePointLeft(exponent).toPlainString()+"e"+(exponent<0?"-":"+")+(Math.abs(exponent)<10?"0":"")+Math.abs(exponent);
         return (negative?"-":"")+body;
     }
-    private static final class FormatSpec {
-        final String source; final int[] chars; int pos=0,width=0,precision=-1;
-        String fill=" ";char align=0,sign=0,type=0,group=0;boolean alternate=false,zero=false,coerceZero=false,explicitFill=false;
-        FormatSpec(String spec){
-            source=spec;chars=spec.codePoints().toArray();
-            if(chars.length>=2 && isAlign(chars[1])){fill=new String(Character.toChars(chars[0]));align=(char)chars[1];pos=2;explicitFill=true;}
-            else if(pos<chars.length && isAlign(chars[pos]))align=(char)chars[pos++];
-            if(pos<chars.length && "+- ".indexOf(chars[pos])>=0)sign=(char)chars[pos++];
-            if(pos<chars.length && chars[pos]=='z'){coerceZero=true;pos++;}
-            if(pos<chars.length && chars[pos]=='#'){alternate=true;pos++;}
-            if(pos<chars.length && chars[pos]=='0'){zero=true;pos++;}
-            width=digits();
-            if(pos<chars.length && (chars[pos]==',' || chars[pos]=='_'))group=(char)chars[pos++];
-            if(pos<chars.length && chars[pos]=='.'){
-                pos++;if(pos>=chars.length || chars[pos]<'0' || chars[pos]>'9')throw new PyException("ValueError","Format specifier missing precision");
-                precision=digits();
-            }
-            if(pos<chars.length)type=chars[pos]<128?(char)chars[pos++]:0;
-            if(pos!=chars.length || type==0 && pos<chars.length)throw new PyException("ValueError","Invalid format specifier");
-        }
-        static boolean isAlign(int code){return code=='<' || code=='>' || code=='^' || code=='=';}
-        int digits(){
-            int number=0;
-            while(pos<chars.length && chars[pos]>='0' && chars[pos]<='9'){
-                int digit=chars[pos++]-'0';if(number>(Integer.MAX_VALUE-digit)/10)throw new PyException("ValueError","Too many decimal digits in format string");
-                number=number*10+digit;
-            }
-            return number;
-        }
-        String apply(Object value){
-            if(source.isEmpty())return value instanceof Double number?shortestFloat(number):pyStr(value);
-            String prefix="",body;boolean numeric=!(value instanceof String),integer=isIntLike(value);
-            char alignment=align==0?(numeric?'>':'<'):align;
-            if(zero && !explicitFill){fill="0";if(align==0 && numeric)alignment='=';}
-            if(value instanceof String text){
-                if(sign!=0 || alternate || coerceZero || alignment=='=' || group!=0)throw new PyException("ValueError","Invalid format specifier for str");
-                if(type!=0 && type!='s')throw new PyException("ValueError","Unknown format code '"+type+"' for object of type 'str'");
-                body=precision<0 || precision>=text.codePointCount(0,text.length())?text:text.substring(0,text.offsetByCodePoints(0,precision));
-            }else if(integer && (type==0 || "bdoxXnc".indexOf(type)>=0)){
-                if(precision>=0)throw new PyException("ValueError","Precision not allowed in integer format specifier");
-                if(coerceZero)throw new PyException("ValueError","Negative zero coercion (z) not allowed in integer format specifier");
-                BigInteger number=bigInt(value);char kind=type==0?'d':type;
-                if(kind=='c'){
-                    if(sign!=0 || alternate || group!=0)throw new PyException("ValueError","Invalid format specifier for integer character");
-                    if(number.signum()<0 || number.compareTo(BigInteger.valueOf(0x10ffff))>0)throw new PyException("OverflowError","%c arg not in range(0x110000)");
-                    body=new String(Character.toChars(number.intValue()));
-                }else{
-                    int radix=kind=='b'?2:kind=='o'?8:kind=='x'||kind=='X'?16:10;
-                    if(group==',' && radix!=10 || group!=0 && kind=='n')throw new PyException("ValueError","Cannot specify grouping with this format code");
-                    prefix=number.signum()<0?"-":sign=='+'?"+":sign==' '?" ":"";
-                    if(alternate && radix!=10)prefix+=radix==2?"0b":radix==8?"0o":kind=='X'?"0X":"0x";
-                    body=number.abs().toString(radix);if(kind=='X')body=body.toUpperCase(Locale.ROOT);
-                    if(group!=0){
-                        int size=radix==10?3:4;
-                        if(alignment=='=' && fill.equals("0"))while(prefix.length()+body.length()+(body.length()-1)/size<width)body="0"+body;
-                        body=groupDigits(body,size,group);
-                    }
-                }
-            }else{
-                if(type!=0 && "eEfFgGn%".indexOf(type)<0)throw new PyException("ValueError","Unknown format code '"+type+"' for object of type '"+typeName(value)+"'");
-                if(group!=0 && type=='n')throw new PyException("ValueError","Cannot specify grouping with 'n'");
-                double number=percentFloat(value,'f');boolean negative=Double.doubleToRawLongBits(number)<0 && !Double.isNaN(number);
-                double magnitude=Math.abs(number);char kind=type=='n'?'g':type;
-                if(kind=='%'){magnitude*=100;kind='f';}
-                if(kind==0 && precision<0){body=shortestFloat(magnitude);if(alternate && body.indexOf('.')<0 && Double.isFinite(magnitude)){int e=body.indexOf('e');body=e<0?body+".":body.substring(0,e)+"."+body.substring(e);}}
-                else{
-                    body=floatDigits(magnitude,kind==0?'g':kind,precision,alternate);
-                    if(kind==0 && Double.isFinite(magnitude)){
-                        int count=Math.max(1,precision);
-                        java.math.BigDecimal rounded=new java.math.BigDecimal(magnitude).round(new java.math.MathContext(count,java.math.RoundingMode.HALF_EVEN));
-                        int exponent=rounded.signum()==0?0:rounded.precision()-rounded.scale()-1;
-                        if(exponent>=count-1){body=floatDigits(magnitude,'e',count-1,alternate);if(!alternate){int e=body.indexOf('e');body=trimFraction(body.substring(0,e))+body.substring(e);}}
-                        else if(body.indexOf('.')<0 && body.indexOf('e')<0)body+=".0";
-                    }
-                }
-                if(coerceZero && Double.isFinite(magnitude)){
-                    String numericBody=body;int e=numericBody.indexOf('e');if(e<0)e=numericBody.indexOf('E');
-                    if(e>=0)numericBody=numericBody.substring(0,e);
-                    if(new java.math.BigDecimal(numericBody).signum()==0)negative=false;
-                }
-                prefix=negative?"-":sign=='+'?"+":sign==' '?" ":"";
-                if(group!=0){int end=body.indexOf('.');if(end<0)end=body.indexOf('e');if(end<0)end=body.indexOf('E');if(end<0)end=body.length();
-                    if(Double.isFinite(magnitude)){
-                        String digits=body.substring(0,end),rest=body.substring(end)+(type=='%'?"%":"");
-                        if(alignment=='=' && fill.equals("0"))while(prefix.length()+digits.length()+(digits.length()-1)/3+rest.length()<width)digits="0"+digits;
-                        body=groupDigits(digits,3,group)+body.substring(end);
-                    }
-                }
-                if(type=='%')body+="%";
-            }
-            int padding=Math.max(0,width-prefix.length()-body.codePointCount(0,body.length()));
-            return switch(alignment){
-                case '<' -> prefix+body+fill.repeat(padding);
-                case '^' -> fill.repeat(padding/2)+prefix+body+fill.repeat(padding-padding/2);
-                case '=' -> prefix+fill.repeat(padding)+body;
-                default -> fill.repeat(padding)+prefix+body;
-            };
-        }
-    }
-    private static String groupDigits(String digits,int size,char separator){
+    static String groupDigits(String digits,int size,char separator){
         StringBuilder out=new StringBuilder();for(int i=0;i<digits.length();i++){if(i>0 && (digits.length()-i)%size==0)out.append(separator);out.append(digits.charAt(i));}return out.toString();
     }
 
     // Percent formatting is kept off the shared method dispatcher/JIT hot paths.
-    private static final class PercentFormatter {
-        final String format; final Object operand; final List<Object> args;
-        final boolean tuple,mapping; int index=0,position=0; boolean keyed=false;
-        PercentFormatter(String format,Object operand){
-            this.format=format;this.operand=operand;tuple=operand instanceof PyTuple;
-            args=tuple?((PyTuple)operand).items:Collections.singletonList(operand);
-            mapping=operand instanceof Map || operand instanceof List || operand instanceof PyByteSequence || operand instanceof PyRange ||
-                operand instanceof PyInstance instance && instance.cls.lookupMethod("__getitem__")!=null;
-        }
-        Object next(boolean star){
-            if(index>=args.size() || star && !tuple)
-                throw new PyException("TypeError","not enough arguments for format string (got "+args.size()+")");
-            return args.get(index++);
-        }
-        int star(boolean precision,int start){
-            if(keyed)throw new PyException("ValueError","* cannot be used with a parenthesised mapping key at position "+start);
-            Object value=next(true);
-            if(!isIntLike(value))throw new PyException("TypeError","format argument "+index+": * requires int, not "+typeName(value));
-            BigInteger integer=bigInt(value);
-            if(precision){
-                try{return Math.max(0,integer.intValueExact());}
-                catch(ArithmeticException error){throw new PyException("OverflowError","format argument "+index+": too big for precision");}
-            }
-            // Width uses Py_ssize_t, but Java strings have int-sized storage.
-            try{return integer.intValueExact();}
-            catch(ArithmeticException error){throw new PyException("OverflowError","format argument "+index+": too big for width");}
-        }
-        int digits(boolean precision,int start){
-            long value=0;
-            while(position<format.length() && format.charAt(position)>='0' && format.charAt(position)<='9'){
-                int digit=format.charAt(position++)-'0';
-                if(value>(Integer.MAX_VALUE-digit)/10)
-                    throw new PyException("ValueError",(precision?"precision":"width")+" too big at position "+start);
-                value=value*10+digit;
-            }
-            return (int)value;
-        }
-        String run(){
-            StringBuilder out=new StringBuilder();
-            while(position<format.length()){
-                char literal=format.charAt(position++);
-                if(literal!='%'){out.append(literal);continue;}
-                int start=position-1;
-                if(position<format.length() && format.charAt(position)=='%'){out.append('%');position++;continue;}
-                Object value=null; boolean hasKey=false; String argumentKey=null;
-                if(position<format.length() && format.charAt(position)=='('){
-                    if(!mapping)throw new PyException("TypeError","format requires a mapping, not "+typeName(operand));
-                    int keyStart=++position,depth=1;
-                    while(position<format.length() && depth>0){char c=format.charAt(position++);if(c=='(')depth++;else if(c==')')depth--;}
-                    if(depth!=0)throw new PyException("ValueError","stray % or incomplete format key at position "+start);
-                    argumentKey=format.substring(keyStart,position-1);value=getitem(operand,argumentKey);keyed=true;hasKey=true;
-                }else if(keyed)throw new PyException("ValueError","format requires a parenthesised mapping key at position "+start);
-                boolean left=false,plus=false,blank=false,alternate=false,zero=false;
-                while(position<format.length()){
-                    char flag=format.charAt(position);
-                    if(flag=='-')left=true;else if(flag=='+')plus=true;else if(flag==' ')blank=true;
-                    else if(flag=='#')alternate=true;else if(flag=='0')zero=true;else break;
-                    position++;
-                }
-                int width=0,precision=-1;
-                if(position<format.length() && format.charAt(position)=='*'){
-                    position++;width=star(false,start);if(width<0){left=true;if(width==Integer.MIN_VALUE)throw new PyException("OverflowError","format argument "+index+": too big for width");width=-width;}
-                }else width=digits(false,start);
-                if(position<format.length() && format.charAt(position)=='.'){
-                    position++;
-                    if(position<format.length() && format.charAt(position)=='*'){position++;precision=star(true,start);}
-                    else precision=digits(true,start);
-                }
-                if(position<format.length() && "hlL".indexOf(format.charAt(position))>=0)position++;
-                if(position>=format.length())throw new PyException("ValueError","stray % at position "+format.codePointCount(0,start));
-                int conversionPosition=position,code=format.codePointAt(position);
-                position+=Character.charCount(code);
-                char conversion=code<128?(char)code:0;
-                if(!hasKey)value=next(false);
-                String body,prefix="";boolean numeric=false;
-                try { switch(conversion){
-                    case 's','r','a' -> {
-                        body=conversion=='s'?pyStr(value):conversion=='r'?pyRepr(value):asciiRepr(value);
-                        if(precision>=0 && body.codePointCount(0,body.length())>precision)body=body.substring(0,body.offsetByCodePoints(0,precision));
-                    }
-                    case 'c' -> {
-                        if(value instanceof String text){
-                            int length=text.codePointCount(0,text.length());
-                            if(length!=1)throw new PyException("TypeError","format argument: %c requires an integer or a unicode character, not a string of length "+length);
-                            body=text;
-                        }else {
-                            BigInteger charCode=percentInteger(value,conversion,false);
-                            if(charCode.signum()<0 || charCode.compareTo(BigInteger.valueOf(0x10ffff))>0)throw new PyException("OverflowError","format argument: %c argument not in range(0x110000)");
-                            body=new String(Character.toChars(charCode.intValue()));
-                        }
-                    }
-                    case 'd','i','u','o','x','X' -> {
-                        BigInteger integer=percentInteger(value,conversion,"diu".indexOf(conversion)>=0);
-                        numeric=true;prefix=integer.signum()<0?"-":plus?"+":blank?" ":"";
-                        int radix=conversion=='o'?8:conversion=='x'||conversion=='X'?16:10;
-                        body=integer.abs().toString(radix);
-                        if(conversion=='X')body=body.toUpperCase(Locale.ROOT);
-                        if(precision>body.length())body="0".repeat(precision-body.length())+body;
-                        if(alternate && radix!=10)prefix+=radix==8?"0o":conversion=='X'?"0X":"0x";
-                    }
-                    case 'e','E','f','F','g','G' -> {
-                        double number=percentFloat(value,conversion);numeric=true;
-                        boolean negative=!Double.isNaN(number) && Double.doubleToRawLongBits(number)<0;
-                        prefix=negative?"-":plus?"+":blank?" ":"";
-                        body=floatDigits(Math.abs(number),conversion,precision,alternate);
-                    }
-                    default -> {
-                        int conversionOffset=format.codePointCount(0,conversionPosition);
-                        String display;
-                        if(code=='\'')display="\"'\"";
-                        else if(code>=32 && code<127)display="'"+(char)code+"'";
-                        else if(Character.isISOControl(code))display=String.format(Locale.ROOT,"U+%04X",code);
-                        else display="'"+new String(Character.toChars(code))+"' ("+String.format(Locale.ROOT,"U+%04X",code)+")";
-                        String message=code<128 && Character.isLetter(code)?"unsupported format %"+(char)code+" at position "+format.codePointCount(0,start):
-                            "stray % at position "+format.codePointCount(0,start)+" or unexpected format character "+display+" at position "+conversionOffset;
-                        throw new PyException("ValueError",message);
-                    }
-                }
-                }catch(PyException error){
-                    if(error.value instanceof String message && message.startsWith("format argument:")){
-                        String context=hasKey?" "+pyRepr(argumentKey):tuple?" "+index:"";
-                        throw new PyException(error.typeName,"format argument"+context+message.substring("format argument".length()));
-                    }
-                    throw error;
-                }
-                int padding=Math.max(0,width-prefix.length()-body.codePointCount(0,body.length()));
-                if(left)out.append(prefix).append(body).append(" ".repeat(padding));
-                else if(zero && numeric)out.append(prefix).append("0".repeat(padding)).append(body);
-                else out.append(" ".repeat(padding)).append(prefix).append(body);
-            }
-            if(!mapping && index<args.size())throw new PyException("TypeError","not all arguments converted during string formatting (required "+index+", got "+args.size()+")");
-            return out.toString();
-        }
-    }
-    private static String asciiRepr(Object value){
+    static String asciiRepr(Object value){
         String repr=pyRepr(value);StringBuilder out=new StringBuilder();
         repr.codePoints().forEach(code->{
             if(code<128)out.appendCodePoint(code);
@@ -1313,7 +1007,7 @@ public final class PyRuntime {
         });
         return out.toString();
     }
-    private static BigInteger percentInteger(Object value,char conversion,boolean decimal){
+    static BigInteger percentInteger(Object value,char conversion,boolean decimal){
         Object original=value;
         if(value instanceof PyInstance instance){
             PyMethod method=decimal?instance.cls.lookupMethod("__int__"):null;
@@ -1333,7 +1027,7 @@ public final class PyRuntime {
         }
         throw new PyException("TypeError","format argument: %"+conversion+" requires "+(decimal?"a real number":conversion=='c'?"an integer or a unicode character":"an integer")+", not "+typeName(original));
     }
-    private static double percentFloat(Object value,char conversion){
+    static double percentFloat(Object value,char conversion){
         Object original=value;
         if(value instanceof PyInstance instance){
             try{
@@ -1352,7 +1046,7 @@ public final class PyRuntime {
         if(value instanceof BigInteger && !Double.isFinite(result))throw new PyException("OverflowError","int too large to convert to float");
         return result;
     }
-    private static String floatDigits(double number,char conversion,int precision,boolean alternate){
+    static String floatDigits(double number,char conversion,int precision,boolean alternate){
         // CPython reserves headroom for binary64 digits and exponent in int-sized buffers.
         if(precision>Integer.MAX_VALUE-1024)throw new PyException("ValueError","precision too big");
         if(Double.isNaN(number))return Character.isUpperCase(conversion)?"NAN":"nan";
@@ -1381,7 +1075,7 @@ public final class PyRuntime {
         }
         return body;
     }
-    private static String trimFraction(String text){
+    static String trimFraction(String text){
         if(text.indexOf('.')<0)return text;
         int end=text.length();while(end>0 && text.charAt(end-1)=='0')end--;
         if(end>0 && text.charAt(end-1)=='.')end--;
@@ -1447,7 +1141,7 @@ public final class PyRuntime {
     public static Object ibitAnd(Object a,Object b){return inplaceSetBinary(a,b,"intersection","__iand__");}
     public static Object ibitOr(Object a,Object b){return inplaceSetBinary(a,b,"union","__ior__");}
     public static Object ibitXor(Object a,Object b){return inplaceSetBinary(a,b,"symmetric_difference","__ixor__");}
-    private static Object inplaceSetBinary(Object a,Object b,String operation,String special){
+    static Object inplaceSetBinary(Object a,Object b,String operation,String special){
         if(a instanceof PyInstance instance){
             Object method=instance.cls.lookupAttr(special);
             if(method!=MISSING){Object result=callFunction(descriptorGet(method,a,instance.cls),new ArrayList<>(Arrays.asList(b)),new LinkedHashMap<>());if(result!=NOT_IMPLEMENTED)return result;}
@@ -1458,7 +1152,7 @@ public final class PyRuntime {
         return switch(operation){case "difference"->sub(a,b);case "intersection"->bitAnd(a,b);case "union"->bitOr(a,b);default->bitXor(a,b);};
     }
     @SuppressWarnings("unchecked")
-    private static void replaceSetContents(Set<?> destination,Set<?> source){
+    static void replaceSetContents(Set<?> destination,Set<?> source){
         if(destination instanceof PySet target && source instanceof PySet values){target.entries.clear();target.entries.putAll(values.entries);}
         else {Set<Object> target=(Set<Object>)destination;target.clear();target.addAll(source);}
     }
@@ -1494,11 +1188,11 @@ public final class PyRuntime {
         if(a instanceof List<?> x && b instanceof List<?> y)return sequenceEqual(x,y);
         return Objects.equals(a,b);
     }
-    private static boolean integerFloatEqual(BigInteger integer,double number){
+    static boolean integerFloatEqual(BigInteger integer,double number){
         if(!Double.isFinite(number) || number!=Math.rint(number))return false;
         return integer.equals(new java.math.BigDecimal(number).toBigIntegerExact());
     }
-    private static boolean sequenceEqual(List<?> left,List<?> right){
+    static boolean sequenceEqual(List<?> left,List<?> right){
         if(left.size()!=right.size())return false;
         for(int i=0;i<left.size();i++)if(left.get(i)!=right.get(i) && !truth(eq(left.get(i),right.get(i))))return false;
         return true;
@@ -1511,7 +1205,7 @@ public final class PyRuntime {
     public static Object is_not(Object a, Object b) { return a != b; }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static int cmp(Object a, Object b) {
+    static int cmp(Object a, Object b) {
         if (isIntLike(a) && isIntLike(b)) return bigInt(a).compareTo(bigInt(b));
         if(isIntLike(a) && b instanceof Double number)return compareIntegerFloat(bigInt(a),number);
         if(a instanceof Double number && isIntLike(b))return -compareIntegerFloat(bigInt(b),number);
@@ -1530,13 +1224,13 @@ public final class PyRuntime {
         throw new IllegalArgumentException("comparison not supported between '" + typeName(a) + "' and '" + typeName(b) + "'");
     }
 
-    private static int compareIntegerFloat(BigInteger integer,double number) {
+    static int compareIntegerFloat(BigInteger integer,double number) {
         if(Double.isInfinite(number))return number>0?-1:1;
         if(Double.isNaN(number))return -1;
         return new java.math.BigDecimal(integer).compareTo(new java.math.BigDecimal(number));
     }
 
-    private static Object richCompare(Object a,Object b,String left,String right,int fallback){
+    static Object richCompare(Object a,Object b,String left,String right,int fallback){
         if(a instanceof PyInstance || b instanceof PyInstance) {
             Object result=binarySpecial(a,b,left,right,true);
             if(result!=NOT_IMPLEMENTED)return result;
@@ -1595,10 +1289,10 @@ public final class PyRuntime {
     }
     public static Object min(Object value) { return extreme(Collections.singletonList(value),Collections.emptyMap(),true); }
     public static Object max(Object value) { return extreme(Collections.singletonList(value),Collections.emptyMap(),false); }
-    private static Object unaryCall(Object callable,Object value) {
+    static Object unaryCall(Object callable,Object value) {
         return callFunction(callable,new ArrayList<>(Collections.singletonList(value)),new LinkedHashMap<>());
     }
-    private static Object extreme(List<Object> args,Map<Object,Object> kwargs,boolean wantMin) {
+    static Object extreme(List<Object> args,Map<Object,Object> kwargs,boolean wantMin) {
         String name=wantMin?"min":"max";
         if(args.isEmpty()) throw new PyException("TypeError",name+" expected at least 1 argument, got 0");
         for(Object keyword:kwargs.keySet()) if(!keyword.equals("key") && !keyword.equals("default"))
@@ -1620,7 +1314,7 @@ public final class PyRuntime {
         }
         return best;
     }
-    private static Object integerBase(Object value,int radix,String prefix) {
+    static Object integerBase(Object value,int radix,String prefix) {
         if(value instanceof PyInstance instance) {
             PyMethod index=instance.cls.lookupMethod("__index__");
             if(index==null)throw new PyException("TypeError","object cannot be interpreted as an integer");
@@ -1649,12 +1343,12 @@ public final class PyRuntime {
         throw new AssertionError(pyStr(msg));
     }
 
-    private static String repeatString(String s, BigInteger count) {
+    static String repeatString(String s, BigInteger count) {
         if (count.signum() <= 0) return "";
         if (count.bitLength() > 31) throw new OutOfMemoryError("repeated string is too long");
         return s.repeat(count.intValue());
     }
-    private static Object repeatList(List<?> xs, BigInteger count) {
+    static Object repeatList(List<?> xs, BigInteger count) {
         ArrayList<Object> out = new ArrayList<>();
         if (count.signum() <= 0) return out;
         if (count.bitLength() > 31) throw new OutOfMemoryError("repeated list is too long");
@@ -1705,77 +1399,11 @@ public final class PyRuntime {
     }
     public static Object dictFrom(Object value) { Object out=dict0(); dictUpdate(out,value); return out; }
 
-    private static final class SetKey {
-        final Object value;final long hash;
-        SetKey(Object value){this.value=value;hash=((Number)PyRuntime.hash(value)).longValue();}
-        @Override public int hashCode(){return Long.hashCode(hash);}
-        @Override public boolean equals(Object other){return other instanceof SetKey key && hash==key.hash && (value==key.value || truth(eq(value,key.value)));}
-    }
-    private static class PySet extends java.util.AbstractSet<Object> {
-        final LinkedHashMap<SetKey,Object> entries=new LinkedHashMap<>();
-        PySet(){}
-        PySet(Object values){if(values instanceof PySet set)entries.putAll(set.entries);else for(Object value:iterable(values))entries.putIfAbsent(new SetKey(value),value);}
-        @Override public int size(){return entries.size();}
-        @Override public Iterator<Object> iterator(){return new PySetIterator(this);}
-        private SetKey lookupKey(Object value){return new SetKey(value instanceof Set<?> && !(value instanceof PyFrozenSet)?new PyFrozenSet(value):value);}
-        @Override public boolean contains(Object value){return entries.containsKey(lookupKey(value));}
-        @Override public boolean add(Object value){SetKey key=new SetKey(value);if(entries.containsKey(key))return false;entries.put(key,value);return true;}
-        @Override public boolean remove(Object value){SetKey key=lookupKey(value);if(!entries.containsKey(key))return false;entries.remove(key);return true;}
-        @Override public void clear(){entries.clear();}
-        @Override public int hashCode(){throw new PyException("TypeError","unhashable type: 'set'");}
-    }
-    private static final class PyFrozenSet extends PySet {
-        Long cachedHash;
-        PyFrozenSet(Object values){super(values);}
-        long pythonHash(){
-            if(cachedHash!=null)return cachedHash;long result=0;
-            for(SetKey key:entries.keySet())result^=((key.hash^89869747L)^(key.hash<<16))*3644798167L;
-            result^=(size()+1L)*1927868237L;result^=(result>>>11)^(result>>>25);result=result*69069L+907133923L;
-            cachedHash=result==-1?590923713L:result;return cachedHash;
-        }
-        @Override public int hashCode(){return Long.hashCode(pythonHash());}
-        @Override public boolean add(Object value){throw new PyException("AttributeError","frozenset has no attribute 'add'");}
-        @Override public boolean remove(Object value){throw new PyException("AttributeError","frozenset has no attribute 'remove'");}
-        @Override public void clear(){throw new PyException("AttributeError","frozenset has no attribute 'clear'");}
-    }
-    private static final class PySetIterator implements Iterator<Object> {
-        PySet source;
-        Iterator<Object> cursor;
-        final int expectedSize;
-        int position;
-        boolean invalid;
-        PySetIterator(PySet source){this.source=source;expectedSize=source.size();cursor=source.entries.values().iterator();}
-        private void checkSize(){
-            if(invalid || source.size()!=expectedSize){invalid=true;throw new PyException("RuntimeError","Set changed size during iteration");}
-        }
-        long lengthHint(){return source==null || invalid || source.size()!=expectedSize?0:Math.max(0,expectedSize-position);}
-        public boolean hasNext(){
-            if(source==null)return false;
-            checkSize();
-            if(cursor.hasNext())return true;
-            source=null;cursor=null;return false;
-        }
-        public Object next(){
-            if(!hasNext())throw new NoSuchElementException();
-            Object result;
-            try{result=cursor.next();}
-            catch(java.util.ConcurrentModificationException changed){
-                // Python checks size, not Java's structural modification count.
-                // Resume in the live contents after a same-size mutation. Set
-                // traversal order across such mutations is unspecified.
-                cursor=source.entries.values().iterator();
-                for(int i=0;i<position && cursor.hasNext();i++)cursor.next();
-                if(!cursor.hasNext()){source=null;cursor=null;throw new NoSuchElementException();}
-                result=cursor.next();
-            }
-            position++;return result;
-        }
-    }
-    private static boolean setMethodKnown(String name,boolean frozen){
+    static boolean setMethodKnown(String name,boolean frozen){
         return Set.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__").contains(name)
             || !frozen && Set.of("add","remove","discard","clear","pop","update","intersection_update","difference_update","symmetric_difference_update","__ior__","__iand__","__ixor__","__isub__").contains(name);
     }
-    private static Object setAlgebra(Object left,Object right,String operation){
+    static Object setAlgebra(Object left,Object right,String operation){
         PySet a=new PySet(left),b=new PySet(right),result=new PySet();
         if(operation.equals("union")){result.entries.putAll(a.entries);for(var entry:b.entries.entrySet())result.entries.putIfAbsent(entry.getKey(),entry.getValue());}
         else {
@@ -1784,7 +1412,7 @@ public final class PyRuntime {
         }
         return left instanceof PyFrozenSet?new PyFrozenSet(result):result;
     }
-    private static Object setMethod(Set<?> raw,String name,Object[] args){
+    static Object setMethod(Set<?> raw,String name,Object[] args){
         boolean frozen=raw instanceof PyFrozenSet;
         if(!setMethodKnown(name,frozen))throw new PyException("AttributeError",typeName(raw)+" has no attribute '"+name+"'");
         @SuppressWarnings("unchecked") Set<Object> set=(Set<Object>)raw;
@@ -1919,20 +1547,20 @@ public final class PyRuntime {
         return false;
     }
 
-    private static int asIndex(Object value) {
+    static int asIndex(Object value) {
         BigInteger n = bigInt(value);
         try { return n.intValueExact(); }
         catch (ArithmeticException exc) { throw new IndexOutOfBoundsException("cannot fit index into JVM list index"); }
     }
 
-    private static int normalizeIndex(int index, int size) {
+    static int normalizeIndex(int index, int size) {
         int out = index < 0 ? index + size : index;
         if (out < 0 || out >= size) throw new IndexOutOfBoundsException("index out of range");
         return out;
     }
 
     public static Object slice(Object start, Object stop, Object step) { return new PySlice(start, stop, step); }
-    private static Object sliceGet(Object value, PySlice sl) {
+    static Object sliceGet(Object value, PySlice sl) {
         if(value instanceof PyByteSequence seq) return binarySlice(seq,sl,true);
         int size;
         if (value instanceof List<?> xs) size = xs.size();
@@ -1960,10 +1588,10 @@ public final class PyRuntime {
         for (int i=start; step>0 ? i<stop : i>stop; i+=step) if (i>=0 && i<size) out.add(xs.get(i));
         return out;
     }
-    private static int normalizeSliceIndex(int i, int size, boolean positive) {
+    static int normalizeSliceIndex(int i, int size, boolean positive) {
         if (i < 0) i += size; if (positive) return Math.max(0, Math.min(size, i)); return Math.max(-1, Math.min(size-1, i));
     }
-    private static int normalizeSliceStop(int i, int size, boolean positive) {
+    static int normalizeSliceStop(int i, int size, boolean positive) {
         if (i < 0) i += size; if (positive) return Math.max(0, Math.min(size, i)); return Math.max(-1, Math.min(size-1, i));
     }
 
@@ -1994,8 +1622,7 @@ public final class PyRuntime {
         return out;
     }
     public static Object sorted(Object value) { return sortedCall(Collections.singletonList(value),Collections.emptyMap()); }
-    private record SortItem(Object value,Object key) {}
-    private static Object sortedCall(List<Object> args,Map<Object,Object> kwargs) {
+    static Object sortedCall(List<Object> args,Map<Object,Object> kwargs) {
         if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 positional argument");
         ArrayList<Object> values=new ArrayList<>();for(Object value:iterable(args.get(0)))values.add(value);
         for(Object keyword:kwargs.keySet()) if(!keyword.equals("key") && !keyword.equals("reverse"))
@@ -2088,7 +1715,7 @@ public final class PyRuntime {
     public static boolean asyncNextDone(Object result){return ((PyAsyncNextResult)result).done;}
     public static Object asyncNextValue(Object result){return ((PyAsyncNextResult)result).value;}
 
-    private static Iterable<?> iterable(Object value) {
+    static Iterable<?> iterable(Object value) {
         if(value instanceof PyInstance instance){
             PyMethod m=instance.cls.lookupMethod("__iter__");
             Object special=instance.cls.lookupAttr("__iter__");
@@ -2117,7 +1744,7 @@ public final class PyRuntime {
         throw typeError("object is not iterable", value);
     }
 
-    private static Iterator<Object> sequenceIterator(PyInstance instance){
+    static Iterator<Object> sequenceIterator(PyInstance instance){
         return new Iterator<>() {
             long index=0;Object buffered;boolean ready=false,done=false;
             public boolean hasNext(){
@@ -2134,107 +1761,14 @@ public final class PyRuntime {
 
 
 
-    public static final class PyRange implements Iterable<Object> {
-        private final BigInteger start, stop, step;
-        PyRange(BigInteger start, BigInteger stop, BigInteger step) {
-            if (step.signum() == 0) throw new IllegalArgumentException("range() arg 3 must not be zero");
-            this.start = start; this.stop = stop; this.step = step;
-        }
-        BigInteger length() {
-            if (step.signum() > 0) {
-                if (start.compareTo(stop) >= 0) return BigInteger.ZERO;
-                return stop.subtract(start).subtract(BigInteger.ONE).divide(step).add(BigInteger.ONE);
-            }
-            if (start.compareTo(stop) <= 0) return BigInteger.ZERO;
-            BigInteger pos = step.negate();
-            return start.subtract(stop).subtract(BigInteger.ONE).divide(pos).add(BigInteger.ONE);
-        }
-        @Override public Iterator<Object> iterator() {
-            return new Iterator<>() {
-                BigInteger current = start;
-                @Override public boolean hasNext() { return step.signum() > 0 ? current.compareTo(stop) < 0 : current.compareTo(stop) > 0; }
-                @Override public Object next() {
-                    if (!hasNext()) throw new NoSuchElementException();
-                    BigInteger out = current;
-                    current = current.add(step);
-                    return compact(out);
-                }
-            };
-        }
-        @Override public String toString() { return "range(" + start + ", " + stop + ", " + step + ")"; }
-    }
 
 
     // ---------- Binary sequence types ----------
-    private interface PyByteSequence extends Iterable<Object> {
-        int byteSize();
-        int unsignedAt(int index);
-        byte[] toByteArray();
-    }
 
-    public static final class PyBytes implements PyByteSequence {
-        final byte[] data;
-        PyBytes(byte[] data){this.data=Arrays.copyOf(data,data.length);}
-        public int byteSize(){return data.length;}
-        public int unsignedAt(int index){return data[index] & 0xff;}
-        public byte[] toByteArray(){return Arrays.copyOf(data,data.length);}
-        public Iterator<Object> iterator(){
-            return new Iterator<>() {
-                int i=0;
-                public boolean hasNext(){return i<data.length;}
-                public Object next(){if(!hasNext())throw new NoSuchElementException();return (long)(data[i++]&0xff);}
-            };
-        }
-        @Override public boolean equals(Object other){return other instanceof PyByteSequence seq && Arrays.equals(data,seq.toByteArray());}
-        @Override public int hashCode(){return Arrays.hashCode(data);}
-        @Override public String toString(){return bytesRepr(data);}
-    }
 
-    public static final class PyByteArray implements PyByteSequence {
-        final ArrayList<Byte> data=new ArrayList<>();
-        PyByteArray(){}
-        PyByteArray(byte[] raw){for(byte b:raw)data.add(b);}
-        public int byteSize(){return data.size();}
-        public int unsignedAt(int index){return data.get(index)&0xff;}
-        public byte[] toByteArray(){byte[] out=new byte[data.size()];for(int i=0;i<data.size();i++)out[i]=data.get(i);return out;}
-        void setUnsigned(int index,int value){checkByte(value);data.set(index,(byte)value);}
-        void appendUnsigned(int value){checkByte(value);data.add((byte)value);}
-        public Iterator<Object> iterator(){
-            Iterator<Byte> it=data.iterator();
-            return new Iterator<>() {
-                public boolean hasNext(){return it.hasNext();}
-                public Object next(){return (long)(it.next()&0xff);}
-            };
-        }
-        @Override public boolean equals(Object other){return other instanceof PyByteSequence seq && Arrays.equals(toByteArray(),seq.toByteArray());}
-        @Override public int hashCode(){return Arrays.hashCode(toByteArray());}
-        @Override public String toString(){return "bytearray("+bytesRepr(toByteArray())+")";}
-    }
 
-    public static final class PyMemoryView implements PyByteSequence {
-        final PyByteSequence source;
-        final int start, length;
-        PyMemoryView(PyByteSequence source){this(source,0,source.byteSize());}
-        PyMemoryView(PyByteSequence source,int start,int length){this.source=source;this.start=start;this.length=length;}
-        public int byteSize(){return length;}
-        public int unsignedAt(int index){return source.unsignedAt(start+index);}
-        public byte[] toByteArray(){byte[] out=new byte[length];for(int i=0;i<length;i++)out[i]=(byte)unsignedAt(i);return out;}
-        void setUnsigned(int index,int value){
-            if(!(source instanceof PyByteArray array)) throw new PyException("TypeError","cannot modify read-only memory");
-            array.setUnsigned(start+index,value);
-        }
-        boolean readonly(){return !(source instanceof PyByteArray);}
-        public Iterator<Object> iterator(){
-            return new Iterator<>() {
-                int i=0;
-                public boolean hasNext(){return i<length;}
-                public Object next(){if(!hasNext())throw new NoSuchElementException();return (long)unsignedAt(i++);}
-            };
-        }
-        @Override public String toString(){return "<memory at 0x0>";}
-    }
 
-    private static int byteValue(Object value){
+    static int byteValue(Object value){
         if(value instanceof PyInstance instance && instance.cls.lookupMethod("__index__")!=null)
             value=invoke(instance,instance.cls.lookupMethod("__index__"),new Object[0]);
         if(!isIntLike(value))throw new PyException("TypeError","integer argument expected");
@@ -2243,15 +1777,15 @@ public final class PyRuntime {
             throw new PyException("ValueError","bytes must be in range(0, 256)");
         return n.intValue();
     }
-    private static void checkByte(int value){
+    static void checkByte(int value){
         if(value<0 || value>255) throw new PyException("ValueError","byte must be in range(0, 256)");
     }
-    private static byte[] bytesFromIterable(Object value){
+    static byte[] bytesFromIterable(Object value){
         ArrayList<Byte> out=new ArrayList<>();
         for(Object item:iterable(value)) out.add((byte)byteValue(item));
         byte[] raw=new byte[out.size()]; for(int i=0;i<out.size();i++) raw[i]=out.get(i); return raw;
     }
-    private static byte[] bytesFromObject(Object value){
+    static byte[] bytesFromObject(Object value){
         if(value instanceof PyByteSequence seq) return seq.toByteArray();
         if(value instanceof PyInstance instance && instance.cls.lookupMethod("__index__")!=null)
             value=invoke(instance,instance.cls.lookupMethod("__index__"),new Object[0]);
@@ -2283,12 +1817,12 @@ public final class PyRuntime {
         for(int i=0;i<out.length;i++) out[i]=(byte)Integer.parseInt(hex.substring(i*2,i*2+2),16);
         return new PyBytes(out);
     }
-    private static String bytesHex(byte[] raw){
+    static String bytesHex(byte[] raw){
         StringBuilder out=new StringBuilder(raw.length*2);
         for(byte b:raw)out.append(String.format("%02x",b&0xff));
         return out.toString();
     }
-    private static String bytesRepr(byte[] raw){
+    static String bytesRepr(byte[] raw){
         StringBuilder out=new StringBuilder("b'");
         for(byte bb:raw){
             int v=bb&0xff;
@@ -2303,19 +1837,19 @@ public final class PyRuntime {
         }
         return out.append('\'').toString();
     }
-    private static byte[] requireBytesLike(Object value){
+    static byte[] requireBytesLike(Object value){
         if(value instanceof PyByteSequence seq) return seq.toByteArray();
         throw new PyException("TypeError","a bytes-like object is required");
     }
-    private static Object binaryResult(PyByteSequence receiver,byte[] raw){
+    static Object binaryResult(PyByteSequence receiver,byte[] raw){
         return receiver instanceof PyByteArray ? new PyByteArray(raw) : new PyBytes(raw);
     }
-    private static int clampSliceBound(Object bound,int size,int fallback){
+    static int clampSliceBound(Object bound,int size,int fallback){
         if(bound==null)return fallback;
         int i=asIndex(bound); if(i<0)i+=size;
         return Math.max(0,Math.min(size,i));
     }
-    private static int binaryIndexOf(byte[] hay,byte[] needle,int start,int end){
+    static int binaryIndexOf(byte[] hay,byte[] needle,int start,int end){
         start=Math.max(0,Math.min(hay.length,start)); end=Math.max(start,Math.min(hay.length,end));
         if(needle.length==0)return start;
         outer: for(int i=start;i+needle.length<=end;i++){
@@ -2324,7 +1858,7 @@ public final class PyRuntime {
         }
         return -1;
     }
-    private static int binaryLastIndexOf(byte[] hay,byte[] needle,int start,int end){
+    static int binaryLastIndexOf(byte[] hay,byte[] needle,int start,int end){
         start=Math.max(0,Math.min(hay.length,start)); end=Math.max(start,Math.min(hay.length,end));
         if(needle.length==0)return end;
         outer: for(int i=end-needle.length;i>=start;i--){
@@ -2333,7 +1867,7 @@ public final class PyRuntime {
         }
         return -1;
     }
-    private static Object binarySearch(PyByteSequence seq,Object[] args,boolean reverse,boolean raising){
+    static Object binarySearch(PyByteSequence seq,Object[] args,boolean reverse,boolean raising){
         if(args.length<1||args.length>3)throw new PyException("TypeError",(reverse?(raising?"rindex":"rfind"):(raising?"index":"find"))+"() takes from 1 to 3 arguments");
         byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
@@ -2342,7 +1876,7 @@ public final class PyRuntime {
         if(raising&&found<0)throw new PyException("ValueError","subsection not found");
         return (long)found;
     }
-    private static Object binaryPartition(PyByteSequence seq,Object[] args,boolean reverse){
+    static Object binaryPartition(PyByteSequence seq,Object[] args,boolean reverse){
         requireArgs(reverse?"rpartition":"partition",args,1);
         byte[] src=seq.toByteArray(), sep=requireBytesLike(args[0]);
         if(sep.length==0)throw new PyException("ValueError","empty separator");
@@ -2366,14 +1900,14 @@ public final class PyRuntime {
         return out;
     }
 
-    private static Object bytesMaketrans(Object fromObj,Object toObj){
+    static Object bytesMaketrans(Object fromObj,Object toObj){
         byte[] from=requireBytesLike(fromObj), to=requireBytesLike(toObj);
         if(from.length!=to.length)throw new PyException("ValueError","maketrans arguments must have same length");
         byte[] table=new byte[256]; for(int i=0;i<256;i++)table[i]=(byte)i;
         for(int i=0;i<from.length;i++)table[from[i]&0xff]=to[i];
         return new PyBytes(table);
     }
-    private static Object binaryTranslate(PyByteSequence seq,Object[] args){
+    static Object binaryTranslate(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>2)throw new PyException("TypeError","translate() takes 1 or 2 arguments");
         byte[] table=null;
         if(args[0]!=null){
@@ -2390,11 +1924,11 @@ public final class PyRuntime {
         byte[] raw=new byte[out.size()];for(int i=0;i<out.size();i++)raw[i]=out.get(i);
         return binaryResult(seq,raw);
     }
-    private static boolean byteInSet(int value,byte[] chars){
+    static boolean byteInSet(int value,byte[] chars){
         for(byte b:chars)if((b&0xff)==value)return true;
         return false;
     }
-    private static Object binaryStrip(PyByteSequence seq,Object[] args,int mode){
+    static Object binaryStrip(PyByteSequence seq,Object[] args,int mode){
         if(args.length>1)throw new PyException("TypeError","strip() takes at most 1 argument");
         byte[] src=seq.toByteArray();
         byte[] chars=args.length==0||args[0]==null?null:requireBytesLike(args[0]);
@@ -2407,10 +1941,10 @@ public final class PyRuntime {
         }
         return binaryResult(seq,Arrays.copyOfRange(src,a,z));
     }
-    private static int asciiLower(int v){return v>='A'&&v<='Z'?v+32:v;}
-    private static int asciiUpper(int v){return v>='a'&&v<='z'?v-32:v;}
-    private static boolean asciiAlpha(int v){return (v>='A'&&v<='Z')||(v>='a'&&v<='z');}
-    private static Object binaryCase(PyByteSequence seq,String op){
+    static int asciiLower(int v){return v>='A'&&v<='Z'?v+32:v;}
+    static int asciiUpper(int v){return v>='a'&&v<='z'?v-32:v;}
+    static boolean asciiAlpha(int v){return (v>='A'&&v<='Z')||(v>='a'&&v<='z');}
+    static Object binaryCase(PyByteSequence seq,String op){
         byte[] src=seq.toByteArray(),out=Arrays.copyOf(src,src.length);
         switch(op){
             case "lower" -> {for(int i=0;i<out.length;i++)out[i]=(byte)asciiLower(out[i]&0xff);}
@@ -2435,14 +1969,14 @@ public final class PyRuntime {
         return binaryResult(seq,out);
     }
 
-    private static Object binaryFind(PyByteSequence seq,Object[] args){
+    static Object binaryFind(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>3)throw new PyException("TypeError","find() takes from 1 to 3 arguments");
         byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
         int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
         return (long)binaryIndexOf(hay,needle,start,end);
     }
-    private static Object binaryCount(PyByteSequence seq,Object[] args){
+    static Object binaryCount(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>3)throw new PyException("TypeError","count() takes from 1 to 3 arguments");
         byte[] hay=seq.toByteArray();
         byte[] needle;
@@ -2455,7 +1989,7 @@ public final class PyRuntime {
         while(pos<=end-needle.length){int found=binaryIndexOf(hay,needle,pos,end);if(found<0)break;n++;pos=found+needle.length;}
         return n;
     }
-    private static Object binaryStartsEnds(PyByteSequence seq,Object[] args,boolean starts){
+    static Object binaryStartsEnds(PyByteSequence seq,Object[] args,boolean starts){
         if(args.length<1||args.length>3)throw new PyException("TypeError",(starts?"startswith":"endswith")+"() takes from 1 to 3 arguments");
         byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
@@ -2465,7 +1999,7 @@ public final class PyRuntime {
         for(int i=0;i<needle.length;i++)if(hay[pos+i]!=needle[i])return false;
         return true;
     }
-    private static Object binaryReplace(PyByteSequence seq,Object[] args){
+    static Object binaryReplace(PyByteSequence seq,Object[] args){
         if(args.length<2||args.length>3)throw new PyException("TypeError","replace() takes 2 or 3 arguments");
         byte[] src=seq.toByteArray(), old=requireBytesLike(args[0]), repl=requireBytesLike(args[1]);
         int limit=args.length==3?asIndex(args[2]):-1;
@@ -2489,8 +2023,8 @@ public final class PyRuntime {
         byte[] raw=new byte[out.size()];for(int i=0;i<out.size();i++)raw[i]=out.get(i);
         return binaryResult(seq,raw);
     }
-    private static boolean asciiWhitespace(int v){return v==9||v==10||v==11||v==12||v==13||v==32;}
-    private static Object binarySplit(PyByteSequence seq,Object[] args){
+    static boolean asciiWhitespace(int v){return v==9||v==10||v==11||v==12||v==13||v==32;}
+    static Object binarySplit(PyByteSequence seq,Object[] args){
         if(args.length>2)throw new PyException("TypeError","split() takes at most 2 arguments");
         byte[] src=seq.toByteArray();
         Object sepObj=args.length>=1?args[0]:null;
@@ -2519,7 +2053,7 @@ public final class PyRuntime {
         out.add(binaryResult(seq,Arrays.copyOfRange(src,pos,src.length)));
         return out;
     }
-    private static Object binaryJoin(PyByteSequence sep,Object iterableObj){
+    static Object binaryJoin(PyByteSequence sep,Object iterableObj){
         ArrayList<byte[]> parts=new ArrayList<>();int total=0;
         for(Object value:iterable(iterableObj)){byte[] raw=requireBytesLike(value);parts.add(raw);total=Math.addExact(total,raw.length);}
         byte[] delimiter=sep.toByteArray();
@@ -2531,7 +2065,7 @@ public final class PyRuntime {
         }
         return binaryResult(sep,out);
     }
-    private static void byteArraySetSlice(PyByteArray array,PySlice sl,Object replacementObj){
+    static void byteArraySetSlice(PyByteArray array,PySlice sl,Object replacementObj){
         byte[] replacement=bytesFromObject(replacementObj);
         int size=array.byteSize();
         int step=sl.step==null?1:asIndex(sl.step);
@@ -2550,7 +2084,7 @@ public final class PyRuntime {
         for(int i=0;i<replacement.length;i++)array.data.add(a+i,replacement[i]);
     }
 
-    private static Object binarySlice(PyByteSequence seq,PySlice sl,boolean asView){
+    static Object binarySlice(PyByteSequence seq,PySlice sl,boolean asView){
         int size=seq.byteSize();
         int step=sl.step==null?1:asIndex(sl.step);
         if(step==0) throw new PyException("ValueError","slice step cannot be zero");
@@ -2568,7 +2102,7 @@ public final class PyRuntime {
     // ---------- Lexical environments / closure cells ----------
 
     // Cells share the existing lexical binding, including writes and deletion.
-    private static PyCell envCell(PyEnv env,String name) {
+    static PyCell envCell(PyEnv env,String name) {
         while(env!=null && !env.values.containsKey(name))env=env.parent;
         if(env==null)throw new PyException("RuntimeError","closure binding unavailable: "+name);
         PyEnv binding=env;
@@ -2583,13 +2117,13 @@ public final class PyRuntime {
         if(value==UNBOUND)throw new PyException("RuntimeError","__class__ not set defining class. Was __classcell__ propagated to type.__new__?");
         if(value!=created)throw new PyException("TypeError","__class__ set to a different class defining class");
     }
-    private static void populateClassCell(PyClass cls,Map<?,?> namespace) {
+    static void populateClassCell(PyClass cls,Map<?,?> namespace) {
         if(!namespace.containsKey("__classcell__"))return;
         Object value=namespace.get("__classcell__");
         if(!(value instanceof PyCell cell))throw new PyException("TypeError","__classcell__ must be a nonlocal cell");
         cell.set(cls);
     }
-    private static PyTuple functionClosure(PyFunction function) {
+    static PyTuple functionClosure(PyFunction function) {
         if(function.closureTuple==null){
             PyTuple result=new PyTuple();
             for(String name:function.freeNames)result.items.add(envCell(function.closure,name));
@@ -2665,104 +2199,9 @@ public final class PyRuntime {
 
 
     // ---------- Generators ----------
-    private static final Object GENERATOR_DONE = new Object();
+    static final Object GENERATOR_DONE = new Object();
 
-    public static final class PyGenerator implements Iterator<Object>, Iterable<Object> {
-        final String owner, resumeMethod;
-        final PyEnv env;
-        long state = 0;
-        boolean finished = false;
-        Object returnValue = null;
-        Object sentValue = null;
-        Object pendingException = null;
-        boolean started = false;
-        boolean buffered = false;
-        Object bufferedValue = null;
-        String displayName, filename; long firstlineno;
-        String firstArgument; boolean hasClassCell;
 
-        PyGenerator(String owner, String resumeMethod, PyEnv env) {
-            this(owner,resumeMethod,env,resumeMethod,owner,0);
-        }
-        PyGenerator(String owner,String resumeMethod,PyEnv env,String displayName,String filename,long firstlineno) {
-            this.owner=owner; this.resumeMethod=resumeMethod; this.env=env; this.displayName=displayName; this.filename=filename; this.firstlineno=firstlineno;
-            ActiveFrame frame=currentLogicalFrame();
-            if(frame!=null){firstArgument=frame.firstArgument;hasClassCell=frame.classEnv!=null;}
-        }
-
-        private Object advance() {
-            if (finished) throw new PyGeneratorEnd(returnValue);
-            started = true;
-            ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
-            logical.inspectSupported=false;logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
-            LOGICAL_FRAMES.get().push(logical);
-            try {
-                Class<?> cls=Class.forName(owner);
-                var reflected=cls.getDeclaredMethod(resumeMethod, Object.class);
-                Object value=reflected.invoke(null, this);
-                if (value == GENERATOR_DONE) { finished=true; throw new PyGeneratorEnd(returnValue); }
-                return value;
-            } catch (java.lang.reflect.InvocationTargetException exc) {
-                Throwable cause=exc.getCause();
-                if (cause instanceof PyGeneratorEnd e) { finished=true; throw e; }
-                if (cause instanceof PyException p && p.typeName.equals("StopIteration")) {
-                    finished=true;
-                    PyException wrapped=new PyException("RuntimeError", "generator raised StopIteration"); wrapped.addFrame(displayName,filename,logical.firstlineno,logical.line); throw wrapped;
-                }
-                if (cause instanceof PyException p) { finished=true; p.addFrame(displayName,filename,logical.firstlineno,logical.line); throw p; }
-                if (cause instanceof RuntimeException r) { finished=true; throw r; }
-                if (cause instanceof Error e) { finished=true; throw e; }
-                throw new RuntimeException(cause);
-            } catch (ReflectiveOperationException exc) {
-                throw new RuntimeException(exc);
-            } finally {
-                ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
-            }
-        }
-
-        @Override public boolean hasNext() {
-            if (finished) return false;
-            if (buffered) return true;
-            try { bufferedValue=advance(); buffered=true; return true; }
-            catch (PyGeneratorEnd e) { return false; }
-        }
-
-        @Override public Object next() {
-            if (buffered) { Object v=bufferedValue; bufferedValue=null; buffered=false; return v; }
-            return advance();
-        }
-
-        Object send(Object value) {
-            if (!started && value != null) throw new PyException("TypeError", "can't send non-None value to a just-started generator");
-            sentValue=value;
-            try { return next(); } finally { sentValue=null; }
-        }
-        Object throw_(Object value) {
-            if (finished) { raiseObject(value); return null; }
-            if (!started) { finished=true; raiseObject(value); return null; }
-            pendingException=value;
-            try { return next(); } finally { pendingException=null; }
-        }
-        Object close() {
-            if (finished) return null;
-            if (!started) { finished=true; buffered=false; bufferedValue=null; return null; }
-            pendingException=new PyExceptionValue("GeneratorExit",null);
-            try {
-                Object yielded=next();
-                throw new PyException("RuntimeError","generator ignored GeneratorExit");
-            } catch (PyGeneratorEnd end) { return null; }
-              catch (PyException exc) { if(exc.typeName.equals("GeneratorExit")) { finished=true; return null; } throw exc; }
-            finally { pendingException=null; buffered=false; bufferedValue=null; }
-        }
-
-        @Override public Iterator<Object> iterator() { return this; }
-        @Override public String toString() { return "<generator object>"; }
-    }
-
-    private static final class PyGeneratorEnd extends NoSuchElementException {
-        final Object value;
-        PyGeneratorEnd(Object value) { this.value=value; }
-    }
 
     public static Object makeGenerator(Object ownerObj, Object methodObj, Object envObj) {
         return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj);
@@ -2874,7 +2313,7 @@ public final class PyRuntime {
         return yieldFromStep(iteratorObj,parent.sentValue);
     }
 
-    private static boolean exceptionObjectIs(Object value,String name) {
+    static boolean exceptionObjectIs(Object value,String name) {
         if(value instanceof PyExceptionValue e) return exceptionIsSubclass(e.typeName,name);
         if(value instanceof PyException e) return exceptionIsSubclass(e.typeName,name);
         return false;
@@ -2930,7 +2369,7 @@ public final class PyRuntime {
     public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
     public static void setFunctionAsyncGenerator(Object functionObj) { ((PyFunction)functionObj).asyncGeneratorMode=true; }
 
-    private static List<String> splitNames(String csv) {
+    static List<String> splitNames(String csv) {
         if (csv == null || csv.isEmpty()) return List.of();
         return Arrays.asList(csv.split(",", -1));
     }
@@ -3029,297 +2468,10 @@ public final class PyRuntime {
         throw new PyException("TypeError", "object is not callable");
     }
 
-    public static final class PyFunction {
-        final LinkedHashMap<Object,Object> attrs=new LinkedHashMap<>();
-        final LinkedHashMap<Object,Object> metadata=new LinkedHashMap<>();
-        final String owner, method;
-        final List<String> posonly, poskw, kwonly;
-        final String vararg, kwarg;
-        final LinkedHashMap<String,Object> defaults;
-        final PyEnv closure;
-        final boolean envMode;
-        String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
-        boolean hasAnnotations=false,hasClassCell=false;
-        List<String> freeNames=List.of();
-        PyTuple closureTuple;
 
-        PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
-                   String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
-            this(owner, method, posonly, poskw, kwonly, vararg, kwarg, defaults, null, false);
-        }
 
-        PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
-                   String vararg, String kwarg, LinkedHashMap<String,Object> defaults, PyEnv closure, boolean envMode) {
-            this.owner=owner; this.method=method; this.posonly=posonly; this.poskw=poskw; this.kwonly=kwonly;
-            this.vararg=vararg; this.kwarg=kwarg; this.defaults=defaults; this.closure=closure; this.envMode=envMode;
-            this.displayName=method; this.filename=owner; this.firstlineno=0;
-        }
 
-        Object call(List<Object> args, Map<Object,Object> kwargsRaw) {
-            LinkedHashMap<String,Object> assigned = new LinkedHashMap<>();
-            ArrayList<Object> extraPos = new ArrayList<>();
-            LinkedHashMap<String,Object> extraKw = new LinkedHashMap<>();
-            List<String> positional = new ArrayList<>();
-            positional.addAll(posonly); positional.addAll(poskw);
 
-            int i=0;
-            for (Object arg : args) {
-                if (i < positional.size()) assigned.put(positional.get(i++), arg);
-                else extraPos.add(arg);
-            }
-            if (!extraPos.isEmpty() && vararg == null)
-                throw new PyException("TypeError", method + "() takes " + positional.size() + " positional arguments but more were given");
-
-            for (var e : kwargsRaw.entrySet()) {
-                if (!(e.getKey() instanceof String key)) throw new PyException("TypeError", "keywords must be strings");
-                Object value=e.getValue();
-                if (posonly.contains(key)) {
-                    if (kwarg != null) extraKw.put(key, value);
-                    else throw new PyException("TypeError", method + "() got some positional-only arguments passed as keyword arguments: '" + key + "'");
-                } else if (poskw.contains(key) || kwonly.contains(key)) {
-                    if (assigned.containsKey(key)) throw new PyException("TypeError", method + "() got multiple values for argument '" + key + "'");
-                    assigned.put(key, value);
-                } else if (kwarg != null) {
-                    extraKw.put(key, value);
-                } else {
-                    throw new PyException("TypeError", method + "() got an unexpected keyword argument '" + key + "'");
-                }
-            }
-
-            for (String name : positional) {
-                if (!assigned.containsKey(name)) {
-                    if (defaults.containsKey(name)) assigned.put(name, defaults.get(name));
-                    else throw new PyException("TypeError", method + "() missing required positional argument: '" + name + "'");
-                }
-            }
-            for (String name : kwonly) {
-                if (!assigned.containsKey(name)) {
-                    if (defaults.containsKey(name)) assigned.put(name, defaults.get(name));
-                    else throw new PyException("TypeError", method + "() missing required keyword-only argument: '" + name + "'");
-                }
-            }
-
-            ArrayList<Object> bound = new ArrayList<>();
-            for (String name : positional) bound.add(assigned.get(name));
-            for (String name : kwonly) bound.add(assigned.get(name));
-            if (vararg != null) { PyTuple tuple=new PyTuple(); tuple.items.addAll(extraPos); bound.add(tuple); }
-            if (kwarg != null) bound.add(new LinkedHashMap<Object,Object>(extraKw));
-            Object[] boundArray=bound.toArray();
-            if(asyncMode) return new PyCoroutine(this,boundArray);
-            return invokeStatic(boundArray);
-        }
-
-        private Object invokeStatic(Object[] bound) {
-            ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
-            logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
-            logical.classEnv=hasClassCell?closure:null;
-            logical.closure=closure; logical.freeNames=freeNames;
-            List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
-            if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
-            for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
-            LOGICAL_FRAMES.get().push(logical);
-            try {
-                Class<?> cls=Class.forName(owner);
-                int hidden = envMode ? 1 : 0;
-                Class<?>[] types=new Class<?>[bound.length + hidden]; Arrays.fill(types, Object.class);
-                var reflected=cls.getDeclaredMethod(method, types);
-                Object[] actual;
-                if (envMode) {
-                    actual = new Object[bound.length + 1];
-                    actual[0] = closure;
-                    System.arraycopy(bound, 0, actual, 1, bound.length);
-                } else actual = bound;
-                return reflected.invoke(null, actual);
-            } catch (java.lang.reflect.InvocationTargetException exc) {
-                Throwable cause=exc.getCause();
-                if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
-                if (cause instanceof RuntimeException r) throw r;
-                if (cause instanceof Error e) throw e;
-                throw new RuntimeException(cause);
-            } catch (ReflectiveOperationException exc) {
-                throw new RuntimeException(exc);
-            } finally {
-                ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
-            }
-        }
-
-        @Override public String toString() { return "<function " + method + ">"; }
-    }
-
-    public static final class PyAsyncGenerator {
-        final PyGenerator frame; final String displayName;
-        PyAsyncGenerator(PyGenerator frame,String displayName){this.frame=frame;this.displayName=displayName;}
-        Object anext(){return new PyAsyncGenAwaitable(this,"next",null);}
-        Object asend(Object value){return new PyAsyncGenAwaitable(this,"send",value);}
-        Object athrow(Object value){return new PyAsyncGenAwaitable(this,"throw",value);}
-        Object aclose(){return new PyAsyncGenAwaitable(this,"close",null);}
-        @Override public String toString(){return "<async_generator object "+displayName+">";}
-    }
-
-    private static final class PyAsyncGenAwaitable {
-        final PyAsyncGenerator generator; final String action; final Object value;
-        PyAsyncGenAwaitable(PyAsyncGenerator generator,String action,Object value){this.generator=generator;this.action=action;this.value=value;}
-        Object iterator(){return new PyAsyncGenAwaitIterator(this);}
-    }
-
-    private static final class PyAsyncGenAwaitIterator implements Iterator<Object>, Iterable<Object> {
-        final PyAsyncGenAwaitable awaitable;
-        boolean started=false, done=false; Object result=null;
-        PyAsyncGenAwaitIterator(PyAsyncGenAwaitable awaitable){this.awaitable=awaitable;}
-
-        Object send(Object sent){
-            if(done) throw new PyGeneratorEnd(result);
-            Object out;
-            try {
-                if(!started) {
-                    started=true;
-                    out = switch(awaitable.action) {
-                        case "next" -> awaitable.generator.frame.send(null);
-                        case "send" -> awaitable.generator.frame.send(awaitable.value);
-                        case "throw" -> awaitable.generator.frame.throw_(awaitable.value);
-                        case "close" -> { awaitable.generator.frame.close(); yield null; }
-                        default -> throw new PyException("RuntimeError","unknown async generator operation");
-                    };
-                    if(awaitable.action.equals("close")) {
-                        done=true; result=null; throw new PyGeneratorEnd(null);
-                    }
-                } else {
-                    out=awaitable.generator.frame.send(sent);
-                }
-            } catch(PyGeneratorEnd exhausted) {
-                done=true;
-                if(awaitable.action.equals("close")) { result=null; throw new PyGeneratorEnd(null); }
-                throw new PyException("StopAsyncIteration",null);
-            }
-            if(out instanceof PyAsyncGeneratorYield item) {
-                done=true; result=item.value; throw new PyGeneratorEnd(result);
-            }
-            return out;
-        }
-
-        Object throw_(Object thrown){
-            if(done){raiseObject(thrown);return null;}
-            if(!started) {
-                started=true;
-                try {
-                    Object out=awaitable.generator.frame.throw_(thrown);
-                    if(out instanceof PyAsyncGeneratorYield item) {done=true;result=item.value;throw new PyGeneratorEnd(result);}
-                    return out;
-                } catch(PyGeneratorEnd exhausted) {done=true;throw new PyException("StopAsyncIteration",null);}
-            }
-            try {
-                Object out=awaitable.generator.frame.throw_(thrown);
-                if(out instanceof PyAsyncGeneratorYield item) {done=true;result=item.value;throw new PyGeneratorEnd(result);}
-                return out;
-            } catch(PyGeneratorEnd exhausted) {done=true;throw new PyException("StopAsyncIteration",null);}
-        }
-
-        Object close(){done=true;return awaitable.generator.frame.close();}
-        public boolean hasNext(){return !done;}
-        public Object next(){return send(null);}
-        public Iterator<Object> iterator(){return this;}
-    }
-
-    public static final class PyCoroutine {
-        final PyFunction function; final Object[] bound; final String displayName;
-        PyGenerator frame=null; PyCoroutine adopted=null;
-        boolean started=false, finished=false, closed=false; Object result=null;
-
-        PyCoroutine(PyFunction function,Object[] bound){
-            this.function=function;this.bound=bound;this.displayName=function.displayName;
-        }
-        PyCoroutine(PyGenerator frame,String displayName){
-            this.function=null;this.bound=null;this.frame=frame;this.displayName=displayName;
-        }
-
-        private Object resume(Object value,Object thrown,boolean closing){
-            if(closed) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
-            if(finished) throw new PyException("RuntimeError","cannot reuse already awaited coroutine");
-            if(!started && value!=null && thrown==null)
-                throw new PyException("TypeError","can't send non-None value to a just-started coroutine");
-            started=true;
-
-            if(adopted!=null) {
-                try { return adopted.resume(value,thrown,closing); }
-                catch(PyException e) {
-                    if(e.typeName.equals("StopIteration")) { finished=true; result=e.value; }
-                    throw e;
-                }
-            }
-            if(frame!=null) {
-                try {
-                    Object yielded;
-                    if(closing) { frame.close(); finished=true; result=null; throw new PyException("StopIteration",null); }
-                    if(thrown!=null) yielded=frame.throw_(thrown);
-                    else yielded=frame.send(value);
-                    return yielded;
-                } catch(PyGeneratorEnd end) {
-                    finished=true; result=end.value; throw new PyException("StopIteration",result);
-                }
-            }
-
-            Object out=function.invokeStatic(bound);
-            if(out instanceof PyCoroutine inner) {
-                adopted=inner;
-                try { return adopted.resume(value,thrown,closing); }
-                catch(PyException e) {
-                    if(e.typeName.equals("StopIteration")) { finished=true; result=e.value; }
-                    throw e;
-                }
-            }
-            finished=true; result=out;
-            throw new PyException("StopIteration",out);
-        }
-
-        Object run(){
-            while(true) {
-                try {
-                    Object yielded=resume(null,null,false);
-                    throw new PyException("RuntimeError","coroutine suspended while synchronous completion was required: "+pyRepr(yielded));
-                } catch(PyException e) {
-                    if(e.typeName.equals("StopIteration")) return e.value;
-                    throw e;
-                }
-            }
-        }
-        Object send(Object value){return resume(value,null,false);}
-        Object throw_(Object value){return resume(null,value,false);}
-        Object close(){
-            if(finished || closed){closed=true;return null;}
-            try { resume(null,new PyExceptionValue("GeneratorExit",null),true); }
-            catch(PyException e) {
-                if(e.typeName.equals("StopIteration") || e.typeName.equals("GeneratorExit")) { closed=true;finished=true;return null; }
-                throw e;
-            }
-            closed=true;finished=true;return null;
-        }
-        Object awaitIterator(){return new PyCoroutineAwaitIterator(this);}
-        @Override public String toString(){return "<coroutine object "+displayName+">";}
-    }
-    private static final class PyCoroutineAwaitIterator implements Iterator<Object>, Iterable<Object> {
-        final PyCoroutine coroutine; boolean done=false;
-        PyCoroutineAwaitIterator(PyCoroutine coroutine){this.coroutine=coroutine;}
-        Object send(Object value){
-            if(done)throw new PyGeneratorEnd(coroutine.result);
-            try { return coroutine.send(value); }
-            catch(PyException e) {
-                if(e.typeName.equals("StopIteration")) { done=true; throw new PyGeneratorEnd(e.value); }
-                throw e;
-            }
-        }
-        Object throw_(Object value){
-            if(done){raiseObject(value);return null;}
-            try { return coroutine.throw_(value); }
-            catch(PyException e) {
-                if(e.typeName.equals("StopIteration")) { done=true; throw new PyGeneratorEnd(e.value); }
-                throw e;
-            }
-        }
-        Object close(){done=true;return coroutine.close();}
-        public boolean hasNext(){return !done && !coroutine.finished && !coroutine.closed;}
-        public Object next(){return send(null);}
-        public Iterator<Object> iterator(){return this;}
-    }
     public static Object awaitIterator(Object value){
         if(value instanceof PyCoroutine coroutine) return coroutine.awaitIterator();
         if(value instanceof PyAsyncGenAwaitable awaitable) return awaitable.iterator();
@@ -3361,13 +2513,7 @@ public final class PyRuntime {
     }
 
     // ---------- Python-visible code/frame/traceback objects ----------
-    private static final class ActiveFrame {
-        final String name, filename; final long firstlineno; long line;
-        final LinkedHashMap<Object,Object> locals = new LinkedHashMap<>();
-        boolean inspectSupported=true; String firstArgument; PyEnv classEnv,argumentEnv,closure; List<String> freeNames=List.of(); Map<Object,Object> namespace;
-        ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}
-    }
-    private static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
+    static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
     public static void pushLogicalFrame(Object nameObj,Object filenameObj,Object firstlineObj){
         LOGICAL_FRAMES.get().push(new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()));
     }
@@ -3379,14 +2525,9 @@ public final class PyRuntime {
     public static void frameSetLocal(Object nameObj,Object value){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);}
     public static Object frameSetLocalValue(Object value,Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.put(nameObj,value);return value;}
     public static void frameDelLocal(Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.remove(nameObj);}
-    private static ActiveFrame currentLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();return stack.isEmpty()?null:stack.peek();}
+    static ActiveFrame currentLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();return stack.isEmpty()?null:stack.peek();}
 
-    public static final class PyTraceback {
-        final PyFrame frame; final long lineno; final PyTraceback next;
-        PyTraceback(PyFrame frame,long lineno,PyTraceback next){this.frame=frame;this.lineno=lineno;this.next=next;}
-        @Override public String toString(){return "<traceback object>";}
-    }
-    private static PyTraceback prependTraceback(PyTraceback current,String name,String filename,long firstline,long line){
+    static PyTraceback prependTraceback(PyTraceback current,String name,String filename,long firstline,long line){
         ActiveFrame active=currentLogicalFrame();
         LinkedHashMap<Object,Object> locals = active!=null && active.name.equals(name) && active.filename.equals(filename)
             ? active.locals : new LinkedHashMap<Object,Object>();
@@ -3451,7 +2592,7 @@ public final class PyRuntime {
         return exceptionIsSubclass(actual, requested);
     }
 
-    private static final Map<String,String> EXCEPTION_PARENTS = Map.ofEntries(
+    static final Map<String,String> EXCEPTION_PARENTS = Map.ofEntries(
         Map.entry("Exception","BaseException"), Map.entry("GeneratorExit","BaseException"),
         Map.entry("KeyboardInterrupt","BaseException"), Map.entry("SystemExit","BaseException"),
         Map.entry("ArithmeticError","Exception"), Map.entry("LookupError","Exception"),
@@ -3480,7 +2621,7 @@ public final class PyRuntime {
         Map.entry("ChildProcessError","OSError"), Map.entry("InterruptedError","OSError"),
         Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
         Map.entry("ProcessLookupError","OSError"));
-    private static boolean exceptionIsSubclass(String actual, String requested) {
+    static boolean exceptionIsSubclass(String actual, String requested) {
         if(actual.equals(requested)) return actual.equals("BaseException") || EXCEPTION_PARENTS.containsKey(actual);
         for(String parent=EXCEPTION_PARENTS.get(actual);parent!=null;parent=EXCEPTION_PARENTS.get(parent))
             if(parent.equals(requested)) return true;
@@ -3499,7 +2640,7 @@ public final class PyRuntime {
         return new PyExceptionValue(pythonExceptionType(t), exceptionValue(t));
     }
 
-    private static String pythonExceptionType(Throwable t) {
+    static String pythonExceptionType(Throwable t) {
         if (t instanceof PyException p) return p.typeName;
         if (t instanceof ArithmeticException) return "ZeroDivisionError";
         if (t instanceof IndexOutOfBoundsException) return "IndexError";
@@ -3510,35 +2651,10 @@ public final class PyRuntime {
         return "RuntimeError";
     }
 
-    public static final class PyExceptionType {
-        final String name;
-        PyExceptionType(String name) { this.name=name; }
-        @Override public String toString() { return "<class '" + name + "'>"; }
-    }
 
-    public static final class PyExceptionValue {
-        final String typeName; final Object value; final Object cause; final Object context; final boolean suppressContext; final PyTraceback traceback;
-        PyExceptionValue(String typeName, Object value) { this(typeName,value,null,null,false,null); }
-        PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
-        PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
-        @Override public String toString() { return typeName + (value == null ? "" : "(" + pyRepr(value) + ")"); }
-    }
 
-    public static final class PyException extends RuntimeException {
-        final String typeName; final Object value; Object cause; Object context; boolean suppressContext; PyTraceback traceback;
-        PyException(String typeName, Object value) { this(typeName,value,null,null,false,null); }
-        PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
-        PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { super(value == null ? null : pyStr(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
-        void addFrame(String name,String filename,long firstline,long line){traceback=prependTraceback(traceback,name,filename,firstline,line);}
-        void addFrame(String name,String filename,long line){addFrame(name,filename,line,line);}
-        @Override public String toString() { return typeName + (value == null ? "" : ": " + pyStr(value)); }
-    }
 
     // ---------- Python classes / instances ----------
-    public static final class PyClassNamespace extends LinkedHashMap<Object,Object> {
-        final PyClass prebuilt;
-        PyClassNamespace(PyClass prebuilt){this.prebuilt=prebuilt;}
-    }
 
     public static Object class0(Object name) { return new PyClass("__main__", (String) name); }
     public static Object classCreate(Object name,Object module) { return new PyClass((String)module,(String)name); }
@@ -3560,20 +2676,20 @@ public final class PyRuntime {
         PyMethod method=methodFromDescriptor(value);
         if(method!=null)target.methods.put(name,method);
     }
-    private static PyMethod methodFromDescriptor(Object value){
+    static PyMethod methodFromDescriptor(Object value){
         String kind="instance";
         if(value instanceof PyMethodDescriptor descriptor){kind=descriptor.kind;value=descriptor.function;}
         if(value instanceof PyFunction function)return new PyMethod(function.owner,function.method,kind,function);
         return null;
     }
 
-    private static PyTuple explicitBasesTuple(PyClass cls) {
+    static PyTuple explicitBasesTuple(PyClass cls) {
         PyTuple tuple=new PyTuple(); tuple.items.addAll(cls.bases);
         if(cls.builtinBaseName!=null) tuple.items.add(new PyBuiltinType(cls.builtinBaseName));
         return tuple;
     }
 
-    private static PyClass resolveMetaclass(PyClass cls,Object explicitMeta) {
+    static PyClass resolveMetaclass(PyClass cls,Object explicitMeta) {
         if(explicitMeta instanceof PyClass meta) return meta;
         if(explicitMeta instanceof PyBuiltinType builtin && builtin.name.equals("type")) return null;
         if(explicitMeta!=null) throw new PyException("TypeError","metaclass must be a class");
@@ -3630,7 +2746,7 @@ public final class PyRuntime {
         map.put(nameObj,getattr(clsObj,nameObj));
     }
 
-    private static void syncNamespaceToClass(PyClass cls,Map<?,?> namespace) {
+    static void syncNamespaceToClass(PyClass cls,Map<?,?> namespace) {
         cls.attrs.clear();cls.methods.clear();cls.properties.clear();
         for(var e:namespace.entrySet()) {
             if(!(e.getKey() instanceof String name) || name.equals("__classcell__")) continue;
@@ -3638,7 +2754,7 @@ public final class PyRuntime {
         }
     }
 
-    private static Object invokeMetaclassInstance(PyMethod method,PyClass cls,List<Object> args,Map<Object,Object> kwargs) {
+    static Object invokeMetaclassInstance(PyMethod method,PyClass cls,List<Object> args,Map<Object,Object> kwargs) {
         if(method.function==null) throw new PyException("RuntimeError","metaclass method metadata unavailable");
         ArrayList<Object> actual=new ArrayList<>(); actual.add(cls); actual.addAll(args);
         return method.function.call(actual,kwargs);
@@ -3734,7 +2850,7 @@ public final class PyRuntime {
         ((PyClass)cls).properties.put((String)pyName,
             new PyProperty((String)owner,(String)getter,setter==null ? null : (String)setter,get,set));
     }
-    private static void configureSlots(PyClass cls) {
+    static void configureSlots(PyClass cls) {
         Object spec=cls.attrs.get("__slots__");
         boolean inheritedDict=false;
         for(PyClass base:cls.bases) if(base.instanceDictAllowed) { inheritedDict=true; break; }
@@ -3772,7 +2888,7 @@ public final class PyRuntime {
         }
     }
 
-    private static boolean isPythonIdentifier(String name) {
+    static boolean isPythonIdentifier(String name) {
         if(name.isEmpty()) return false;
         int offset=0;
         int cp=name.codePointAt(offset);
@@ -3786,7 +2902,7 @@ public final class PyRuntime {
         return true;
     }
 
-    private static String mangleSlotName(String className,String name) {
+    static String mangleSlotName(String className,String name) {
         if(name.startsWith("__") && !name.endsWith("__")) {
             String stripped=className.replaceFirst("^_+","");
             if(stripped.isEmpty()) return name;
@@ -3795,7 +2911,7 @@ public final class PyRuntime {
         return name;
     }
 
-    private static void classFinalizeWithKeywords(PyClass cls,Map<Object,Object> kwargs) {
+    static void classFinalizeWithKeywords(PyClass cls,Map<Object,Object> kwargs) {
         if(cls.finalized) return;
         cls.computeMro();
         configureSlots(cls);
@@ -3822,8 +2938,8 @@ public final class PyRuntime {
     public static void classFinalize(Object clsObj) {
         classFinalizeWithKeywords((PyClass)clsObj,new LinkedHashMap<>());
     }
-    private static boolean isType(Object value){return value instanceof PyClass || value instanceof PyBuiltinType;}
-    private static List<Object> typeMro(Object type) {
+    static boolean isType(Object value){return value instanceof PyClass || value instanceof PyBuiltinType;}
+    static List<Object> typeMro(Object type) {
         ArrayList<Object> mro=new ArrayList<>();
         String builtin=null;
         if(type instanceof PyClass cls){mro.addAll(cls.mro);for(PyClass base:cls.mro)if(base.builtinBaseName!=null){builtin=base.builtinBaseName;break;}}
@@ -3837,7 +2953,7 @@ public final class PyRuntime {
         if(!mro.contains(builtinType("object")))mro.add(builtinType("object"));
         return mro;
     }
-    private static Object superOwner(Object currentClass,Object self) {
+    static Object superOwner(Object currentClass,Object self) {
         if(!isType(currentClass))throw new PyException("TypeError","super() argument 1 must be a type");
         if(isType(self) && typeMro(self).contains(currentClass))return self;
         Object actual=typeOf(self);
@@ -3848,7 +2964,7 @@ public final class PyRuntime {
         }
         throw new PyException("TypeError","super(type, obj): obj must be an instance or subtype of type");
     }
-    private static List<Object> zeroSuperArguments() {
+    static List<Object> zeroSuperArguments() {
         ActiveFrame frame=currentLogicalFrame();
         if(frame==null || frame.firstArgument==null)throw new PyException("RuntimeError","super(): no arguments");
         Object self=frame.argumentEnv==null?frame.locals.getOrDefault(frame.firstArgument,UNBOUND):frame.argumentEnv.values.getOrDefault(frame.firstArgument,UNBOUND);
@@ -3861,7 +2977,7 @@ public final class PyRuntime {
         if(!isType(current))throw new PyException("RuntimeError","super(): __class__ is not a type");
         return new ArrayList<>(Arrays.asList(current,self));
     }
-    private static void initializeSuper(PySuper sup,List<Object> args,Map<Object,Object> kwargs) {
+    static void initializeSuper(PySuper sup,List<Object> args,Map<Object,Object> kwargs) {
         if(!kwargs.isEmpty())throw new PyException("TypeError","super() takes no keyword arguments");
         if(args.size()>2)throw new PyException("TypeError","super() expected at most 2 arguments");
         if(args.isEmpty())args=zeroSuperArguments();
@@ -3870,18 +2986,18 @@ public final class PyRuntime {
         Object owner=self==null?null:superOwner(current,self);
         sup.currentClass=current;sup.self=self;sup.owner=owner;
     }
-    private static Object superConstructor(List<Object> args,Map<Object,Object> kwargs) {
+    static Object superConstructor(List<Object> args,Map<Object,Object> kwargs) {
         PySuper sup=new PySuper(SUPER_CLASS);initializeSuper(sup,args,kwargs);return sup;
     }
     public static Object makeSuper(Object currentClass,Object self) {
         return superConstructor(new ArrayList<>(Arrays.asList(currentClass,self)),new LinkedHashMap<>());
     }
-    private static Object bindSuper(PySuper sup,Object instance) {
+    static Object bindSuper(PySuper sup,Object instance) {
         if(instance==null || sup.self!=null)return sup;
         if(sup.cls==SUPER_CLASS)return makeSuper(sup.currentClass,instance);
         return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
     }
-    private static boolean builtinHasMethod(String type,String name) {
+    static boolean builtinHasMethod(String type,String name) {
         if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
@@ -3894,7 +3010,7 @@ public final class PyRuntime {
             default -> false;
         };
     }
-    private static Object superAttribute(PySuper sup,String name) {
+    static Object superAttribute(PySuper sup,String name) {
         if(sup.owner==null)return MISSING;
         List<Object> mro=typeMro(sup.owner);int start=mro.indexOf(sup.currentClass);
         for(int i=start+1;i<mro.size();i++){
@@ -3914,10 +3030,10 @@ public final class PyRuntime {
     public static Object instantiate2(Object cls, Object a, Object b) { return instantiate((PyClass)cls, new Object[]{a,b}); }
     public static Object instantiate3(Object cls, Object a, Object b, Object c) { return instantiate((PyClass)cls, new Object[]{a,b,c}); }
 
-    private static Object instantiate(PyClass cls, Object[] args) {
+    static Object instantiate(PyClass cls, Object[] args) {
         return instantiate(cls,args,new LinkedHashMap<Object,Object>());
     }
-    private static Object instantiate(PyClass cls, Object[] args, Map<Object,Object> kwargs) {
+    static Object instantiate(PyClass cls, Object[] args, Map<Object,Object> kwargs) {
         if(cls.metaclass!=null) {
             PyMethod call=cls.metaclass.lookupMethod("__call__");
             if(call!=null) return invokeMetaclassInstance(call,cls,new ArrayList<Object>(Arrays.asList(args)),kwargs);
@@ -3925,7 +3041,7 @@ public final class PyRuntime {
         return instantiateDefault(cls,args,kwargs);
     }
 
-    private static Object instantiateDefault(PyClass cls,Object[] args,Map<Object,Object> kwargs) {
+    static Object instantiateDefault(PyClass cls,Object[] args,Map<Object,Object> kwargs) {
         Object created;
         PyMethod newMethod=cls.lookupMethod("__new__");
         if(newMethod!=null) {
@@ -3953,7 +3069,7 @@ public final class PyRuntime {
         return created;
     }
 
-    private static void requireArgs(String name,Object[] args,int count) { if(args.length!=count) throw new PyException("TypeError",name+"() takes "+count+" arguments"); }
+    static void requireArgs(String name,Object[] args,int count) { if(args.length!=count) throw new PyException("TypeError",name+"() takes "+count+" arguments"); }
 
     public static Object callMethodDynamic(Object obj,Object nameObj,Object argsObj,Object kwargsObj) {
         @SuppressWarnings("unchecked") List<Object> args=(List<Object>)argsObj;
@@ -3973,7 +3089,7 @@ public final class PyRuntime {
     public static Object callMethod3(Object obj, Object name, Object a, Object b, Object c) { return callMethod(obj, (String)name, new Object[]{a,b,c}); }
     public static Object callMethod4(Object obj, Object name, Object a, Object b, Object c, Object d) { return callMethod(obj, (String)name, new Object[]{a,b,c,d}); }
 
-    private static Object typeNew(PyClass meta,Object nameObj,Object basesObj,Object namespaceObj,Map<Object,Object> kwargs) {
+    static Object typeNew(PyClass meta,Object nameObj,Object basesObj,Object namespaceObj,Map<Object,Object> kwargs) {
         if(!(nameObj instanceof String name))throw new PyException("TypeError","type.__new__() name must be str");
         if(!(basesObj instanceof PyTuple bases))throw new PyException("TypeError","type.__new__() bases must be tuple");
         if(!(namespaceObj instanceof Map<?,?> namespace))throw new PyException("TypeError","type.__new__() namespace must be mapping");
@@ -3988,7 +3104,7 @@ public final class PyRuntime {
         return cls;
     }
 
-    private static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+    static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
         if((builtin.name.equals("set") || builtin.name.equals("frozenset")) && setMethodKnown(name,builtin.name.equals("frozenset"))){
             if(args.length==0 || !(args[0] instanceof Set<?> set) || builtin.name.equals("frozenset")!=(args[0] instanceof PyFrozenSet))throw new PyException("TypeError","set descriptor requires a "+builtin.name+" object");
             return setMethod(set,name,Arrays.copyOfRange(args,1,args.length));
@@ -4055,7 +3171,7 @@ public final class PyRuntime {
         throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
     }
 
-    private static Object callMethod(Object obj, String name, Object[] args) {
+    static Object callMethod(Object obj, String name, Object[] args) {
         if(obj instanceof PySetIterator iterator && Set.of("__iter__","__next__","__length_hint__").contains(name)){
             requireArgs(name,args,0);
             return name.equals("__iter__")?iterator:name.equals("__next__")?next_(iterator):iterator.lengthHint();
@@ -4310,7 +3426,7 @@ public final class PyRuntime {
         return invoke(instance, method, args);
     }
 
-    private static Object invokeReflective(PyMethod method,Object[] actual) {
+    static Object invokeReflective(PyMethod method,Object[] actual) {
         try {
             Class<?> owner = Class.forName(method.owner);
             Class<?>[] types = new Class<?>[actual.length];
@@ -4327,10 +3443,10 @@ public final class PyRuntime {
         }
     }
 
-    private static Object invoke(PyInstance self, PyMethod method, Object[] args) {
+    static Object invoke(PyInstance self, PyMethod method, Object[] args) {
         return invokeKw(self,method,new ArrayList<Object>(Arrays.asList(args)),new LinkedHashMap<Object,Object>());
     }
-    private static Object invokeKw(PyInstance self, PyMethod method, List<Object> args, Map<Object,Object> kwargs) {
+    static Object invokeKw(PyInstance self, PyMethod method, List<Object> args, Map<Object,Object> kwargs) {
         if(method.function != null) {
             ArrayList<Object> actual=new ArrayList<>();
             if(!method.kind.equals("static")) actual.add(method.kind.equals("class") ? self.cls : self);
@@ -4344,10 +3460,10 @@ public final class PyRuntime {
         return invokeReflective(method,actual);
     }
 
-    private static Object invokeOnClass(PyClass cls,PyMethod method,Object[] args) {
+    static Object invokeOnClass(PyClass cls,PyMethod method,Object[] args) {
         return invokeOnClassKw(cls,method,new ArrayList<Object>(Arrays.asList(args)),new LinkedHashMap<Object,Object>());
     }
-    private static Object invokeOnClassKw(PyClass cls,PyMethod method,List<Object> args,Map<Object,Object> kwargs) {
+    static Object invokeOnClassKw(PyClass cls,PyMethod method,List<Object> args,Map<Object,Object> kwargs) {
         if(method.function != null) {
             ArrayList<Object> actual=new ArrayList<>();
             if(method.kind.equals("class")) actual.add(cls);
@@ -4361,16 +3477,16 @@ public final class PyRuntime {
         Object[] rest=args.subList(1,args.size()).toArray(); return invoke(self,method,rest);
     }
 
-    private static boolean isDescriptor(Object value) {
+    static boolean isDescriptor(Object value) {
         return value instanceof PySuper || value instanceof PyFunction || value instanceof PyMethodDescriptor || value instanceof PyManagedProperty || value instanceof PySlotDescriptor ||
             (value instanceof PyInstance descriptor && descriptor.cls.lookupMethod("__get__") != null);
     }
-    private static boolean isDataDescriptor(Object value) {
+    static boolean isDataDescriptor(Object value) {
         return value instanceof PyManagedProperty || value instanceof PySlotDescriptor ||
             (value instanceof PyInstance descriptor &&
             (descriptor.cls.lookupMethod("__set__") != null || descriptor.cls.lookupMethod("__delete__") != null));
     }
-    private static Object descriptorGet(Object descriptor, Object instance, Object owner) {
+    static Object descriptorGet(Object descriptor, Object instance, Object owner) {
         if(descriptor instanceof PySuper sup)return bindSuper(sup,instance);
         if(descriptor instanceof PyFunction)return instance==null?descriptor:new BoundCallable(descriptor,instance);
         if(descriptor instanceof PyMethodDescriptor method){
@@ -4706,93 +3822,10 @@ public final class PyRuntime {
         return typeMro(subObj).contains(clsObj);
     }
 
-    private static final Object MISSING = new Object();
-    private record PyMethod(String owner, String javaName, String kind, PyFunction function) {
-        PyMethod(String owner,String javaName){this(owner,javaName,"instance",null);}
-        PyMethod(String owner,String javaName,String kind){this(owner,javaName,kind,null);}
-    }
-    private record PyProperty(String owner, String getter, String setter, PyFunction getFunction, PyFunction setFunction) {
-        PyProperty(String owner,String getter,String setter){this(owner,getter,setter,null,null);}
-        PyMethod getterMethod(){return new PyMethod(owner,getter,"instance",getFunction);}
-        PyMethod setterMethod(){return new PyMethod(owner,setter,"instance",setFunction);}
-    }
-    private static final class PySlotDescriptor {
-        final PyClass owner; final String name;
-        PySlotDescriptor(PyClass owner,String name){this.owner=owner;this.name=name;}
-        @Override public String toString(){return "<member '"+name+"' of '"+owner.name+"' objects>";}
-    }
-    private record BoundMethod(PyInstance self, String name) {}
-    private record BoundSuperMethod(PyInstance self, PyClass currentClass, String name) {}
-    private record BoundClassMethod(PyClass cls,String name) {}
-    private record BoundStaticMethod(PyClass cls,String name) {}
-    private record UnboundMethod(PyClass cls,String name) {}
-    private static PyClass superClass(){PyClass cls=new PyClass("builtins","super");cls.instanceDictAllowed=false;return cls;}
-    private static final PyClass SUPER_CLASS=superClass();
-    private static final class PySuper extends PyInstance {
-        Object currentClass,self,owner;
-        PySuper(PyClass cls){super(cls);}
-    }
+    static final Object MISSING = new Object();
+    static PyClass superClass(){PyClass cls=new PyClass("builtins","super");cls.instanceDictAllowed=false;return cls;}
+    static final PyClass SUPER_CLASS=superClass();
 
-    public static class PyInstance {
-        final PyClass cls;
-        final LinkedHashMap<String,Object> fields = new LinkedHashMap<>();
-        final LinkedHashMap<String,Object> slotValues = new LinkedHashMap<>();
-        PyInstance(PyClass cls) { this.cls = cls; }
-        @Override public String toString() { return "<" + cls.name + " object>"; }
-    }
 
-    public static final class PyClass {
-        final String moduleName;
-        final String name;
-        String qualname;
-        final ArrayList<PyClass> bases = new ArrayList<>();
-        final LinkedHashMap<String,PyMethod> methods = new LinkedHashMap<>();
-        final LinkedHashMap<String,PyProperty> properties = new LinkedHashMap<>();
-        final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
-        List<PyClass> mro = List.of(this);
-        PyClass metaclass = null;
-        String builtinBaseName = null;
-        final LinkedHashSet<String> ownSlots = new LinkedHashSet<>();
-        boolean slotsDeclared = false;
-        boolean instanceDictAllowed = true;
-        boolean finalized = false;
-        PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; }
-
-        PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;if(c.attrs.containsKey(name))return null;} return null; }
-        PyProperty lookupProperty(String name) { for (PyClass c:mro){PyProperty p=c.properties.get(name);if(p!=null)return p;} return null; }
-        Object lookupAttr(String name) { for (PyClass c:mro) if(c.attrs.containsKey(name)) return c.attrs.get(name); return MISSING; }
-        int mroIndex(PyClass current){int i=mro.indexOf(current);if(i<0)throw new PyException("TypeError","super(type, obj): type is not in MRO");return i;}
-        PyMethod lookupMethodAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyClass cls=mro.get(i);PyMethod m=cls.methods.get(name);if(m!=null)return m;if(cls.attrs.containsKey(name))return null;}return null;}
-        PyProperty lookupPropertyAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyProperty p=mro.get(i).properties.get(name);if(p!=null)return p;}return null;}
-        Object lookupAttrAfter(PyClass current,String name){for(int i=mroIndex(current)+1;i<mro.size();i++){PyClass c=mro.get(i);if(c.attrs.containsKey(name))return c.attrs.get(name);}return MISSING;}
-
-        void computeMro() {
-            if (bases.isEmpty()) { mro = List.of(this); return; }
-            ArrayList<List<PyClass>> seqs = new ArrayList<>();
-            for (PyClass base : bases) seqs.add(new ArrayList<>(base.mro));
-            seqs.add(new ArrayList<>(bases));
-            ArrayList<PyClass> out = new ArrayList<>();
-            out.add(this);
-            while (true) {
-                seqs.removeIf(List::isEmpty);
-                if (seqs.isEmpty()) break;
-                PyClass candidate = null;
-                outer:
-                for (List<PyClass> seq : seqs) {
-                    PyClass head = seq.get(0);
-                    boolean inTail = false;
-                    for (List<PyClass> other : seqs) {
-                        if (other.size() > 1 && other.subList(1, other.size()).contains(head)) { inTail = true; break; }
-                    }
-                    if (!inTail) { candidate = head; break outer; }
-                }
-                if (candidate == null) throw new IllegalArgumentException("inconsistent method resolution order for class " + name);
-                out.add(candidate);
-                for (List<PyClass> seq : seqs) if (!seq.isEmpty() && seq.get(0) == candidate) seq.remove(0);
-            }
-            mro = List.copyOf(out);
-        }
-        @Override public String toString() { return "<class '" + moduleName + "." + name + "'>"; }
-    }
 
 }

@@ -1,5 +1,6 @@
 package pyjvm315.runtime;
 
+import static pyjvm315.runtime.PyRuntime.*;
 import java.math.BigInteger;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
@@ -22,6 +23,6 @@ import java.util.Set;
 final class PyCell {
     final PyEnv env; final String name;
     PyCell(PyEnv env,String name){this.env=env;this.name=name;}
-    Object value(){return env.values.getOrDefault(name,PyRuntime.UNBOUND);}
+    Object value(){return env.values.getOrDefault(name,UNBOUND);}
     void set(Object value){env.values.put(name,value);}
 }

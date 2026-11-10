@@ -1,5 +1,6 @@
 package pyjvm315.runtime;
 
+import static pyjvm315.runtime.PyRuntime.*;
 import java.math.BigInteger;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
@@ -23,7 +24,7 @@ final class PyTuple implements Iterable<Object> {
     final ArrayList<Object> items = new ArrayList<>();
     @Override public Iterator<Object> iterator() { return items.iterator(); }
     public String pyRepr() {
-        String body = PyRuntime.seqRepr(items, "(", ")");
+        String body = seqRepr(items, "(", ")");
         if (items.size() == 1) return body.substring(0, body.length() - 1) + ",)";
         return body;
     }

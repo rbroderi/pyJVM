@@ -1,5 +1,6 @@
 package pyjvm315.runtime;
 
+import static pyjvm315.runtime.PyRuntime.*;
 import java.math.BigInteger;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
@@ -31,5 +32,5 @@ final class PyDictView implements Iterable<Object> {
             public Object next(){var e=base.next();PyTuple t=new PyTuple();t.items.add(e.getKey());t.items.add(e.getValue());return t;}
         };
     }
-    String pyRepr(){return "dict_"+kind+"("+PyRuntime.seqRepr(this,"[","]")+")";}
+    String pyRepr(){return "dict_"+kind+"("+seqRepr(this,"[","]")+")";}
 }
