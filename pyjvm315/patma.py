@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 
 HELPERS = {
-    "isSeq": 1, "isMap": 1, "get": 2, "ok": 1, "rest": 2, "isClass": 2, "pos": 4, "attr": 2,
+    "isSeq": 1, "isMap": 1, "get": 2, "ok": 1, "rest": 2, "isClass": 2, "pos": 4, "attr": 2, "check": 3, "keys": 1,
 }
 PREFIX = "__pm_"
 
@@ -172,6 +172,8 @@ class _Lowering(ast.NodeTransformer):
             return self._sequence(p, s)
         if isinstance(p, ast.MatchMapping):
             parts = [_call("isMap", subj())]
+            if len(p.keys) > 1 and not all(isinstance(k, ast.Constant) for k in p.keys):
+                parts.append(_call("keys", ast.List(elts=list(p.keys), ctx=ast.Load())))
             for key, sub in zip(p.keys, p.patterns):
                 parts.append(self._sub(sub, _call("get", subj(), key), require_present=True))
             if p.rest:
@@ -182,6 +184,9 @@ class _Lowering(ast.NodeTransformer):
             cls = self.fresh()
             parts = [_call("isClass", subj(), _load(cls))]
             n = len(p.patterns)
+            if n and (n > 1 or p.kwd_attrs):
+                names = ast.List(elts=[ast.Constant(value=a) for a in p.kwd_attrs], ctx=ast.Load())
+                parts.append(_call("check", _load(cls), ast.Constant(value=n), names))
             for i, sub in enumerate(p.patterns):
                 parts.append(self._sub(sub, _call("pos", subj(), _load(cls), ast.Constant(value=i), ast.Constant(value=n)),
                                        require_present=True))

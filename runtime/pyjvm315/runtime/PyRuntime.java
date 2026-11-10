@@ -1567,6 +1567,7 @@ public final class PyRuntime {
     public static Object slice(Object start, Object stop, Object step) { return new PySlice(start, stop, step); }
     static Object sliceGet(Object value, PySlice sl) {
         if(value instanceof PyByteSequence seq) return binarySlice(seq,sl,true);
+        if(value instanceof PyRange r) return r.slice(sl);
         int size;
         if (value instanceof List<?> xs) size = xs.size();
         else if (value instanceof PyTuple t) size = t.items.size();

@@ -2408,7 +2408,7 @@ class Compiler:
             case ast.Constant(value=int() as value) if not isinstance(value, bool):
                 self._emit_int(value, b)
             case ast.Constant(value=float() as value):
-                b.ldc_string(repr(value))
+                b.ldc_string({"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}.get(repr(value), repr(value)))
                 b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
             case ast.Constant(value=complex() as value):
                 for part in (value.real, value.imag):

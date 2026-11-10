@@ -43,6 +43,18 @@ public final class PatternMatch {
         return copy;
     }
 
+    /** Runtime duplicate-key check for mapping patterns whose keys are not all literals. */
+    public static Object keys(Object keys) {
+        java.util.ArrayList<Object> seen = new java.util.ArrayList<>();
+        for (Object key : PyRuntime.iterable(keys)) {
+            for (Object prior : seen)
+                if (PyRuntime.truth(PyRuntime.eq(prior, key)))
+                    throw new PyException("ValueError", "mapping pattern checks duplicate key (" + PyRuntime.repr_(key) + ")");
+            seen.add(key);
+        }
+        return true;
+    }
+
     public static Object isClass(Object subject, Object cls) {
         if (!(cls instanceof PyClass) && !(cls instanceof PyBuiltinType))
             throw new PyException("TypeError", "called match pattern must be a class");
@@ -72,6 +84,24 @@ public final class PatternMatch {
         if (!(attr instanceof String s))
             throw new PyException("TypeError", "__match_args__ elements must be strings (got " + PyRuntime.typeName(attr) + ")");
         return attr(subject, s);
+    }
+
+    /** Reject a class pattern whose positional and keyword sub-patterns name the same attribute. */
+    public static Object check(Object cls, Object count, Object keywords) {
+        int n = ((Long) count).intValue();
+        if (cls instanceof PyBuiltinType t && SELF_MATCHING.contains(t.name)) return true;
+        Object margs = MISSING;
+        try { margs = PyRuntime.getattr(cls, "__match_args__"); }
+        catch (PyException e) { if (!e.typeName.equals("AttributeError")) throw e; }
+        if (!(margs instanceof PyTuple tuple)) return true;
+        java.util.HashSet<Object> seen = new java.util.HashSet<>();
+        for (Object kw : PyRuntime.iterable(keywords)) seen.add(kw);
+        for (int i = 0; i < n && i < tuple.items.size(); i++) {
+            if (!seen.add(tuple.items.get(i)))
+                throw new PyException("TypeError", (cls instanceof PyClass c ? c.name : ((PyBuiltinType) cls).name)
+                    + "() got multiple sub-patterns for attribute " + PyRuntime.repr_(tuple.items.get(i)));
+        }
+        return true;
     }
 
     public static Object attr(Object subject, Object name) {
