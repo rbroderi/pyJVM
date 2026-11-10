@@ -24,6 +24,10 @@ jobs:
         env:
           PYTHONPATH: .
         run: pytest -q
+      - name: Runtime method-size lint (HotSpot huge-method limit)
+        env:
+          PYTHONPATH: .
+        run: python -m pyjvm315.methodsize --runtime
       - name: Differential conformance
         env:
           PYTHONPATH: .

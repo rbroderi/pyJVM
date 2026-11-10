@@ -206,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--fail-on-error", action="store_true", help="Exit non-zero when compiler errors are observed")
     ap.add_argument("--min-compiles", type=int, default=0, help="Fail if fewer cases compile than this pinned baseline")
     ap.add_argument("--expect-cases", type=int, help="Fail if the selected corpus cardinality changes")
+    ap.add_argument("--owner-map", action="store_true",
+                    help="Group unsupported reasons by owning file/pass and roadmap ticket")
     ap.add_argument("--baseline", type=Path, help="Pinned identity/status baseline; reject previously compiling case regressions")
     ns = ap.parse_args(argv)
 
@@ -235,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
     if ns.expect_cases is not None and len(report['results']) != ns.expect_cases:
         failures.append(f"expected {ns.expect_cases} cases, found {len(report['results'])}")
     report['baseline_regressions'] = failures
+    if ns.owner_map:
+        from .owner_map import owner_map
+        report['owner_map'] = owner_map(report)
     encoded = json.dumps(report, indent=2, sort_keys=True)
     if ns.output:
         ns.output.parent.mkdir(parents=True, exist_ok=True)
@@ -254,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
             print("\nTop unsupported reasons:")
             for item in reasons[: ns.top]:
                 print(f"  {item['count']:5}  {item['reason']}")
+        if ns.owner_map:
+            from .owner_map import format_owner_map
+            print("\n" + format_owner_map(report['owner_map']))
         errors = report["error_reasons"]
         if errors:
             print("\nTop compiler-error reasons:")
