@@ -15,6 +15,11 @@ def _runtime_class_source() -> Path:
     return Path(__file__).resolve().parent.parent / "runtime" / "pyjvm315" / "runtime" / "PyRuntime.java"
 
 
+def _runtime_sources() -> list[Path]:
+    """Every runtime source file (PyRuntime plus the per-type files split out of it)."""
+    return sorted(_runtime_class_source().parent.glob("*.java"))
+
+
 def build_runtime(output_dir: Path) -> None:
     source = _runtime_class_source()
     if not source.exists():
@@ -22,7 +27,7 @@ def build_runtime(output_dir: Path) -> None:
     javac = shutil.which("javac")
     if not javac:
         raise RuntimeError("javac is required once to build the pyjvm315 runtime support class")
-    subprocess.run([javac, "--release", "21", "-d", str(output_dir), str(source)], check=True)
+    subprocess.run([javac, "--release", "21", "-d", str(output_dir), *map(str, _runtime_sources())], check=True)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -109,21 +109,6 @@ public final class PyRuntime {
     }
 
     // ---------- Python module loading ----------
-    public static final class PyCompiledLoader {
-        final String name,path;
-        PyCompiledLoader(String name,String path){this.name=name;this.path=path;}
-        @Override public String toString(){return "<pyjvm315 loader for '"+name+"'>";}
-    }
-    public static final class PyModuleSpec {
-        final String name,origin,parent;
-        final Object loader;
-        final Object submoduleSearchLocations;
-        PyModuleSpec(String name,String origin,String parent,boolean isPackage,Object loader){
-            this.name=name;this.origin=origin;this.parent=parent;this.loader=loader;
-            this.submoduleSearchLocations=isPackage?new ArrayList<Object>():null;
-        }
-        @Override public String toString(){return "ModuleSpec(name='"+name+"', origin='"+origin+"')";}
-    }
     public static Object makeModuleLoader(Object nameObj,Object pathObj){
         return new PyCompiledLoader((String)nameObj,(String)pathObj);
     }
@@ -192,13 +177,6 @@ public final class PyRuntime {
     }
 
     // ---------- Builtin type objects / introspection ----------
-    public static final class PyBuiltinType {
-        final String name;
-        PyBuiltinType(String name){this.name=name;}
-        @Override public String toString(){return "<class '"+name+"'>";}
-        @Override public boolean equals(Object other){return other instanceof PyBuiltinType t && name.equals(t.name);}
-        @Override public int hashCode(){return name.hashCode();}
-    }
     private record PyBuiltinFunction(String name) {}
     private record BuiltinBoundMethod(Object self,String name) {}
     private record BoundCallable(Object function,Object self) {}
@@ -572,7 +550,7 @@ public final class PyRuntime {
         return pyStr(value);
     }
 
-    private static String seqRepr(Iterable<?> xs, String left, String right) {
+    static String seqRepr(Iterable<?> xs, String left, String right) {
         StringBuilder out = new StringBuilder(left);
         boolean first = true;
         for (Object x : xs) {
@@ -1988,9 +1966,6 @@ public final class PyRuntime {
     private static int normalizeSliceStop(int i, int size, boolean positive) {
         if (i < 0) i += size; if (positive) return Math.max(0, Math.min(size, i)); return Math.max(-1, Math.min(size-1, i));
     }
-    public static final class PySlice {
-        final Object start, stop, step; PySlice(Object start,Object stop,Object step){this.start=start;this.stop=stop;this.step=step;}
-    }
 
     public static Object unpack(Object value, Object countObj) {
         int count = asIndex(countObj); ArrayList<Object> out = new ArrayList<>();
@@ -2103,10 +2078,6 @@ public final class PyRuntime {
         }
         throw new PyException("TypeError","object is not an async iterator");
     }
-    public static final class PyAsyncNextResult {
-        final boolean done; final Object value;
-        PyAsyncNextResult(boolean done,Object value){this.done=done;this.value=value;}
-    }
     public static Object asyncIterNext(Object iterator) {
         try { return new PyAsyncNextResult(false,awaitValue(anext_(iterator))); }
         catch(PyException e) {
@@ -2161,32 +2132,7 @@ public final class PyRuntime {
         };
     }
 
-    public static final class PyDictView implements Iterable<Object> {
-        final Map<Object,Object> map; final String kind;
-        PyDictView(Map<Object,Object> map,String kind){this.map=map;this.kind=kind;}
-        @Override public Iterator<Object> iterator() {
-            if(kind.equals("keys")) return map.keySet().iterator();
-            if(kind.equals("values")) return map.values().iterator();
-            Iterator<Map.Entry<Object,Object>> base=map.entrySet().iterator();
-            return new Iterator<>() {
-                public boolean hasNext(){return base.hasNext();}
-                public Object next(){var e=base.next();PyTuple t=new PyTuple();t.items.add(e.getKey());t.items.add(e.getValue());return t;}
-            };
-        }
-        String pyRepr(){return "dict_"+kind+"("+seqRepr(this,"[","]")+")";}
-    }
 
-    public static final class PyTuple implements Iterable<Object> {
-        private final ArrayList<Object> items = new ArrayList<>();
-        @Override public Iterator<Object> iterator() { return items.iterator(); }
-        public String pyRepr() {
-            String body = seqRepr(items, "(", ")");
-            if (items.size() == 1) return body.substring(0, body.length() - 1) + ",)";
-            return body;
-        }
-        @Override public boolean equals(Object other) { return other instanceof PyTuple t && items.equals(t.items); }
-        @Override public int hashCode() { return items.hashCode(); }
-    }
 
     public static final class PyRange implements Iterable<Object> {
         private final BigInteger start, stop, step;
@@ -2620,20 +2566,8 @@ public final class PyRuntime {
     }
 
     // ---------- Lexical environments / closure cells ----------
-    public static final class PyEnv {
-        final PyEnv parent;
-        final LinkedHashMap<String,Object> values = new LinkedHashMap<>();
-        final HashMap<String,PyCell> cells = new HashMap<>();
-        PyEnv(PyEnv parent) { this.parent = parent; }
-    }
 
     // Cells share the existing lexical binding, including writes and deletion.
-    public static final class PyCell {
-        final PyEnv env; final String name;
-        PyCell(PyEnv env,String name){this.env=env;this.name=name;}
-        Object value(){return env.values.getOrDefault(name,UNBOUND);}
-        void set(Object value){env.values.put(name,value);}
-    }
     private static PyCell envCell(PyEnv env,String name) {
         while(env!=null && !env.values.containsKey(name))env=env.parent;
         if(env==null)throw new PyException("RuntimeError","closure binding unavailable: "+name);
@@ -2684,7 +2618,7 @@ public final class PyRuntime {
         throw new PyException("NameError", "no binding for nonlocal '" + name + "' found");
     }
 
-    private static final Object UNBOUND = new Object();
+    static final Object UNBOUND = new Object();
     public static Object unbound() { return UNBOUND; }
     public static Object requireLocal(Object value,Object name) {
         if(value==UNBOUND) throw new PyException("UnboundLocalError","local variable '"+name+"' referenced before assignment");
@@ -2840,10 +2774,6 @@ public final class PyRuntime {
         PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyCoroutine(frame,(String)nameObj);
     }
-    public static final class PyAsyncGeneratorYield {
-        final Object value;
-        PyAsyncGeneratorYield(Object value){this.value=value;}
-    }
     public static Object asyncGeneratorYield(Object value){return new PyAsyncGeneratorYield(value);}
 
     public static Object makeAsyncGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
@@ -2867,11 +2797,6 @@ public final class PyRuntime {
         PyGenerator gen=(PyGenerator)genObj; gen.returnValue=value; gen.finished=true; return GENERATOR_DONE;
     }
 
-    public static final class PyYieldFromResult {
-        final boolean done;
-        final Object value;
-        PyYieldFromResult(boolean done, Object value) { this.done=done; this.value=value; }
-    }
 
     // One PEP-380 delegation step. A sent value is forwarded to a Python
     // generator delegate; ordinary JVM/Python iterators only accept None.
@@ -3456,17 +3381,6 @@ public final class PyRuntime {
     public static void frameDelLocal(Object nameObj){ActiveFrame frame=currentLogicalFrame();if(frame!=null)frame.locals.remove(nameObj);}
     private static ActiveFrame currentLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();return stack.isEmpty()?null:stack.peek();}
 
-    public static final class PyCode {
-        final String coName, coFilename; final long coFirstlineno;
-        PyCode(String name,String filename,long firstlineno){this.coName=name;this.coFilename=filename;this.coFirstlineno=firstlineno;}
-        @Override public String toString(){return "<code object "+coName+">";}
-    }
-    public static final class PyFrame {
-        final PyCode code; final LinkedHashMap<Object,Object> locals;
-        PyFrame(PyCode code){this(code,new LinkedHashMap<Object,Object>());}
-        PyFrame(PyCode code,LinkedHashMap<Object,Object> locals){this.code=code;this.locals=locals;}
-        @Override public String toString(){return "<frame "+code.coName+">";}
-    }
     public static final class PyTraceback {
         final PyFrame frame; final long lineno; final PyTraceback next;
         PyTraceback(PyFrame frame,long lineno,PyTraceback next){this.frame=frame;this.lineno=lineno;this.next=next;}
