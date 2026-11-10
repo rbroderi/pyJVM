@@ -7,12 +7,17 @@ on:
 
 jobs:
   conformance:
+    name: conformance (python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.13', '3.15']   # 3.13 is the minimum supported version
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.15'
+          python-version: ${{ matrix.python }}
           allow-prereleases: true
       - uses: actions/setup-java@v5
         with:

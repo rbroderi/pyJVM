@@ -1,3 +1,4 @@
+# pyjvm: requires-python >= 3.15
 print(NotImplemented, Ellipsis, ... is Ellipsis)
 try:
     bool(NotImplemented)

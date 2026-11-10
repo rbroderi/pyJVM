@@ -1,3 +1,4 @@
+# pyjvm: requires-python >= 3.15
 values = [0j, 1j, -1j, 1+2j, -3+4j, complex(-0.0, -0.0)]
 for z in values:
     print(z, bool(z), type(z) is complex, isinstance(z, complex))

@@ -15,6 +15,7 @@ import shutil
 from .compiler import CompileError, compile_file
 from .cli import build_runtime
 from .classfile import DEFAULT_TARGET, JAVA_TARGETS
+from .versions import reference_version, required_python
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Result:
 def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("PYTHONHASHSEED", "0")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
 
 
@@ -66,6 +68,9 @@ def _jvm_exception(stderr: str) -> str | None:
 def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_cache: Path | None = None, *,
                  target: int = DEFAULT_TARGET) -> Result:
     source = source.resolve()
+    needed = required_python(source.read_text(encoding="utf-8"))
+    if needed is not None and reference_version(python_exe) < needed:
+        return Result(source.name, "SKIP", "requires python >= %d.%d" % needed)
     py = _run([python_exe, str(source)], cwd=source.parent)
 
     with tempfile.TemporaryDirectory(prefix="pyjvm315-") as td:
@@ -82,7 +87,7 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
             return Result(source.name, "UNSUPPORTED", str(exc))
         except Exception as exc:
             return Result(source.name, "ERROR", f"build failed: {exc}")
-        jvm = _run([java_exe, "-Xverify:all", "-cp", str(out), "ConformanceMain"], cwd=source.parent)
+        jvm = _run([java_exe, "-Xverify:all", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", str(out), "ConformanceMain"], cwd=source.parent)
 
     if _stdout(jvm) != _stdout(py):
         return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}\nJVM stderr: {jvm.stderr!r}")
@@ -126,7 +131,7 @@ def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Differential CPython -> JVM conformance runner")
     ap.add_argument("path", type=Path, help="A .py file or directory of .py cases")
-    ap.add_argument("--python", default=sys.executable, help="Reference CPython executable (use python3.15 for 3.15 conformance)")
+    ap.add_argument("--python", default=sys.executable, help="Reference CPython executable (its version selects version-gated cases; 3.13 is the minimum)")
     ap.add_argument("--java", default="java")
     ap.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     ap.add_argument("--unsupported-summary", action="store_true", help="Group unsupported cases by compiler reason")
@@ -137,16 +142,17 @@ def main(argv: list[str] | None = None) -> int:
     passed = sum(r.status == "PASS" for r in results)
     unsupported = sum(r.status == "UNSUPPORTED" for r in results)
     failed = sum(r.status in {"FAIL", "ERROR"} for r in results)
+    skipped = sum(r.status == "SKIP" for r in results)
 
     if ns.json:
         print(json.dumps({
-            "summary": {"passed": passed, "unsupported": unsupported, "failed": failed},
+            "summary": {"passed": passed, "unsupported": unsupported, "failed": failed, "skipped": skipped},
             "results": [asdict(r) for r in results],
         }, indent=2))
     else:
         for r in results:
             print(f"{r.status:11} {r.name}" + (f" - {r.detail}" if r.detail else ""))
-        print(f"\n{passed} passed, {unsupported} unsupported, {failed} failed")
+        print(f"\n{passed} passed, {unsupported} unsupported, {failed} failed" + (f", {skipped} skipped (version-gated)" if skipped else ""))
         if ns.unsupported_summary and unsupported:
             print("\nUnsupported feature summary:")
             reasons = Counter(r.detail for r in results if r.status == "UNSUPPORTED")

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
+from .versions import feature_version
 
 
 def _preserve_codegen_state(compile_method):
@@ -197,7 +198,7 @@ class Compiler:
 
     def compile(self, source: str, filename: str = "<string>") -> bytes:
         self.filename = filename
-        tree = ast.parse(source, filename=filename, mode="exec", feature_version=(3, 15))
+        tree = ast.parse(source, filename=filename, mode="exec", feature_version=feature_version())
         self.deleted_names = {name for n in ast.walk(tree) if isinstance(n, ast.Delete)
                               for t in n.targets for name in self._target_names(t)}
         self.deleted_names.update(n.name for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name)

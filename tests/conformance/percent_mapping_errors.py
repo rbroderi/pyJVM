@@ -1,3 +1,4 @@
+# pyjvm: requires-python >= 3.15
 values = {'name':'é🙂', 'n':17, '(key)':3, '':4}
 for template in ('%(name)s/%(n)#06x', '%((key))d', '%()d', '%(name).1s', '%s %(n)d', '%(n)d %% %(n)x'):
     print(template % values)

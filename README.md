@@ -4,6 +4,17 @@ Experimental **Python 3.15 source/AST → JVM `.class` transpiler**, inspired by
 BeeWare VOC's separation of Python semantics from JVM bytecode emission, but
 implemented against the modern Python AST and a new runtime/object model.
 
+## Supported Python versions
+
+pyJVM runs on **Python 3.13 or newer** (the minimum; enforced on import and in
+`pyproject.toml`). Source is parsed with the host interpreter's `ast`, so the
+grammar available to compiled programs is the host's. CI exercises 3.13 and 3.15.
+Behaviour that differs between CPython releases is selected by the reference
+interpreter, not hard-coded: a conformance case that only holds on newer CPython
+carries a `# pyjvm: requires-python >= 3.15` header and is reported as skipped
+(version-gated) on older references. The pinned CPython corpus probe is a 3.15
+checkout and still runs on a 3.15 host.
+
 ## 0.9 status
 
 The compiler emits JVM class files directly; user programs are not translated

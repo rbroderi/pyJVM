@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 from .compiler import CompileError, compile_source
+from .versions import feature_version
 
 
 LINE_SUFFIX = re.compile(r" at line \d+$")
@@ -88,7 +89,7 @@ def _case_function(node: ast.FunctionDef | ast.AsyncFunctionDef, qualname: str) 
 
 def discover_cases(path: Path) -> tuple[ast.Module, list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]]:
     source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path), mode="exec", feature_version=(3, 15))
+    tree = ast.parse(source, filename=str(path), mode="exec", feature_version=feature_version())
     cases: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = []
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name.startswith("test"):

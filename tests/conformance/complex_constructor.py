@@ -1,3 +1,4 @@
+# pyjvm: requires-python >= 3.15
 alias = complex
 for value in [0, True, 12, 1.5, 1j, complex(-0.0, -0.0),
               '1', '1j', '+j', '-j', '(1-2j)', '  ( -0-0j )  ',

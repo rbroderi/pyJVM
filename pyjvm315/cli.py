@@ -31,7 +31,7 @@ def build_runtime(output_dir: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="pyjvm315", description="Python 3.15 AST -> JVM classfile transpiler")
+    parser = argparse.ArgumentParser(prog="pyjvm315", description="Python (3.13+) AST -> JVM classfile transpiler")
     parser.add_argument("source", help="Python source file")
     parser.add_argument("-o", "--output", default="build/jvm", help="Output directory")
     parser.add_argument("-c", "--class-name", help="Generated JVM class name, e.g. demo.Main")
