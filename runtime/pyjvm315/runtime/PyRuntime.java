@@ -1654,6 +1654,7 @@ public final class PyRuntime {
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
         if(key instanceof PySlice sl && value instanceof PyByteArray array){byteArraySetSlice(array,sl,item);return;}
         if(key instanceof PySlice sl && value instanceof List<?>){NativeSubclassMethods.listSetSlice((List<Object>)value,sl,item);return;}
+        if(key instanceof PySlice sl && value instanceof PyMemoryView view){memoryViewSetSlice(view,sl,item);return;}
         int i = asIndex(key);
         if(value instanceof PyByteArray array){array.setUnsigned(normalizeIndex(i,array.byteSize()),byteValue(item));return;}
         if(value instanceof PyMemoryView view){view.setUnsigned(normalizeIndex(i,view.byteSize()),byteValue(item));return;}
@@ -2241,6 +2242,20 @@ public final class PyRuntime {
         }
         return binaryResult(sep,out);
     }
+    /** {@code view[a:b:c] = data}: same-size assignment only, as memoryview cannot change length. */
+    static void memoryViewSetSlice(PyMemoryView view,PySlice sl,Object replacementObj){
+        byte[] replacement=bytesFromObject(replacementObj);
+        int size=view.byteSize();
+        int step=sl.step==null?1:asIndex(sl.step);
+        if(step==0)throw new PyException("ValueError","slice step cannot be zero");
+        int start=sl.start==null?(step>0?0:size-1):normalizeSliceIndex(asIndex(sl.start),size,step>0);
+        int stop=sl.stop==null?(step>0?size:-1):normalizeSliceStop(asIndex(sl.stop),size,step>0);
+        ArrayList<Integer> indexes=new ArrayList<>();
+        for(int i=start;step>0?i<stop:i>stop;i+=step)if(i>=0&&i<size)indexes.add(i);
+        if(indexes.size()!=replacement.length)throw new PyException("ValueError","memoryview assignment: lvalue and rvalue have different structures");
+        for(int i=0;i<indexes.size();i++)view.setUnsigned(indexes.get(i),replacement[i]&0xff);
+    }
+
     static void byteArraySetSlice(PyByteArray array,PySlice sl,Object replacementObj){
         byte[] replacement=bytesFromObject(replacementObj);
         int size=array.byteSize();
@@ -3897,6 +3912,16 @@ public final class PyRuntime {
         }
         if(obj instanceof PyMemoryView view) {
             if(name.equals("readonly")) return view.readonly();
+            switch(name) {
+                case "nbytes": return (long)view.byteSize();
+                case "itemsize": case "ndim": return 1L;
+                case "format": return "B";
+                case "shape": { PyTuple t=new PyTuple(); t.items.add((long)view.byteSize()); return t; }
+                case "strides": { PyTuple t=new PyTuple(); t.items.add(1L); return t; }
+                case "obj": return view.source;
+                case "c_contiguous": case "f_contiguous": case "contiguous": return true;
+                default: break;
+            }
         }
         if(obj instanceof PyModuleSpec spec) {
             return switch(name) {
