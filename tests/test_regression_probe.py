@@ -14,10 +14,7 @@ class Tests:
         print(x)
 
     def test_unsupported(self):
-        try:
-            pass
-        except* ValueError:
-            pass
+        import module_that_does_not_exist
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -26,7 +23,7 @@ class Tests:
     report = probe_files([source])
     assert report["summary"]["COMPILES"] == 1
     assert report["summary"]["UNSUPPORTED"] == 1
-    assert any("TryStar" in item["reason"] for item in report["unsupported_reasons"])
+    assert any("not available" in item["reason"] for item in report["unsupported_reasons"])
 
 
 def test_reason_normalization_removes_line_numbers():

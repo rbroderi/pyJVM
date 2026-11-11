@@ -18,7 +18,14 @@ import ast
 
 
 def _chars(line: str, byte_offset: int) -> int:
-    return len(line.encode("utf-8")[:byte_offset].decode("utf-8", "ignore"))
+    """Character index of a UTF-8 byte offset into line."""
+    used = 0
+    index = 0
+    while index < len(line) and used < byte_offset:
+        code = ord(line[index])
+        used += 1 if code < 0x80 else 2 if code < 0x800 else 3 if code < 0x10000 else 4
+        index += 1
+    return index
 
 
 def _binop_anchors(line: str, node: ast.BinOp) -> tuple[int, int]:
