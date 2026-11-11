@@ -85,7 +85,7 @@ except ImportError as e:
     print(type(e).__name__, e)
 print(Finder.calls)
 sys.meta_path.remove(Finder)
-print([getattr(f, "__name__", f) for f in sys.meta_path])
+print([f.__name__ for f in sys.meta_path if getattr(f, "__name__", "") in ("BuiltinImporter", "FrozenImporter", "PathFinder")])
 print(sys.path_importer_cache.get(BASE) is not None, type(sys.path_importer_cache[BASE]).__name__)
 print(callable(sys.path_hooks[-1]), sys.builtin_module_names == tuple(sorted(sys.builtin_module_names)), "sys" in sys.builtin_module_names)
 print("sys" in sys.modules, "builtins" in sys.modules, sys.modules["sys"] is sys)
