@@ -1018,7 +1018,7 @@ its first 21 bodies; all preceding files contribute every discoverable body.
 
 | Evidence | Current result |
 |---|---:|
-| Selected bodies compiling independently | **2,890 / 3,000 (94.2%)** |
+| Selected bodies compiling independently | **2,918 / 3,000 (94.2%)** |
 | Explicitly unsupported selected bodies | **173** |
 | Unexpected compiler errors | **0** |
 | Unchanged CPython bodies verified at runtime | **68 bodies / 85 executions** |
@@ -1038,7 +1038,7 @@ initialization does not invent a Python value. Nested/local-class closure work
 and Java 21 targeting remain intact.
 
 CI checks exactly 3,000 unique pinned identities, corpus/manifest fingerprints,
-zero compiler errors and a 2,890 compilation floor. A per-case baseline also rejects
+zero compiler errors and a 2,918 compilation floor. A per-case baseline also rejects
 any previously compiling body that regresses, even if another body improves. The
 legacy 358-body probe remains at 325 compiling / 33 unsupported, with its existing
 gate retained. New runtime bodies cover assignment expressions and lexical

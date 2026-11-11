@@ -17,8 +17,8 @@ lane needs `PYJVM_HOME`/`PYJVM_PYTHON` (the conformance runner sets them).
 
 ## Status after pattern-matching lowering (P1-01..P1-03)
 
-Measured on a CPython 3.15 host against the pinned corpus: **2,890 of 3,000** bodies
-compile (was 2,247 before Phase 1), 110 unsupported, 0 compiler errors, no regressions. The
+Measured on a CPython 3.15 host against the pinned corpus: **2,918 of 3,000** bodies
+compile (was 2,247 before Phase 1), 82 unsupported, 0 compiler errors, no regressions. The
 remaining unsupported bodies depend on the import system and stdlib (`open`, `contextlib`,
 `types`, `typing`, `copy`, `pickle`, ...) or on CPython C-API test modules (`_testcapi`), which are
 Phase 3/4 work. The legacy
@@ -41,7 +41,7 @@ the selection to 3,000. There is no replacement with reduced snippets.
 | Expanded scan | Compiles | Unsupported | Compiler errors | Total |
 |---|---:|---:|---:|---:|
 | Before conditional-local fixes | 2,208 | 769 | 23 | 3,000 |
-| Current baseline | **2,890** | **110** | **0** | **3,000** |
+| Current baseline | **2,918** | **82** | **0** | **3,000** |
 
 The 23 errors were JVM frame-analysis failures on conditionally bound locals.
 Non-argument slots now start with UNBOUND and checked loads preserve lexical
@@ -53,13 +53,13 @@ empty loops/comprehensions, exception targets and suppressed/nested with binding
 The strict execution lane separately verifies **68 selected unchanged bodies /
 85 executions**; three new bodies cover assignment expressions and unbound lexical
 variables. The project differential suite has **195 passing cases**. These runtime
-results must not be conflated with the 2,890 compiling bodies. Decorators are removed
+results must not be conflated with the 2,918 compiling bodies. Decorators are removed
 and module globals are placeholders in the compile-only probe. Shared mixins and
 source bodies do not equal dynamically discovered unittest cases.
 
 `tools/cpython_probe_3000_baseline.json` records statuses by identity and fingerprints
 the selection and pinned corpus. CI retains the original 325/358 gate, adds an
-exact-3,000 cardinality check and 2,890 compilation floor, rejects any previously
+exact-3,000 cardinality check and 2,918 compilation floor, rejects any previously
 compiling body that regresses, and rejects ERROR/SYNTAX/NO_CASES outcomes. Both
 reports are uploaded under the compatibility artifact. A compile gain cannot
 offset another case's regression.

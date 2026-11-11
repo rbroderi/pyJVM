@@ -81,7 +81,7 @@ jobs:
             --cpython-root cpython-src \
             --baseline tools/cpython_probe_3000_baseline.json \
             --output artifacts/cpython-regression-probe-3000.json \
-            --expect-cases 3000 --min-compiles 2890 --fail-on-error --top 30
+            --expect-cases 3000 --min-compiles 2918 --fail-on-error --top 30
       - name: Upload regression probe report
         if: always()
         uses: actions/upload-artifact@v4
@@ -113,6 +113,11 @@ jobs:
           python -m pyjvm315.cpython_execution --cpython-root cpython-src
           --manifest tools/cpython_execution_manifest.txt --target 21 --selfhosted
           --output artifacts/cpython-execution.json
+      - name: Thread stress programs
+        env:
+          PYJVM_STRESS: "1"
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_threads_stress.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

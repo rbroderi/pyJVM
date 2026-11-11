@@ -621,3 +621,40 @@ Lib/test/test_copy.py::TestCopy.test_copy_dict objects
 Lib/test/test_copy.py::TestCopy.test_copy_frozendict objects
 Lib/test/test_copy.py::TestCopy.test_copy_set objects
 Lib/test/test_copy.py::TestCopy.test_copy_frozenset objects
+# weakref/gc bodies (P2-08); run against the corpus Lib at run time.
+@imports gc weakref sys
+Lib/test/test_weakref.py::ReferencesTestCase.test_repr_failure_gh99184 objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_matmul objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_deletion objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_bool objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_iter objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_next objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_bad_next objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_reversed objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_proxy_hash objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_newstyle_number_ops objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_callbacks_protected objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_sf_bug_840829 objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_callback_in_cycle objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_callback_reachable_one_way objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_callback_different_classes objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_ref_created_during_del objects
+Lib/test/test_weakref.py::ReferencesTestCase.test_init objects
+Lib/test/test_weakref.py::ModuleTestCase.test_names objects
+Lib/test/test_gc.py::GCTests.test_del objects
+Lib/test/test_gc.py::GCTests.test_del_newclass objects
+Lib/test/test_gc.py::GCTests.test_trashcan objects
+Lib/test/test_gc.py::GCTests.test_get_referents objects
+Lib/test/test_gc.py::GCTests.test_bug21435 objects
+Lib/test/test_gc.py::GCTests.test_traverse_frozen_objects objects
+Lib/test/test_gc.py::GCTogglingTests.test_get_count_nonnegative objects
+# threading bodies (P2-10).
+@imports threading sys _thread
+Lib/test/test_threading.py::ThreadTests.test_args_argument objects
+Lib/test/test_threading.py::ThreadTests.test_lock_no_subclass objects
+Lib/test/test_threading.py::ThreadTests.test_gettrace_all_threads objects
+Lib/test/test_threading.py::ThreadTests.test_getprofile_all_threads objects
+Lib/test/test_threading.py::ThreadingExceptionTests.test_start_thread_again objects
+Lib/test/test_threading.py::ThreadingExceptionTests.test_joining_current_thread objects
+Lib/test/test_threading.py::ThreadingIteratorToolsTests.test_serialize_generator_methods_locking objects
+Lib/test/test_threading.py::InterruptMainTests.test_interrupt_main_mainthread objects
