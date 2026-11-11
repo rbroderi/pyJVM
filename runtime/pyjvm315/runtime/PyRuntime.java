@@ -214,7 +214,7 @@ public final class PyRuntime {
         try {
             Class<?> cls=Class.forName(module.className);
             for(String f:fields) {
-                try { Object value=cls.getField(f).get(null);if(value!=UNBOUND)return value;break; } catch(NoSuchFieldException ignored) {}
+                try { java.lang.reflect.Field field=cls.getField(f);Object value=field.get(null);if(value!=UNBOUND)return LazyImport.reifyField(value,field);break; } catch(NoSuchFieldException ignored) {}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
@@ -807,7 +807,8 @@ public final class PyRuntime {
         if(a instanceof PyByteArray array) {
             if((a==b || b instanceof PyMemoryView view && view.source==a) && ((PyByteSequence)b).byteSize()>0)
                 throw new PyException("BufferError","Existing exports of data: object cannot be re-sized");
-            if(!(b instanceof PyByteSequence seq))throw new PyException("TypeError","cannot concatenate bytearray and non-buffer object");
+            PyByteSequence seq=b instanceof PyByteSequence bs?bs:ArrayModule.asArray(b);
+            if(seq==null)throw new PyException("TypeError","cannot concatenate bytearray and non-buffer object");
             byte[] data=seq.toByteArray(); for(byte value:data)array.data.add(value); return array;
         }
         if(a instanceof List<?>){listExtend(a,a==b?new ArrayList<>((List<?>)b):b);return a;}
@@ -1680,6 +1681,7 @@ public final class PyRuntime {
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
         if(key instanceof PySlice sl && value instanceof PyByteArray array){byteArraySetSlice(array,sl,item);return;}
         if(key instanceof PySlice sl && value instanceof List<?>){NativeSubclassMethods.listSetSlice((List<Object>)value,sl,item);return;}
+        if(key instanceof PySlice sl && value instanceof PyMemoryView view){memoryViewSetSlice(view,sl,item);return;}
         int i = asIndex(key);
         if(value instanceof PyByteArray array){array.setUnsigned(normalizeIndex(i,array.byteSize()),byteValue(item));return;}
         if(value instanceof PyMemoryView view){view.setUnsigned(normalizeIndex(i,view.byteSize()),byteValue(item));return;}
@@ -1989,6 +1991,7 @@ public final class PyRuntime {
     static byte[] bytesFromObject(Object value){
         if(value instanceof PyInstance w && w.payload!=null && w.cls.lookupMethod("__iter__")==null && w.cls.lookupMethod("__index__")==null) value=w.payload;
         if(value instanceof PyByteSequence seq) return seq.toByteArray();
+        { ArrayData arr=ArrayModule.asArray(value); if(arr!=null) return arr.toByteArray(); }
         if(value instanceof PyInstance instance && instance.cls.lookupMethod("__index__")!=null)
             value=invoke(instance,instance.cls.lookupMethod("__index__"),new Object[0]);
         if(isIntLike(value)) {
@@ -2013,6 +2016,7 @@ public final class PyRuntime {
         value=NativeSubclass.unwrap(value);
         if(value instanceof PyMemoryView view) return new PyMemoryView(view.source,view.start,view.length);
         if(value instanceof PyByteSequence seq) return new PyMemoryView(seq);
+        { ArrayData arr=ArrayModule.asArray(value); if(arr!=null) return new PyMemoryView(arr); }
         throw new PyException("TypeError","memoryview: a bytes-like object is required");
     }
     public static Object bytesFromHexLiteral(Object hexObj){
@@ -2272,6 +2276,20 @@ public final class PyRuntime {
         }
         return binaryResult(sep,out);
     }
+    /** {@code view[a:b:c] = data}: same-size assignment only, as memoryview cannot change length. */
+    static void memoryViewSetSlice(PyMemoryView view,PySlice sl,Object replacementObj){
+        byte[] replacement=bytesFromObject(replacementObj);
+        int size=view.byteSize();
+        int step=sl.step==null?1:asIndex(sl.step);
+        if(step==0)throw new PyException("ValueError","slice step cannot be zero");
+        int start=sl.start==null?(step>0?0:size-1):normalizeSliceIndex(asIndex(sl.start),size,step>0);
+        int stop=sl.stop==null?(step>0?size:-1):normalizeSliceStop(asIndex(sl.stop),size,step>0);
+        ArrayList<Integer> indexes=new ArrayList<>();
+        for(int i=start;step>0?i<stop:i>stop;i+=step)if(i>=0&&i<size)indexes.add(i);
+        if(indexes.size()!=replacement.length)throw new PyException("ValueError","memoryview assignment: lvalue and rvalue have different structures");
+        for(int i=0;i<indexes.size();i++)view.setUnsigned(indexes.get(i),replacement[i]&0xff);
+    }
+
     static void byteArraySetSlice(PyByteArray array,PySlice sl,Object replacementObj){
         byte[] replacement=bytesFromObject(replacementObj);
         int size=array.byteSize();
@@ -2389,9 +2407,10 @@ public final class PyRuntime {
     static Class<?> ownerClass(Object owner) throws ClassNotFoundException { return owner instanceof Class<?> c ? c : Class.forName((String)owner); }
     public static Object nsLoad(Object locals,Object globals,Object nameObj) {
         Map<?,?> l=(Map<?,?>)locals, g=(Map<?,?>)globals;
-        Object value=UNBOUND;
-        if(l!=g && l.containsKey(nameObj)) value=l.get(nameObj);
-        else if(g.containsKey(nameObj)) value=g.get(nameObj);
+        Object value=UNBOUND; Map<?,?> source=null;
+        if(l!=g && l.containsKey(nameObj)){value=l.get(nameObj);source=l;}
+        else if(g.containsKey(nameObj)){value=g.get(nameObj);source=g;}
+        if(value instanceof PyInstance) value=LazyImport.reifyNs(value,source,nameObj);
         return value!=UNBOUND?value:Namespaces.builtinOrError(globals,nameObj);
     }
     @SuppressWarnings("unchecked")
@@ -2422,7 +2441,7 @@ public final class PyRuntime {
     /** Value of globals["__builtins__"]: builtins are resolved by name in the runtime, so this is a marker. */
     static Object builtinModuleStandIn(){ return builtinFunction("print"); }
     public static Object globalGet(Object value,Object nameObj) {
-        if(value!=UNBOUND) return value;
+        if(value!=UNBOUND) return value instanceof PyInstance ? LazyImport.reify(value) : value;
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
@@ -3609,7 +3628,7 @@ public final class PyRuntime {
             requireArgs(name,args,1);
             if(name.equals("__hash__")) return (long)System.identityHashCode(args[0]);
             if(name.equals("__str__")) return pyRepr(args[0]);
-            if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+inst.cls.moduleName+"."+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
+            if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+(inst.cls.moduleName.equals("builtins")?"":inst.cls.moduleName+".")+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
             return pyRepr(args[0]);
         }
         if(builtin.name.equals("object") && name.equals("__init_subclass__")){requireArgs(name,args,0);return null;}
@@ -3723,6 +3742,7 @@ public final class PyRuntime {
         if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable || obj instanceof NativeFunction)
             return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         TypeSlots.CallMethod slot = TypeSlots.callMethodSlot(obj);
+        if (slot == null && obj instanceof PyCode) throw PyFrameSupport.codeMethod(name);
         if (slot == null) throw new PyException("AttributeError", "'" + typeName(obj) + "' object has no attribute '" + name + "'");
         return slot.call(obj, name, args);
     }
@@ -3879,6 +3899,7 @@ public final class PyRuntime {
         if(obj instanceof NativeFunction nf){
             if(nf.attrs.containsKey(name))return nf.attrs.get(name);
             if(name.equals("__name__") || name.equals("__qualname__"))return nf.name;
+            if(name.equals("__doc__"))return null;
         }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(obj instanceof PyBuiltinType type && name.equals("__mro__")){
@@ -3939,6 +3960,16 @@ public final class PyRuntime {
         }
         if(obj instanceof PyMemoryView view) {
             if(name.equals("readonly")) return view.readonly();
+            switch(name) {
+                case "nbytes": return (long)view.byteSize();
+                case "itemsize": case "ndim": return 1L;
+                case "format": return "B";
+                case "shape": { PyTuple t=new PyTuple(); t.items.add((long)view.byteSize()); return t; }
+                case "strides": { PyTuple t=new PyTuple(); t.items.add(1L); return t; }
+                case "obj": return view.source;
+                case "c_contiguous": case "f_contiguous": case "contiguous": return true;
+                default: break;
+            }
         }
         if(obj instanceof PyModuleSpec spec) {
             return switch(name) {
@@ -4021,6 +4052,8 @@ public final class PyRuntime {
             }
             if(cls.nativeKind!=null || name.equals("__base__")){Object nativeValue=NativeSubclassMethods.classAttribute(cls,name);if(nativeValue!=MISSING)return nativeValue;}
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
+            if(name.equals("__subclasshook__"))return new NativeFunction("__subclasshook__",(a,k)->NOT_IMPLEMENTED);
+            if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
@@ -4168,6 +4201,7 @@ public final class PyRuntime {
             return false;
         }
         if (obj instanceof PyInstance proxy && proxy.cls.weakProxy && !(clsObj instanceof PyClass pc && pc.weakProxy)) { Object target=WeakrefProxy.referent(proxy); if(truth(isInstance(target,clsObj)))return true; }
+        if (clsObj instanceof PyClass hooked && hooked.metaclass != null && hooked.metaclass.lookupMethod("__instancecheck__") != null) return truth(callMethod(hooked, "__instancecheck__", new Object[]{obj}));
         if (clsObj instanceof PyClass cls) return obj instanceof PyInstance instance ? instance.cls.mro.contains(cls) : obj instanceof PyClass oc && oc.metaclass!=null && oc.metaclass.mro.contains(cls);
         if (clsObj instanceof PyBuiltinType bt) {
             if(obj instanceof PyExceptionValue error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
@@ -4176,6 +4210,7 @@ public final class PyRuntime {
             if(obj instanceof PyInstance nativeInst && nativeInst.payload!=null) return bt.name.equals("object") || bt.name.equals(nativeInst.cls.nativeKind);
             return switch(bt.name) {
                 case "object" -> true;
+                case "NoneType" -> obj == null;
                 case "super" -> obj instanceof PySuper;
                 case "int" -> isIntLike(obj);
                 case "bool" -> obj instanceof Boolean;
@@ -4211,6 +4246,7 @@ public final class PyRuntime {
 
     public static Object isSubclass(Object subObj,Object clsObj) {
         if(clsObj instanceof PyTuple tuple){for(Object value:tuple.items)if(truth(isSubclass(subObj,value)))return true;return false;}
+        if(clsObj instanceof PyClass hooked && hooked.metaclass!=null && hooked.metaclass.lookupMethod("__subclasscheck__")!=null)return truth(callMethod(hooked,"__subclasscheck__",new Object[]{subObj}));
         if(!isType(subObj) || !isType(clsObj))throw new PyException("TypeError","issubclass() arguments must be classes");
         return typeMro(subObj).contains(clsObj);
     }

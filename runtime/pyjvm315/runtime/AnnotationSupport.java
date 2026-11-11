@@ -26,6 +26,7 @@ final class AnnotationSupport {
 
     static Object callHelper(String name, List<Object> args) {
         if (TypeParamsSupport.isHelper(name)) return TypeParamsSupport.callHelper(name, args);
+        if (LazyImport.isHelper(name)) return LazyImport.callHelper(name, args);
         switch (name) {
             case "__pyjvm_annotate__": return decorator(name, args, true);
             case "__pyjvm_annotations__": return decorator(name, args, false);

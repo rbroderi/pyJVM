@@ -12,7 +12,7 @@ import java.util.Set;
 final class IntMethods {
     private IntMethods() {}
 
-    static final Set<String> NAMES = Set.of("bit_length", "bit_count", "to_bytes", "conjugate", "is_integer", "as_integer_ratio");
+    static final Set<String> NAMES = Set.of("bit_length", "bit_count", "to_bytes", "conjugate", "is_integer", "as_integer_ratio", "__index__", "__int__", "__trunc__", "__floor__", "__ceil__", "__float__");
     static final Map<String, List<String>> PARAMS = Map.of("to_bytes", List.of("length", "byteorder", "signed"));
     static final Map<String, List<String>> STATIC_PARAMS = Map.of("from_bytes", List.of("bytes", "byteorder", "signed"));
 
@@ -24,6 +24,8 @@ final class IntMethods {
             case "conjugate" -> { requireArgs(name, args, 0); yield obj instanceof Boolean ? (Object) (v.signum() != 0 ? 1L : 0L) : obj; }
             case "is_integer" -> { requireArgs(name, args, 0); yield true; }
             case "as_integer_ratio" -> { requireArgs(name, args, 0); PyTuple t = new PyTuple(); t.items.add(compact(v)); t.items.add(1L); yield t; }
+            case "__index__", "__int__", "__trunc__", "__floor__", "__ceil__" -> { requireArgs(name, args, 0); yield compact(v); }
+            case "__float__" -> { requireArgs(name, args, 0); yield float_(compact(v)); }
             case "to_bytes" -> toBytes(v, args);
             default -> throw new PyException("AttributeError", "'int' object has no attribute '" + name + "'");
         };
@@ -56,7 +58,7 @@ final class IntMethods {
 
     /** int.from_bytes(bytes, byteorder, *, signed=False). */
     static Object fromBytes(Object[] args) {
-        if (args.length < 2) throw new PyException("TypeError", "from_bytes() missing required argument 'byteorder' (pos 2)");
+        if (args.length < 1) throw new PyException("TypeError", "from_bytes() missing required argument 'bytes' (pos 1)");
         boolean signed = args.length > 2 && truth(args[2]);
         byte[] data;
         if (args[0] instanceof PyBytes b) data = b.data;
@@ -71,7 +73,7 @@ final class IntMethods {
             data = bos.toByteArray();
         }
         data = data.clone();
-        if (little(args[1])) for (int i = 0, j = data.length - 1; i < j; i++, j--) { byte t = data[i]; data[i] = data[j]; data[j] = t; }
+        if (args.length > 1 && args[1] != null && little(args[1])) for (int i = 0, j = data.length - 1; i < j; i++, j--) { byte t = data[i]; data[i] = data[j]; data[j] = t; }
         if (data.length == 0) return 0L;
         return compact(signed ? new BigInteger(data) : new BigInteger(1, data));
     }

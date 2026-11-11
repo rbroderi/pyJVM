@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+import struct, sys
+def t(f, *a):
+    try: print(repr(f(*a)))
+    except Exception as e: print(type(e).__name__, e)
+for fmt in ['b','B','h','H','i','I','l','L','q','Q','n','N','P','<h','<H','<i','<I','<l','<L','<q','<Q','>i','=i','c','s','p','?','e','f','d','x']:
+    for v in [300, -300, 2**31, -2**31-1, 2**32, 2**63, -2**63-1, 2**64, 1.5, 'a', b'a', None]:
+        print(fmt, repr(v), end=' ')
+        t(struct.pack, fmt, v)
+t(struct.pack, 'i')
+t(struct.pack, 'ii', 1)
+t(struct.pack, 'i', 1, 2)
+t(struct.unpack, 'i', b'ab')
+t(struct.unpack_from, 'i', b'abcd', 1)
+t(struct.unpack_from, 'i', b'abcd', -1)
+t(struct.unpack_from, 'i', b'abcd', -10)
+t(struct.unpack_from, 'i', b'abcd', 10)
+t(struct.pack_into, 'i', bytearray(2), 0, 1)
+t(struct.pack_into, 'i', bytearray(8), 6, 1)
+t(struct.pack_into, 'i', bytearray(8), -10, 1)
+t(struct.pack_into, 'i', b'abcdefgh', 0, 1)
+t(struct.pack_into, 'i', bytearray(8))
+t(struct.pack_into, 'i', bytearray(8), 0)
+t(lambda: list(struct.iter_unpack('i', b'abc')))
+t(lambda: list(struct.iter_unpack('0i', b'abc')))
+t(struct.calcsize, 'z')
+t(struct.calcsize, '3')
+t(struct.calcsize, 99999999999999999999)
+t(struct.calcsize, '99999999999999999999i')
+t(struct.calcsize, '2147483647i')
+t(struct.calcsize, '<2147483647q')
+t(struct.calcsize, 'i\x00')
+t(struct.calcsize, 'é')
+t(struct.calcsize, b'ii')
+t(struct.calcsize, ' 2 i ')
+t(struct.calcsize, '@bq'); t(struct.calcsize, '=bq'); t(struct.calcsize, '<bq'); t(struct.calcsize,'bhilqnNPefd?'); t(struct.calcsize,'=hilqefd?')
+t(struct.calcsize,'<n'); t(struct.calcsize,'<P');t(struct.calcsize,'>N')
+t(struct.Struct, 5)
+t(struct.Struct, 'z')
+s = struct.Struct('<i2sp')
+print(s.format, s.size, s)
+t(s.pack, 1, b'ab', b'cd')
+t(s.unpack, s.pack(1, b'abc', b'cd'))
+t(struct.pack, '3s', b'abcdef'); t(struct.pack, '10p', b'abcdef'); t(struct.pack, '3p', b'abcdef'); t(struct.pack, '0p', b'a')
+t(struct.unpack, '3p', b'\x09abc'); t(struct.unpack, '0s', b''); t(struct.pack, '0s', b'abc')
+t(struct.pack, '<e', 65520.0); t(struct.pack, '<e', 65504.0); t(struct.pack, '<e', 1e-8); t(struct.pack, '<e', float('inf')); t(struct.pack,'<f',1e39); t(struct.pack,'<f',float('nan'))
+t(struct.unpack,'<e',b'\x00\x7c'); t(struct.unpack,'<e',b'\xff\x7b');t(struct.unpack,'<e',b'\x01\x00');t(struct.unpack,'<e',b'\x00\xfe')
+t(struct.pack,'<e',3.14159); t(struct.pack,'>e',-0.0); t(struct.pack,'e',2**-24); t(struct.pack,'e',2**-25*1.5)
+t(struct.pack,'<?',[]); t(struct.pack,'<?','x'); t(struct.unpack,'<?',b'\x02')
+t(struct.pack,'c',b'ab'); t(struct.pack,'c',1); t(struct.pack, 'c', bytearray(b'a'))
+t(struct.pack,'s','a'); t(struct.pack,'s',bytearray(b'a'))
+t(struct.pack, '>3xi', 1); t(struct.pack, '@bi', 1, 2); t(struct.pack, '@bq', 1, 2); t(struct.pack,'@ci4sq', b'a',1,b'abcd',2)
+t(struct.unpack, '>Q', b'\xff'*8); t(struct.unpack, '<q', b'\xff'*8); t(struct.unpack, 'n', b'\xff'*8)
+class I:
+    def __index__(self): return 5
+t(struct.pack, 'i', I())
+class F:
+    def __float__(self): return 5.5
+t(struct.pack, 'd', F()); t(struct.pack, 'd', 3); t(struct.pack, 'd', 'x')
+t(struct.pack, 'i', True)
+t(struct.unpack, 'i', memoryview(b'abcd')); t(struct.unpack, 'i', 'abcd'); t(struct.unpack,'i',bytearray(b'abcd')); t(struct.unpack,'i', 5)
+t(struct.pack, 'ii', *[1,2])
+t(lambda: struct.Struct('i').unpack_from(b'abcdefgh', offset=4))
+t(lambda: struct.Struct('i').unpack_from(buffer=b'abcdefgh', offset=4))
+t(struct.Struct('i').pack_into, bytearray(8), 4, 1)
+t(struct.unpack, '<2h', b'\x01\x00\x02\x00'); t(struct.unpack, '3x', b'abc');
+print(struct.Struct('i').__class__, struct.Struct.__module__, struct.error, struct.error.__module__, issubclass(struct.error, Exception))
+print(sorted(x for x in dir(struct.Struct) if not x.startswith('__')))
+print(sorted(x for x in dir(struct) if not x.startswith('_')))
+print(sorted(x for x in dir(__import__('_struct')) if not x.startswith('_')))
+print(struct.Struct('i').__sizeof__() > 0)
+t(struct.pack,'>l',2**31); t(struct.pack,'>L',-1);t(struct.pack,'<b',128);t(struct.pack,'<B',-1);t(struct.pack,'<h',-32769);t(struct.pack,'<H',65536);t(struct.pack,'<q',2**63);t(struct.pack,'<Q',-1);t(struct.pack,'<I',-1)
+t(struct.pack,'P',-1); t(struct.pack,'N',-1); t(struct.pack, 'n', 2**63); t(struct.pack, 'n', -2**63-1)
+t(struct.pack,'bb', 1, 300)
+t(struct.pack,'1F', 1j) if sys.version_info >= (3,14) else None
+t(struct.pack,'=2D', 1j, 2+3j) if sys.version_info >= (3,14) else None
+t(struct.unpack, '=F', struct.pack('=F', 1+2j)) if sys.version_info >= (3,14) else None
+t(struct.calcsize, 'F') if sys.version_info >= (3,14) else None

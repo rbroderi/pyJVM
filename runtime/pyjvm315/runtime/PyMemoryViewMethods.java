@@ -23,6 +23,14 @@ import java.util.Set;
 
 /** Method-call slot for PyMemoryView receivers (split out of PyRuntime.callMethod). */
 final class PyMemoryViewMethods {
+    /** Views are byte-addressed, so only the one-byte formats can be cast to. */
+    private static Object cast(PyMemoryView view,Object[] args) {
+        if(args.length<1||args.length>2) throw new PyException("TypeError","cast() takes 1 or 2 arguments ("+args.length+" given)");
+        if(args[0] instanceof String f && (f.equals("B")||f.equals("b")||f.equals("c"))&&args.length==1) return view;
+        throw new PyException("NotImplementedError","memoryview.cast to formats other than B, b and c is not supported");
+    }
+
+
     static Object call(Object obj, String name, Object[] args) {
         PyMemoryView view=(PyMemoryView)obj;
         return switch(name) {
@@ -31,6 +39,11 @@ final class PyMemoryViewMethods {
                 requireArgs(name,args,0); ArrayList<Object> out=new ArrayList<>();
                 for(Object x:view)out.add(x); yield out;
             }
+            case "__enter__" -> { requireArgs(name,args,0); yield view; }
+            case "__exit__" -> null;
+            case "release" -> { requireArgs(name,args,0); yield null; }
+            case "hex" -> callMethod(new PyBytes(view.toByteArray()),"hex",args);
+            case "cast" -> cast(view,args);
             default -> throw new PyException("AttributeError","'memoryview' object has no attribute '"+name+"'");
         };
     }

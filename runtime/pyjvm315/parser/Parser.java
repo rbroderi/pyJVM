@@ -26,6 +26,8 @@ public final class Parser {
     private static final AstNode LOAD = new AstNode("Load"), STORE = new AstNode("Store"), DEL = new AstNode("Del");
 
     private int featureMinor = Integer.MAX_VALUE;
+    /** PEP 810 context for {@code lazy import}: 0 module, 1 function, 2 class; and the depth of enclosing try statements. */
+    private int lazyScope, lazyTry;
 
     /** CPython's CHECK_VERSION: syntax introduced in 3.{@code since} fails under an older feature_version. */
     private void gate(int since, String what) {
@@ -242,7 +244,7 @@ public final class Parser {
                 case "import": return parseImport(t, false);
                 case "from": return parseFrom(t, false);
                 case "lazy":
-                    if (peek(1).type == Token.NAME && (peek(1).string.equals("import") || peek(1).string.equals("from"))) {
+                    if (featureMinor >= 15 && pyjvm315.runtime.LangVersion.atLeast(3, 15) && peek(1).type == Token.NAME && (peek(1).string.equals("import") || peek(1).string.equals("from"))) {
                         next();
                         return atKw("import") ? parseImport(t, true) : parseFrom(t, true);
                     }
@@ -256,7 +258,14 @@ public final class Parser {
         return parseExpressionStatement();
     }
 
+    /** PEP 810: a lazy import is only legal at module level and outside try statements. */
+    private void checkLazyPlacement(Token start, String what) {
+        String where = lazyScope == 1 ? "functions" : lazyScope == 2 ? "classes" : lazyTry > 0 ? "try/except blocks" : null;
+        if (where != null) throw new PySyntaxError("SyntaxError", what + " not allowed inside " + where, start.startLine, start.startCol + 1);
+    }
+
     private AstNode parseImport(Token start, boolean lazy) {
+        if (lazy) checkLazyPlacement(start, "lazy import");
         expectKw("import");
         List<Object> names = list();
         do {
@@ -273,6 +282,7 @@ public final class Parser {
         return sb.toString();
     }
     private AstNode parseFrom(Token start, boolean lazy) {
+        if (lazy) checkLazyPlacement(start, "lazy from ... import");
         expectKw("from");
         long level = 0;
         while (atOp(".") || atOp("...")) level += next().string.length();
@@ -281,7 +291,10 @@ public final class Parser {
         if (lazy && "__future__".equals(module)) throw unexpected(start, "lazy from __future__ import is not allowed");
         expectKw("import");
         List<Object> names = list();
-        if (atOp("*")) { Token s = next(); names.add(mk("alias", s, s, "*", null)); }
+        if (atOp("*")) {
+            if (lazy) throw new PySyntaxError("SyntaxError", "lazy from ... import * is not allowed", start.startLine, start.startCol + 1);
+            Token s = next(); names.add(mk("alias", s, s, "*", null));
+        }
         else {
             boolean paren = acceptOp("(");
             do {
@@ -435,6 +448,11 @@ public final class Parser {
     }
 
     private AstNode parseTry() {
+        lazyTry++;
+        try { return parseTry0(); } finally { lazyTry--; }
+    }
+
+    private AstNode parseTry0() {
         Token s = next();
         List<Object> body = parseBlock(), handlers = list(), orelse = list(), fin = list();
         boolean star = false;
@@ -515,7 +533,10 @@ public final class Parser {
         expectOp(")");
         AstNode returns = null;
         if (acceptOp("->")) returns = parseExpression();
-        List<Object> body = parseBlock();
+        int savedScope = lazyScope, savedTry = lazyTry;
+        lazyScope = 1; lazyTry = 0;
+        List<Object> body;
+        try { body = parseBlock(); } finally { lazyScope = savedScope; lazyTry = savedTry; }
         return mk(async != null ? "AsyncFunctionDef" : "FunctionDef", s, prevReal, name.string, args, body, decorators, returns, null, tp);
     }
 
@@ -525,7 +546,10 @@ public final class Parser {
         List<Object> tp = atOp("[") ? parseTypeParams() : list();
         List<Object> bases = list(), keywords = list();
         if (acceptOp("(")) { parseCallArguments(bases, keywords, null); expectOp(")"); }
-        List<Object> body = parseBlock();
+        int savedScope = lazyScope, savedTry = lazyTry;
+        lazyScope = 2; lazyTry = 0;
+        List<Object> body;
+        try { body = parseBlock(); } finally { lazyScope = savedScope; lazyTry = savedTry; }
         return mk("ClassDef", s, prevReal, name.string, bases, keywords, body, decorators, tp);
     }
 

@@ -29,7 +29,7 @@ public final class ImportSupport {
     static final PyDict MODULES = new PyDict();
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
     static final Set<String> NATIVE_NAMES = Set.of("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
-        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_queue");
+        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode");
     private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal"};
 
     private static boolean bootstrapping, bootstrapped;
@@ -65,6 +65,8 @@ public final class ImportSupport {
             case "_queue" -> QueueModule.create();
             case "_codecs" -> CodecsModule.create();
             case "_locale" -> LocaleModule.create();
+            case "_struct" -> StructModule.create();
+            case "binascii" -> BinasciiModule.create(); case "_random" -> RandomModule.create(); case "array" -> ArrayModule.create(); case "zlib" -> ZlibModule.create(); case "_signal" -> SignalModule.create(); case "select" -> SelectModule.create(); case "_opcode" -> OpcodeModule.create(); case "_md5" -> HashModule.create("_md5", "md5"); case "_sha1" -> HashModule.create("_sha1", "sha1"); case "_sha2" -> HashModule.create("_sha2", "sha224", "sha256", "sha384", "sha512");
             default -> throw new PyException("ModuleNotFoundError", new PyExcArgs(tuple("No module named '" + name + "'"), null, attrs("name", name)));
         };
     }
@@ -119,7 +121,7 @@ public final class ImportSupport {
     static Object dictGetattr(PyModule m, String name) {
         PyDict d = m.dict;
         if (name.equals("__dict__")) return d;
-        if (d.containsKey(name)) return d.get(name);
+        if (d.containsKey(name)) return LazyImport.reifyNs(d.get(name), d, name);
         Object hook = d.get("__getattr__");
         if (hook != null) return PyRuntime.callFunction(hook, new ArrayList<Object>(List.of(name)), new LinkedHashMap<Object,Object>());
         Object modName = d.get("__name__") == null ? m.name : d.get("__name__");
@@ -226,7 +228,7 @@ public final class ImportSupport {
         return fromlist == null || !PyRuntime.truth(fromlist);
     }
 
-    private static Object doImport(String name, Object globals, Object locals, Object fromlist, long level) {
+    static Object doImport(String name, Object globals, Object locals, Object fromlist, long level) {
         if (level == 0 && emptyFromlist(fromlist)) {
             Object cached = fastLookup(name);
             if (cached != null) return cached;

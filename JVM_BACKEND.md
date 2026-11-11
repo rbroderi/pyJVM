@@ -80,3 +80,14 @@ foundation; they are not themselves a claim of near-Java speed.
 The encoding and verifier rules follow the Java Virtual Machine Specification,
 sections 4.1, 4.7.4 and 4.10:
 https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-4.html
+
+## Bytecode introspection (`_opcode`, `opcode`, `dis`)
+
+`_opcode` is a native module carrying the per-version CPython opcode tables (validity, `has_*` flags, stack effects,
+intrinsic, binary-operator and special-method names), so `opcode`, `dis` and their pure-Python data work and agree
+with CPython 3.13 / 3.15 (`dis.opname`, `dis.stack_effect`, `dis.hasjump`, ...). pyJVM compiles Python to JVM
+bytecode and keeps no CPython bytecode, so everything that disassembles a function or code object is unsupported:
+`dis.dis(func)`, `dis.dis("source")`, `dis.get_instructions`, `dis.Bytecode`, `dis.code_info` and `dis.show_code`
+raise `NotImplementedError` ("pyJVM compiles Python to JVM bytecode and has no CPython bytecode ..."), as does
+reading `co_code` or calling `co_lines()` on a code object. `_opcode.get_executor` returns `None` (no executors) and
+`ENABLE_SPECIALIZATION` is 0.

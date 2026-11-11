@@ -58,6 +58,7 @@ public final class NativeModules {
         NativeFunction hook = new NativeFunction("displayhook", Namespaces::defaultDisplayhook);
         m.attrs.put("displayhook", hook);
         m.attrs.put("__displayhook__", hook);
+        if (LangVersion.atLeast(3, 15)) LazyImport.installSys(m);
         return m;
     }
 

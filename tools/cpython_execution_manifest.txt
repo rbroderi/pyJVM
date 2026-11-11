@@ -657,4 +657,3 @@ Lib/test/test_threading.py::ThreadTests.test_getprofile_all_threads objects
 Lib/test/test_threading.py::ThreadingExceptionTests.test_start_thread_again objects
 Lib/test/test_threading.py::ThreadingExceptionTests.test_joining_current_thread objects
 Lib/test/test_threading.py::ThreadingIteratorToolsTests.test_serialize_generator_methods_locking objects
-Lib/test/test_threading.py::InterruptMainTests.test_interrupt_main_mainthread objects

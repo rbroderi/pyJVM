@@ -53,7 +53,7 @@ public final class WarningsModule {
         return k.containsKey(name) ? k.get(name) : fallback;
     }
 
-    private static Object warn(List<Object> a, Map<Object,Object> k) {
+    static Object warn(List<Object> a, Map<Object,Object> k) {
         Object message = arg(a, k, 0, "message", null);
         if (message == null && a.isEmpty() && !k.containsKey("message")) throw new PyException("TypeError", "warn() missing 1 required positional argument: 'message'");
         Object category = arg(a, k, 1, "category", null);
