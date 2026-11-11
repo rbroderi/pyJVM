@@ -177,6 +177,7 @@ class Compiler:
         self.dynamic = dynamic
         self.mode = mode
         self.eval_expr: ast.expr | None = None
+        self.has_implicit_exec = False   # static module with exec(x)/eval(x): unknown names resolve through __py_extras
         self.class_name = class_name.replace(".", "/")
         self.import_map = dict(import_map or {})
         self.import_exports = dict(import_exports or {})
@@ -211,6 +212,12 @@ class Compiler:
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
+        if not self.dynamic:
+            self.has_implicit_exec = any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("exec", "eval")
+                and len(n.args) == 1 and not n.keywords for n in ast.walk(tree))
+            if self.has_implicit_exec:
+                self.cf.add_field(Field("__py_extras"))
         self.deleted_names = {name for n in ast.walk(tree) if isinstance(n, ast.Delete)
                               for t in n.targets for name in self._target_names(t)}
         self.deleted_names.update(n.name for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name)
@@ -288,6 +295,37 @@ class Compiler:
             field_name = f"__py_global_{name}"
             self.global_fields[name] = field_name
             self.cf.add_field(Field(field_name))
+
+    def _emit_implicit_namespace_call(self, node: ast.Call, b: CodeBuilder, scope: Scope) -> None:
+        """exec(x)/eval(x) in a statically compiled module: run in a snapshot of the caller's namespaces.
+
+        Module level: the known module globals are snapshotted into one dict and copied back afterwards
+        (assignments and deletions by the executed code persist). Inside a function the locals are a
+        read-only snapshot, as for locals() since CPython 3.13."""
+        g_slot = scope.temp()
+        b.invokestatic(RUNTIME, "dict0", f"(){OBJ}"); b.astore(g_slot)
+        for name in sorted(self.global_fields):
+            b.aload(g_slot); b.getstatic(self.class_name, self.global_fields[name], OBJ); b.ldc_string(name)
+            b.invokestatic(RUNTIME, "snapshotPut", f"({OBJ*3})V")
+        b.aload(g_slot); b.getstatic(self.class_name, "__py_extras", OBJ)
+        b.invokestatic(RUNTIME, "dictUpdate", f"({OBJ*2})V")
+        if scope.module:
+            l_slot = g_slot
+        else:
+            l_slot = scope.temp()
+            b.invokestatic(RUNTIME, "snapshotLocals", f"(){OBJ}"); b.astore(l_slot)
+        b.ldc_string(node.func.id)
+        self._expr(node.args[0], b, scope)
+        b.aload(g_slot); b.aload(l_slot)
+        b.invokestatic(RUNTIME, "execBuiltin", f"({OBJ*4}){OBJ}")
+        if scope.module:
+            result_slot = scope.temp(); b.astore(result_slot)
+            for name in sorted(self.global_fields):
+                b.aload(g_slot); b.ldc_string(name); b.invokestatic(RUNTIME, "snapshotGet", f"({OBJ*2}){OBJ}")
+                b.putstatic(self.class_name, self.global_fields[name], OBJ)
+            b.getstatic(self.class_name, "__py_extras", OBJ); b.aload(g_slot); b.ldc_string(",".join(sorted(self.global_fields)))
+            b.invokestatic(RUNTIME, "snapshotExtras", f"({OBJ*3})V")
+            b.aload(result_slot)
 
     def _emit_owner(self, b: CodeBuilder) -> None:
         """The class holding compiled function bodies: its name, or (dynamic code) the Class itself."""
@@ -370,6 +408,9 @@ class Compiler:
         if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
                     "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super", "frozendict"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
+        if self.has_implicit_exec:
+            b.getstatic(self.class_name, "__py_extras", OBJ); b.getstatic(self.class_name, "__py_extras", OBJ)
+            b.ldc_string(name); b.invokestatic(RUNTIME, "nsLoad", f"({OBJ*3}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
     def _store_name(self, name: str, b: CodeBuilder, scope: Scope, *, temp_scope: Scope | None = None) -> None:
@@ -752,6 +793,8 @@ class Compiler:
         scope = Scope(start_slot=1, module=True)
         for name in sorted(self.global_fields):
             b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, self._global_field(name), OBJ)
+        if self.has_implicit_exec:
+            b.invokestatic(RUNTIME, "dict0", f"(){OBJ}"); b.putstatic(self.class_name, "__py_extras", OBJ)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
         b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
@@ -2472,6 +2515,11 @@ class Compiler:
                 ast.copy_location(namespaced, node)
                 self._expr(namespaced, b, scope)
                 return
+        if (not self.dynamic and isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords
+                and node.func.id in ("exec", "eval") and len(node.args) == 1 and not node.func.id in self.global_names
+                and not scope.has(node.func.id) and node.func.id not in scope.local_names and node.func.id not in scope.free_names):
+            self._emit_implicit_namespace_call(node, b, scope)
+            return
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id
             if name in {"min", "max", "sorted", "hex", "oct", "bin", "super"} or scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):

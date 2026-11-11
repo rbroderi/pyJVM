@@ -41,8 +41,14 @@ def test_missing_backend_is_an_explicit_error(runtime_dir):
     assert r.returncode != 0 and "PYJVM_HOME" in r.stderr
 
 
-def test_implicit_namespace_in_static_module_is_explicit_error(runtime_dir):
-    r = run_jvm(runtime_dir, "try:\n    eval('1 + 1')\nexcept NotImplementedError as e:\n    print('NIE')\n", backend=True)
+def test_implicit_namespace_in_static_module_uses_a_snapshot(runtime_dir):
+    src = "k = 4\nprint(eval('k * 2'))\nexec('k = 5')\nprint(k)\n"
+    r = run_jvm(runtime_dir, src, backend=True)
+    assert r.stdout.split() == ["8", "5"], r.stderr
+
+
+def test_implicit_namespace_without_backend_is_explicit(runtime_dir):
+    r = run_jvm(runtime_dir, "try:\n    eval('1 + 1')\nexcept NotImplementedError:\n    print('NIE')\n", backend=False)
     assert r.stdout.strip() == "NIE", r.stderr
 
 

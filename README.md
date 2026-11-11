@@ -15,6 +15,23 @@ carries a `# pyjvm: requires-python >= 3.15` header and is reported as skipped
 (version-gated) on older references. The pinned CPython corpus probe is a 3.15
 checkout and still runs on a 3.15 host.
 
+## exec, eval and compile
+
+`exec()`, `eval()` and `compile()` compile source into a class whose module-level names resolve
+through the globals/locals mappings you pass (not static fields), define it as a **hidden class**
+(unloadable once nothing references it) and run it. Functions and classes defined this way see later
+changes to their globals, `nonlocal`/`global`/`del`, nested `exec` and code objects reused across
+namespaces behave as in CPython.
+
+The compiler is still Python, so the runtime reaches it through a `CompilerBackend`. The interim
+`HostPythonBackend` runs `pyjvm315.exec_compile` in a host interpreter: set `PYJVM_HOME` to the
+directory containing the `pyjvm315` package and optionally `PYJVM_PYTHON` (default `python3`).
+When the compiler is self-hosted (roadmap P1-07) the backend becomes in-process and these
+variables go away. Explicit limits, each raising `NotImplementedError` rather than guessing:
+no backend configured; `exec(x)`/`eval(x)` without globals from a *statically compiled* module
+(it has no namespace dict to hand over; code compiled by `exec`/`eval` does); `locals()` inside a
+function of exec'd code; `compile(..., "single")`; non-`dict` locals mappings.
+
 ## 0.9 status
 
 The compiler emits JVM class files directly; user programs are not translated

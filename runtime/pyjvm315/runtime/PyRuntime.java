@@ -2269,6 +2269,22 @@ public final class PyRuntime {
         if(!map.containsKey(name)) throw new PyException("NameError","name '"+name+"' is not defined");
         map.remove(name);
     }
+    // ---- implicit namespaces for exec()/eval() called from statically compiled code ----
+    @SuppressWarnings("unchecked")
+    public static void snapshotPut(Object dict,Object value,Object name){ if(value!=UNBOUND) ((Map<Object,Object>)dict).put(name,value); }
+    /** After exec: names the executed code created that the module does not know statically live in the extras dict. */
+    @SuppressWarnings("unchecked")
+    public static void snapshotExtras(Object extras,Object dict,Object knownCsv){
+        java.util.Set<String> known=new java.util.HashSet<>(Arrays.asList(((String)knownCsv).split(",")));
+        Map<Object,Object> out=(Map<Object,Object>)extras; out.clear();
+        for(Map.Entry<?,?> e:((Map<?,?>)dict).entrySet()) if(!(e.getKey() instanceof String k && known.contains(k))) out.put(e.getKey(),e.getValue());
+    }
+    public static Object snapshotGet(Object dict,Object name){ Map<?,?> map=(Map<?,?>)dict; return map.containsKey(name)?map.get(name):UNBOUND; }
+    /** The calling function's locals as a fresh dict (read-only snapshot, as for locals() in CPython 3.13+). */
+    public static Object snapshotLocals(){ return new PyDict((Map<?,?>)varsLocals()); }
+    public static Object execBuiltin(Object name,Object source,Object globals,Object locals){
+        return callBuiltin((String)name,new ArrayList<Object>(Arrays.asList(source,globals,locals)),new LinkedHashMap<Object,Object>());
+    }
     static int logicalFrameDepth(){ return LOGICAL_FRAMES.get().size(); }
     static void truncateLogicalFrames(int depth){ ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); while(stack.size()>depth) stack.pop(); }
     /** Value of globals["__builtins__"]: builtins are resolved by name in the runtime, so this is a marker. */
