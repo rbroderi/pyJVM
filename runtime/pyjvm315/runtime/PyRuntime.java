@@ -190,7 +190,7 @@ public final class PyRuntime {
         try {
             Class<?> cls=Class.forName(module.className);
             for(String f:fields) {
-                try { Object value=cls.getField(f).get(null);if(value!=UNBOUND)return value;break; } catch(NoSuchFieldException ignored) {}
+                try { java.lang.reflect.Field field=cls.getField(f);Object value=field.get(null);if(value!=UNBOUND)return LazyImport.reifyField(value,field);break; } catch(NoSuchFieldException ignored) {}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
@@ -2373,9 +2373,10 @@ public final class PyRuntime {
     static Class<?> ownerClass(Object owner) throws ClassNotFoundException { return owner instanceof Class<?> c ? c : Class.forName((String)owner); }
     public static Object nsLoad(Object locals,Object globals,Object nameObj) {
         Map<?,?> l=(Map<?,?>)locals, g=(Map<?,?>)globals;
-        Object value=UNBOUND;
-        if(l!=g && l.containsKey(nameObj)) value=l.get(nameObj);
-        else if(g.containsKey(nameObj)) value=g.get(nameObj);
+        Object value=UNBOUND; Map<?,?> source=null;
+        if(l!=g && l.containsKey(nameObj)){value=l.get(nameObj);source=l;}
+        else if(g.containsKey(nameObj)){value=g.get(nameObj);source=g;}
+        if(value instanceof PyInstance) value=LazyImport.reifyNs(value,source,nameObj);
         return value!=UNBOUND?value:Namespaces.builtinOrError(globals,nameObj);
     }
     @SuppressWarnings("unchecked")
@@ -2406,7 +2407,7 @@ public final class PyRuntime {
     /** Value of globals["__builtins__"]: builtins are resolved by name in the runtime, so this is a marker. */
     static Object builtinModuleStandIn(){ return builtinFunction("print"); }
     public static Object globalGet(Object value,Object nameObj) {
-        if(value!=UNBOUND) return value;
+        if(value!=UNBOUND) return value instanceof PyInstance ? LazyImport.reify(value) : value;
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
@@ -3587,7 +3588,7 @@ public final class PyRuntime {
             requireArgs(name,args,1);
             if(name.equals("__hash__")) return (long)System.identityHashCode(args[0]);
             if(name.equals("__str__")) return pyRepr(args[0]);
-            if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+inst.cls.moduleName+"."+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
+            if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+(inst.cls.moduleName.equals("builtins")?"":inst.cls.moduleName+".")+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
             return pyRepr(args[0]);
         }
         if(builtin.name.equals("object") && name.equals("__init_subclass__")){requireArgs(name,args,0);return null;}

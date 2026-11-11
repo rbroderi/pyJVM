@@ -328,8 +328,12 @@ final class ExecSupport {
         Object[] ns = namespaces(who, globals, locals);
         int depth = PyRuntime.logicalFrameDepth();
         try {
-            return invoke(code.classBytes, ns[0], ns[1]);
+            LazyImport.enter(ns[0]);
+            Object result = invoke(code.classBytes, ns[0], ns[1]);
+            LazyImport.afterExec(ns[0]);
+            return result;
         } finally {
+            LazyImport.exit();
             PyRuntime.truncateLogicalFrames(depth);
         }
     }

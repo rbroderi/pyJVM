@@ -62,7 +62,7 @@ BUILTIN_FUNCTIONS = {
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
     "aiter", "anext", "exec", "eval", "compile", "divmod", "ascii", "breakpoint", "input", "__import__", "globals", "locals", "open",
     "__pyjvm_annotate__", "__pyjvm_annotations__", "__pyjvm_class_annotate__", "__pyjvm_cond_add__", "__pyjvm_not_implemented__",
-    "__pyjvm_global__", *TYPEPARAM_HELPERS,
+    "__pyjvm_global__", "__pyjvm_lazy_import__", "__pyjvm_lazy_ok__", *TYPEPARAM_HELPERS,
 }
 MODULE_CHUNK_LIMIT = 20000   # bytes of bytecode after which module-level statements continue in a helper method
 BUILTIN_TYPES = {
@@ -71,6 +71,7 @@ BUILTIN_TYPES = {
 }
 NAMESPACES = "pyjvm315/runtime/Namespaces"
 IMPORT_SUPPORT = "pyjvm315/runtime/ImportSupport"
+LAZY_IMPORT = "pyjvm315/runtime/LazyImport"
 
 
 class FunctionInfo:
@@ -218,6 +219,7 @@ class Compiler:
         self.class_nodes: list[ast.ClassDef] = []
         self.current_class: ClassInfo | None = None
         self.global_names: set[str] = set()
+        self.lazy_names: set[str] = set()   # PEP 810: module names bound by lazy imports; loading one resolves it
         self.global_fields: dict[str, str] = {}
         self._method_counter = 0
         self._async_comp_counter = 0
@@ -252,6 +254,9 @@ class Compiler:
         if self.optimize >= 2:
             strip_docstrings(tree)
         check_async_scopes(tree)
+        if feature_version() >= (3, 15):
+            check_lazy_imports(tree, filename, source)
+            self.lazy_names = lower_lazy_imports(tree, None if self.dynamic else self.module_name, None if self.dynamic else (self.package_name or None))
         check_except_star_flow(tree)
         tree = lower_try_star(tree)
         tree = lower_match(tree)
@@ -511,7 +516,11 @@ class Compiler:
             self._check_global_binding(name, b); return
         if name in self.global_names:
             b.getstatic(self.class_name, self.global_fields[name], OBJ)
-            self._check_global_binding(name, b); return
+            self._check_global_binding(name, b)
+            if name in self.lazy_names:
+                b.invokestatic(LAZY_IMPORT, "reify", f"({OBJ}){OBJ}")
+                b.dup(); b.putstatic(self.class_name, self.global_fields[name], OBJ)
+            return
         if name in {"NotImplemented", "Ellipsis"}:
             b.invokestatic(RUNTIME, "notImplemented" if name == "NotImplemented" else "ellipsis", f"(){OBJ}"); return
         if name == "__debug__":
@@ -3580,6 +3589,101 @@ class Compiler:
 GENUINE_SYNTAX_ERRORS = ("break outside loop", "continue outside loop", "return outside function", "cannot assign to __debug__",
                        "'await' outside function", "'async for' outside async function", "'async with' outside async function",
                        "asynchronous comprehension outside")
+
+
+def _lazy_scope_error(node, what, where, filename, source):
+    lines = source.splitlines() if isinstance(source, str) else []
+    text = lines[node.lineno - 1] + "\n" if 0 < node.lineno <= len(lines) else None
+    return SyntaxError(what + " not allowed inside " + where,
+                       (filename, node.lineno, node.col_offset + 1, text, node.end_lineno, node.end_col_offset + 1))
+
+
+def check_lazy_imports(tree: ast.AST, filename: str, source: str) -> None:
+    """PEP 810: a lazy import is only legal at module level and outside try statements; never `*` or `__future__`.
+
+    (The parser of this runtime already reports these; a host parser does not.)"""
+    stack = [(tree, 0, 0)]    # node, scope (0 module, 1 function, 2 class), enclosing try statements
+    while stack:
+        node, scope, tries = stack.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and getattr(node, "is_lazy", 0):
+            what = "lazy import" if isinstance(node, ast.Import) else "lazy from ... import"
+            if scope == 1: raise _lazy_scope_error(node, what, "functions", filename, source)
+            if scope == 2: raise _lazy_scope_error(node, what, "classes", filename, source)
+            if tries: raise _lazy_scope_error(node, what, "try/except blocks", filename, source)
+            if isinstance(node, ast.ImportFrom):
+                if any(alias.name == "*" for alias in node.names):
+                    raise SyntaxError("lazy from ... import * is not allowed", (filename, node.lineno, node.col_offset + 1, None, node.end_lineno, node.end_col_offset + 1))
+                if node.module == "__future__" and not node.level:
+                    raise SyntaxError("lazy from __future__ import is not allowed", (filename, node.lineno, node.col_offset + 1, None, node.end_lineno, node.end_col_offset + 1))
+        for child in ast.iter_child_nodes(node):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                stack.append((child, 1, 0))
+            elif isinstance(node, ast.ClassDef):
+                stack.append((child, 2, 0))
+            elif isinstance(node, (ast.Try, ast.TryStar)):
+                stack.append((child, scope, tries + 1))
+            else:
+                stack.append((child, scope, tries))
+
+
+def _lazy_call(helper: str, node: ast.stmt, name: str, attr: str | None, level: int, top: bool, module_name: str | None, package_name: str | None) -> ast.Call:
+    args = [ast.Constant(value=name), ast.Constant(value=attr), ast.Constant(value=level), ast.Constant(value=top),
+            ast.Constant(value=module_name), ast.Constant(value=package_name)]
+    return ast.Call(func=ast.Name(id=helper, ctx=ast.Load()), args=args, keywords=[])
+
+
+def _lazy_statements(stmt: ast.stmt, module_name: str | None, package_name: str | None, names: set[str]) -> list[ast.stmt]:
+    """One import statement as lazy bindings: always for `lazy import`, else only when the runtime says this import is lazy."""
+    explicit = bool(getattr(stmt, "is_lazy", 0))
+    out: list[ast.stmt] = []
+    if isinstance(stmt, ast.ImportFrom) and ((stmt.module == "__future__" and not stmt.level) or any(a.name == "*" for a in stmt.names)):
+        return [stmt]
+    for alias in stmt.names:
+        if isinstance(stmt, ast.Import):
+            top = alias.asname is None
+            bound = alias.asname or alias.name.split(".")[0]
+            args = (alias.name, None, 0, top)
+            eager = ast.Import(names=[ast.alias(name=alias.name, asname=alias.asname)], is_lazy=0)
+        else:
+            bound = alias.asname or alias.name
+            args = (stmt.module or "", alias.name, stmt.level or 0, False)
+            eager = ast.ImportFrom(module=stmt.module, names=[ast.alias(name=alias.name, asname=alias.asname)], level=stmt.level, is_lazy=0)
+        names.add(bound)
+        bind = ast.Assign(targets=[ast.Name(id=bound, ctx=ast.Store())],
+                          value=_lazy_call("__pyjvm_lazy_import__", stmt, args[0], args[1], args[2], args[3], module_name, package_name))
+        if explicit:
+            new = bind
+        else:
+            test = _lazy_call("__pyjvm_lazy_ok__", stmt, args[0], args[1], args[2], args[3], module_name, package_name)
+            new = ast.If(test=test, body=[bind], orelse=[eager])
+        for part in ast.walk(new):
+            ast.copy_location(part, stmt)
+        out.append(new)
+    return out
+
+
+def _lazy_body(body: list[ast.stmt], module_name: str | None, package_name: str | None, names: set[str]) -> list[ast.stmt]:
+    out: list[ast.stmt] = []
+    for stmt in body:
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            out.extend(_lazy_statements(stmt, module_name, package_name, names))
+            continue
+        if isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith)):
+            stmt.body = _lazy_body(stmt.body, module_name, package_name, names)
+            if not isinstance(stmt, (ast.With, ast.AsyncWith)):
+                stmt.orelse = _lazy_body(stmt.orelse, module_name, package_name, names)
+        elif isinstance(stmt, ast.Match):
+            for case in stmt.cases:
+                case.body = _lazy_body(case.body, module_name, package_name, names)
+        out.append(stmt)
+    return out
+
+
+def lower_lazy_imports(tree: ast.Module, module_name: str | None, package_name: str | None) -> set[str]:
+    """PEP 810: module-level imports become runtime-decided lazy bindings; returns the names those bindings may hold."""
+    names: set[str] = set()
+    tree.body = _lazy_body(tree.body, module_name, package_name, names)
+    return names
 
 
 def check_async_scopes(tree: ast.AST) -> None:

@@ -120,7 +120,7 @@ public final class ImportSupport {
     static Object dictGetattr(PyModule m, String name) {
         PyDict d = m.dict;
         if (name.equals("__dict__")) return d;
-        if (d.containsKey(name)) return d.get(name);
+        if (d.containsKey(name)) return LazyImport.reifyNs(d.get(name), d, name);
         Object hook = d.get("__getattr__");
         if (hook != null) return PyRuntime.callFunction(hook, new ArrayList<Object>(List.of(name)), new LinkedHashMap<Object,Object>());
         Object modName = d.get("__name__") == null ? m.name : d.get("__name__");
@@ -227,7 +227,7 @@ public final class ImportSupport {
         return fromlist == null || !PyRuntime.truth(fromlist);
     }
 
-    private static Object doImport(String name, Object globals, Object locals, Object fromlist, long level) {
+    static Object doImport(String name, Object globals, Object locals, Object fromlist, long level) {
         if (level == 0 && emptyFromlist(fromlist)) {
             Object cached = fastLookup(name);
             if (cached != null) return cached;
