@@ -5,6 +5,7 @@ import ast
 from .astutil import deepcopy_ast
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
+from .stackmap import FrameError
 from .versions import feature_version
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
 from .annot import lower_annotations
@@ -45,14 +46,20 @@ EXCEPTION_TYPES = {
     "BytesWarning", "ResourceWarning", "KeyboardInterrupt", "SystemExit",
 }
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
-NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io"}
+NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
-    "aiter", "anext", "exec", "eval", "compile",
+    "aiter", "anext", "exec", "eval", "compile", "globals", "locals",
 }
+MODULE_CHUNK_LIMIT = 20000   # bytes of bytecode after which module-level statements continue in a helper method
+BUILTIN_TYPES = {
+    "object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
+    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super", "frozendict",
+}
+NAMESPACES = "pyjvm315/runtime/Namespaces"
 
 
 class FunctionInfo:
@@ -171,11 +178,15 @@ class Compiler:
     def __init__(self, class_name: str, import_map: dict[str, str] | None = None,
                  import_exports: dict[str, list[str] | None] | None = None, *,
                  module_name: str = "__main__", package_name: str | None = None,
-                 target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> None:
+                 target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec",
+                 optimize: int = 0, tree: ast.AST | None = None, feature_version_override: tuple[int, int] | None = None) -> None:
         # dynamic: exec()/eval() compilation. Module-level names live in caller-supplied
         # namespace mappings (static fields __py_globals/__py_locals) instead of static fields.
         self.dynamic = dynamic
         self.mode = mode
+        self.optimize = optimize                 # 0 keeps asserts, docstrings and __debug__; 1 drops asserts; 2 also docstrings
+        self.preparsed_tree = tree               # compile(<ast.AST>): skip parsing
+        self.feature_version_override = feature_version_override
         self.eval_expr: ast.expr | None = None
         self.declared_global: set[str] = set()
         self.has_implicit_exec = False   # static module with exec(x)/eval(x): unknown names resolve through __py_extras
@@ -205,21 +216,32 @@ class Compiler:
         self.filename = "<string>"
         self.current_frame_name = "<module>"
         self.current_frame_firstlineno = 1
+        self.main_builder = None
 
     def compile(self, source: str, filename: str = "<string>") -> bytes:
         self.filename = filename
-        tree = ast.parse(source, filename=filename, mode="eval" if self.mode == "eval" else "exec", feature_version=feature_version())
+        if self.preparsed_tree is not None:
+            tree = deepcopy_ast(self.preparsed_tree)
+        else:
+            level = feature_version() if self.feature_version_override is None else self.feature_version_override
+            tree = ast.parse(source, filename=filename, mode=self.mode, feature_version=level)
         if self.mode == "eval":
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
+        elif self.mode == "single":
+            tree = ast.Module(body=tree.body, type_ignores=[])
+        if self.optimize >= 2:
+            strip_docstrings(tree)
+        check_async_scopes(tree)
         tree = lower_match(tree)
         tree = lower_annotations(tree)
         # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
         self.declared_global = {n for node in ast.walk(tree) if isinstance(node, ast.Global) for n in node.names}
         if not self.dynamic:
             self.has_implicit_exec = any(
-                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("exec", "eval")
-                and len(n.args) == 1 and not n.keywords for n in ast.walk(tree))
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and not n.keywords
+                and ((n.func.id in ("exec", "eval") and len(n.args) == 1) or (n.func.id in ("globals", "locals", "vars") and not n.args))
+                for n in ast.walk(tree))
             if self.has_implicit_exec:
                 self.cf.add_field(Field("__py_extras"))
         self.deleted_names = {name for n in ast.walk(tree) if isinstance(n, ast.Delete)
@@ -300,6 +322,17 @@ class Compiler:
             self.global_fields[name] = field_name
             self.cf.add_field(Field(field_name))
 
+    def _emit_namespace_call(self, fname: str, b: CodeBuilder, scope: Scope) -> None:
+        """globals() / locals() / vars() with no arguments."""
+        module_level = scope.module and scope.namespace_slot is None
+        if fname == "globals" or module_level:
+            if self.dynamic:
+                b.getstatic(self.class_name, "__py_globals" if fname == "globals" else "__py_locals", OBJ)
+            else:
+                b.ldc_string(self.class_name.replace("/", ".")); b.invokestatic(NAMESPACES, "moduleNamespace", f"({OBJ}){OBJ}")
+        else:
+            b.invokestatic(NAMESPACES, "localsCall", f"(){OBJ}")
+
     def _emit_implicit_namespace_call(self, node: ast.Call, b: CodeBuilder, scope: Scope) -> None:
         """exec(x)/eval(x) in a statically compiled module: run in a snapshot of the caller's namespaces.
 
@@ -349,6 +382,10 @@ class Compiler:
         b.ldc_string(name); b.invokestatic(RUNTIME, "nsLoad", f"({OBJ*3}){OBJ}")
 
     def _load_name(self, name: str, b: CodeBuilder, scope: Scope, via_function: bool = False) -> None:
+        if name == "__debug__":
+            self._boxed_bool(self.optimize == 0, b); return
+        if name == "__builtins__" and not self.dynamic and name not in self.global_names and not scope.has(name):
+            b.ldc_string(self.module_name); b.invokestatic(NAMESPACES, "builtinsFor", f"({OBJ}){OBJ}"); return
         if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
             key = self._class_attr_name(name)
             missing, done = b.label(), b.label()
@@ -409,8 +446,7 @@ class Compiler:
             b.invokestatic(RUNTIME, "notImplemented" if name == "NotImplemented" else "ellipsis", f"(){OBJ}"); return
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
-        if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
-                    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super", "frozendict"} | EXCEPTION_TYPES:
+        if name in BUILTIN_TYPES or name in EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         if self.has_implicit_exec:
             b.getstatic(self.class_name, "__py_extras", OBJ); b.getstatic(self.class_name, "__py_extras", OBJ)
@@ -418,6 +454,8 @@ class Compiler:
         raise CompileError(f"Name {name!r} referenced before assignment")
 
     def _store_name(self, name: str, b: CodeBuilder, scope: Scope, *, temp_scope: Scope | None = None) -> None:
+        if name == "__debug__":
+            raise CompileError("cannot assign to __debug__")
         if scope.module or name not in scope.global_decl:
             b.ldc_string(name); b.invokestatic(RUNTIME, "frameSetLocalValue", f"({OBJ}{OBJ}){OBJ}")
         if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
@@ -791,9 +829,38 @@ class Compiler:
         code = b.finish()
         self.cf.add_method(Method("<init>", "()V", code, max_stack=2, max_locals=1, access=0x0001, exception_table=b.exception_table))
 
+    def _emit_module_body(self, body: list[ast.stmt], b: CodeBuilder, scope: Scope) -> Scope:
+        """Module-level statements. A method holds at most 64KB of bytecode, so once the entry method has grown past
+        MODULE_CHUNK_LIMIT the remaining statements go into helper methods that the entry method calls in order
+        (module-level names live in static fields, so no local state crosses a statement boundary).
+        Returns the entry method's scope."""
+        main_scope = scope
+        part_builder = None
+        part_number = 0
+        for stmt in body:
+            if b.pos > MODULE_CHUNK_LIMIT:
+                if part_builder is not None:
+                    self._finish_module_part(b, scope, part_number)
+                part_number += 1
+                part_builder = CodeBuilder(self.cf.cp)
+                b = part_builder
+                scope = Scope(start_slot=2, module=True)
+                self.main_builder.invokestatic(self.class_name, f"__py_module_part{part_number}", "()V")
+            self._stmt(stmt, b, scope, in_function=False)
+        if part_builder is not None:
+            self._finish_module_part(b, scope, part_number)
+        return main_scope
+
+    def _finish_module_part(self, b: CodeBuilder, scope: Scope, number: int) -> None:
+        b.return_()
+        code = b.finish()
+        self.cf.add_method(Method(f"__py_module_part{number}", "()V", code, max_locals=max(8, scope.next_slot + 2),
+                                  exception_table=b.exception_table))
+
     def _compile_main(self, body: list[ast.stmt]) -> None:
         self.current_frame_name,self.current_frame_firstlineno="<module>",1
         b = CodeBuilder(self.cf.cp)
+        self.main_builder = b
         scope = Scope(start_slot=1, module=True)
         for name in sorted(self.global_fields):
             b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, self._global_field(name), OBJ)
@@ -802,6 +869,8 @@ class Compiler:
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
         b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
+        b.ldc_string(self.class_name.replace("/", ".")); b.aconst_null()
+        b.invokestatic(NAMESPACES, "frameSetModule", f"({OBJ*2})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         if self.module_name == "__main__":
             b.aconst_null()
@@ -822,8 +891,7 @@ class Compiler:
             b.aload(loader_slot)
             b.invokestatic(RUNTIME, "makeModuleSpec", f"({OBJ*5}){OBJ}")
             self._store_name("__spec__", b, scope)
-        for stmt in body:
-            self._stmt(stmt, b, scope, in_function=False)
+        scope = self._emit_module_body(body, b, scope)
         b.invokestatic(RUNTIME,"popLogicalFrame",f"()V")
         b.return_()
         code = b.finish()
@@ -835,18 +903,20 @@ class Compiler:
             self.cf.add_field(Field(name))
         self.current_frame_name, self.current_frame_firstlineno = "<module>", 1
         b = CodeBuilder(self.cf.cp)
+        self.main_builder = b
         scope = Scope(start_slot=2, module=True)
         b.aload(0); b.putstatic(self.class_name, "__py_globals", OBJ)
         b.aload(1); b.putstatic(self.class_name, "__py_locals", OBJ)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1, b)
         b.invokestatic(RUNTIME, "pushLogicalFrame", f"({OBJ*3})V")
+        b.ldc_class(self.class_name); b.aload(1)
+        b.invokestatic(NAMESPACES, "frameSetModule", f"({OBJ*2})V")
         if self.mode == "eval":
             assert self.eval_expr is not None
             self._expr(self.eval_expr, b, scope)
         else:
-            for stmt in body:
-                self._stmt(stmt, b, scope, in_function=False)
+            scope = self._emit_module_body(body, b, scope)
             b.aconst_null()
         b.invokestatic(RUNTIME, "popLogicalFrame", "()V")
         b.areturn()
@@ -2224,7 +2294,10 @@ class Compiler:
                     return True
                 case ast.Expr(value=value):
                     self._expr(value, b, scope)
-                    b.pop()
+                    if self.mode == "single" and scope.module and scope.namespace_slot is None and not in_function:
+                        b.invokestatic(NAMESPACES, "display", f"({OBJ})V")   # interactive mode: sys.displayhook(value)
+                    else:
+                        b.pop()
                     return True
                 case ast.Assign(targets=targets, value=value):
                     self._expr(value, b, scope)
@@ -2548,6 +2621,8 @@ class Compiler:
     def _stmt_part3(self, node, b, scope, in_function):
         match node:
                 case ast.Assert(test=test, msg=msg):
+                    if self.optimize > 0:
+                        return True
                     ok = b.label(); self._truthy(test, b, scope); b.ifne(ok)
                     if msg is None: b.aconst_null()
                     else: self._expr(msg, b, scope)
@@ -2586,23 +2661,26 @@ class Compiler:
                     raise CompileError(f"Unsupported statement: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
     def _expr(self, node: ast.expr, b: CodeBuilder, scope: Scope) -> None:
-        if self.dynamic and isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             fname = node.func.id
-            bound_here = scope.has(fname) or fname in scope.local_names or fname in scope.free_names or fname in self.global_names
-            if fname in ("globals", "locals") and not node.args and not bound_here:
-                if fname == "locals" and not scope.module:
-                    raise CompileError("locals() inside a function of exec/eval code is not implemented")
-                b.getstatic(self.class_name, "__py_globals" if fname == "globals" else self._ns_field(scope, "locals"), OBJ)
-                return
-            if fname in ("exec", "eval") and len(node.args) == 1 and not bound_here:
-                # exec(x) / eval(x) run in the calling code's own namespaces
-                namespaced = ast.Call(func=node.func, keywords=[], args=[
-                    node.args[0],
-                    ast.Call(func=ast.Name(id="globals", ctx=ast.Load()), args=[], keywords=[]),
-                    ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[]) if scope.module
-                    else ast.Call(func=ast.Name(id="globals", ctx=ast.Load()), args=[], keywords=[])])
-                ast.copy_location(namespaced, node)
-                self._expr(namespaced, b, scope)
+            bound_here = (scope.has(fname) or fname in scope.local_names or fname in scope.free_names or fname in self.global_names
+                          or fname in self.functions or fname in self.classes or fname in scope.global_decl)
+            if not bound_here and not node.keywords:
+                if fname in ("globals", "locals", "vars") and not node.args:
+                    self._emit_namespace_call(fname, b, scope)
+                    return
+                if self.dynamic and fname in ("exec", "eval") and len(node.args) == 1:
+                    # exec(x) / eval(x) run in the calling code's own namespaces
+                    namespaced = ast.Call(func=node.func, keywords=[], args=[
+                        node.args[0],
+                        ast.Call(func=ast.Name(id="globals", ctx=ast.Load()), args=[], keywords=[]),
+                        ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])])
+                    ast.copy_location(namespaced, node)
+                    self._expr(namespaced, b, scope)
+                    return
+            if self.dynamic and not bound_here and (fname in BUILTIN_FUNCTIONS or fname in BUILTIN_TYPES or fname in EXCEPTION_TYPES):
+                # builtins resolve through the namespace's __builtins__, which exec'd code may replace
+                self._emit_dynamic_call(node.func, node.args, node.keywords, b, scope)
                 return
         if (not self.dynamic and isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords
                 and node.func.id in ("exec", "eval") and len(node.args) == 1 and not node.func.id in self.global_names
@@ -3048,21 +3126,64 @@ class Compiler:
 
 
 # Compile-time errors CPython also reports as SyntaxError (everything else CompileError raises is an unsupported feature).
-GENUINE_SYNTAX_ERRORS = ("break outside loop", "continue outside loop", "return outside function")
+GENUINE_SYNTAX_ERRORS = ("break outside loop", "continue outside loop", "return outside function", "cannot assign to __debug__",
+                       "'await' outside function", "'async for' outside async function", "'async with' outside async function",
+                       "asynchronous comprehension outside")
+
+
+def check_async_scopes(tree: ast.AST) -> None:
+    """await / async for / async with are only legal inside an async function (module level needs PyCF_ALLOW_TOP_LEVEL_AWAIT)."""
+    stack = [(tree, False)]
+    while stack:
+        node, in_async = stack.pop()
+        if isinstance(node, ast.Await) and not in_async:
+            raise CompileError("'await' outside function")
+        if isinstance(node, ast.AsyncFor) and not in_async:
+            raise CompileError("'async for' outside async function")
+        if isinstance(node, ast.AsyncWith) and not in_async:
+            raise CompileError("'async with' outside async function")
+        if isinstance(node, ast.comprehension) and node.is_async and not in_async:
+            raise CompileError("asynchronous comprehension outside of an asynchronous function")
+        if isinstance(node, (ast.AsyncFunctionDef, ast.GeneratorExp)):   # an async generator expression may await anywhere
+            inner = True
+        elif isinstance(node, (ast.FunctionDef, ast.Lambda, ast.ClassDef)):
+            inner = False
+        else:
+            inner = in_async
+        for child in ast.iter_child_nodes(node):
+            stack.append((child, inner))
+
+
+def strip_docstrings(tree: ast.AST) -> None:
+    """optimize=2: module, class and function docstrings are removed."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                node.body = node.body[1:] or [ast.copy_location(ast.Pass(), first)]
 
 
 def compile_source(source: str, class_name: str = "Main", filename: str = "<string>",
                    import_map: dict[str,str] | None = None,
                    import_exports: dict[str, list[str] | None] | None = None,
                    module_name: str = "__main__", package_name: str | None = None,
-                   *, target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> bytes:
+                   *, target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec",
+                   optimize: int = 0, tree: ast.AST | None = None,
+                   feature_version_override: tuple[int, int] | None = None) -> bytes:
     try:
         return Compiler(class_name, import_map=import_map, import_exports=import_exports,
                         module_name=module_name, package_name=package_name, target=target,
-                        dynamic=dynamic, mode=mode).compile(source, filename)
+                        dynamic=dynamic, mode=mode, optimize=optimize, tree=tree,
+                        feature_version_override=feature_version_override).compile(source, filename)
     except CompileError as exc:
         if str(exc).startswith(GENUINE_SYNTAX_ERRORS):
             raise SyntaxError(str(exc)) from None
+        raise
+    except FrameError as exc:
+        if "1..65535 bytes" in str(exc):
+            raise CompileError("code exceeds the JVM's 64KB method limit: a function body, class body or single module-level "
+                               "statement is too large (module-level statements are split into methods automatically); "
+                               "split it into smaller pieces") from None
         raise
 
 

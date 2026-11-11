@@ -34,6 +34,7 @@ public final class AstModule {
         m.attrs.put("PyCF_ONLY_AST", 1024L);
         m.attrs.put("PyCF_TYPE_COMMENTS", 4096L);
         m.attrs.put("PyCF_ALLOW_TOP_LEVEL_AWAIT", 8192L);
+        m.attrs.put("PyCF_OPTIMIZED_AST", 33792L);
         fn(m, "parse", (a, k) -> parse(a, k));
         fn(m, "dump", (a, k) -> dump(a, k));
         fn(m, "walk", (a, k) -> walk(a.get(0)));
@@ -60,6 +61,7 @@ public final class AstModule {
         for (var e : CLASSES.entrySet()) m.attrs.put(e.getKey(), e.getValue());
         m.attrs.put("AST", astClass);
         m.attrs.put("PyCF_ONLY_AST", 1024L);
+        m.attrs.put("PyCF_OPTIMIZED_AST", 33792L);
         return m;
     }
 
@@ -243,11 +245,77 @@ public final class AstModule {
 
     private static Object parse(List<Object> a, Map<Object, Object> k) {
         Object source = arg(a, k, 0, "source", null);
+        Object filename = arg(a, k, 1, "filename", "<unknown>");
         String mode = (String) arg(a, k, 2, "mode", "exec");
+        Object optimize = k.getOrDefault("optimize", -1L);
+        if (optimize instanceof Number n && n.longValue() > 0)
+            throw new PyException("NotImplementedError", "ast.parse(optimize=...) needs constant folding of the AST, which is not implemented");
         String text = source instanceof String s ? s : source instanceof PyBytes b ? new String(b.data, java.nio.charset.StandardCharsets.UTF_8) : null;
         if (text == null) throw new PyException("TypeError", "parse() argument 'source' must be str or bytes, not " + typeName(source));
-        try { return toPython(Parser.parse(text, mode)); }
-        catch (PySyntaxError e) { throw new PyException(e.kind, e.getMessage()); }
+        return parseSource(text, String.valueOf(filename), mode, featureMinor(k.get("feature_version")));
+    }
+
+    /** ast.parse's feature_version: None, an int (the 3.x minor) or a (3, x) tuple; returns the minor level, MAX_VALUE for "current". */
+    static int featureMinor(Object featureVersion) {
+        if (featureVersion == null) return Integer.MAX_VALUE;
+        long minor;
+        if (featureVersion instanceof PyTuple t) {
+            if (t.items.size() != 2) throw new PyException("ValueError", "feature_version must be a (major, minor) pair");
+            Object major = t.items.get(0);
+            if (!(major instanceof Long mj) || mj != 3L) throw new PyException("ValueError", "Unsupported major version: " + pyStr(major));
+            if (!(t.items.get(1) instanceof Long mn)) throw new PyException("TypeError", "'" + typeName(t.items.get(1)) + "' object cannot be interpreted as an integer");
+            minor = mn;
+        } else if (featureVersion instanceof Long n) {
+            minor = n;
+        } else {
+            throw new PyException("TypeError", "'" + typeName(featureVersion) + "' object cannot be interpreted as an integer");
+        }
+        return minor < 0 || minor >= LangVersion.MINOR ? Integer.MAX_VALUE : (int) minor;
+    }
+
+    /** Source text to a Python-level AST, with CPython's SyntaxError attributes on failure. */
+    static Object parseSource(String text, String filename, String mode, int featureMinor) {
+        try { return toPython(Parser.parse(text, mode, featureMinor)); }
+        catch (PySyntaxError e) { throw SyntaxInfo.error(e.kind, e.getMessage(), filename, text, e.line, e.column); }
+    }
+
+    // ---- validation for compile(<ast>) -------------------------------------------------------------
+    /** compile() on an AST object: the root must fit the mode, required fields and positions must exist, constants must be constants. */
+    static void validateForCompile(Object root, String mode) {
+        String expected = mode.equals("eval") ? "Expression" : mode.equals("single") ? "Interactive" : "Module";
+        if (!(root instanceof PyInstance r) || specClass(r.cls) == null || !specClass(r.cls).name.equals(expected))
+            throw new PyException("TypeError", "expected " + expected + " node, got " + (root instanceof PyInstance i ? i.cls.name : typeName(root)));
+        validateNode(root);
+    }
+
+    private static void validateNode(Object value) {
+        if (value instanceof List<?> list) { for (Object o : list) validateNode(o); return; }
+        if (!(value instanceof PyInstance inst) || !isAst(inst)) return;
+        PyClass sc = specClass(inst.cls);
+        if (sc == null) throw new PyException("TypeError", "expected some sort of AST node, but got " + inst.cls.name);
+        AstNode.Spec spec = AstNode.spec(sc.name);
+        if (spec.hasPositions) {
+            for (String position : new String[]{"lineno", "col_offset"})
+                if (!inst.fields.containsKey(position)) throw new PyException("TypeError", "required field \"" + position + "\" missing from " + spec.base);
+        }
+        for (int j = 0; j < spec.fields.length; j++) {
+            String f = spec.fields[j];
+            if (!inst.fields.containsKey(f)) {
+                if (spec.isList[j] || spec.isOptional[j] || f.equals("ctx")) continue;
+                throw new PyException("TypeError", "required field \"" + f + "\" missing from " + sc.name);
+            }
+            Object child = inst.fields.get(f);
+            if (sc.name.equals("Constant") && f.equals("value")) { checkConstant(child); continue; }
+            validateNode(child);
+        }
+    }
+
+    private static void checkConstant(Object v) {
+        if (v == null || v instanceof Boolean || v instanceof Long || v instanceof java.math.BigInteger || v instanceof Double
+            || v instanceof String || v instanceof PyBytes || v instanceof PyComplex || v == ellipsis()) return;
+        if (v instanceof PyTuple t) { for (Object o : t.items) checkConstant(o); return; }
+        if (v instanceof PyFrozenSet s) { for (Object o : s) checkConstant(o); return; }
+        throw new PyException("TypeError", "got an invalid type in Constant: " + typeName(v));
     }
 
     /** compile(source, filename, mode, flags=PyCF_ONLY_AST): the AST of the source (also used by exec/eval). */

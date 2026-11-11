@@ -31,6 +31,9 @@ public final class NativeModules {
         ArrayList<Object> args = new ArrayList<>();
         for (String a : argv) args.add(a);
         m.attrs.put("argv", args);
+        NativeFunction hook = new NativeFunction("displayhook", Namespaces::defaultDisplayhook);
+        m.attrs.put("displayhook", hook);
+        m.attrs.put("__displayhook__", hook);
         return m;
     }
 

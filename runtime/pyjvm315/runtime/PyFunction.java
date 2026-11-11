@@ -105,7 +105,7 @@ final class PyFunction {
         ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
         logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
         logical.classEnv=hasClassCell?closure:null;
-        logical.closure=closure; logical.freeNames=freeNames;
+        logical.closure=closure; logical.freeNames=freeNames; logical.owner=owner;
         List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
         if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
         for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);

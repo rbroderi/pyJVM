@@ -48,7 +48,7 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
         if (finished) throw new PyGeneratorEnd(returnValue);
         started = true;
         ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
-        logical.inspectSupported=false;logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
+        logical.inspectSupported=false;logical.owner=owner;logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
         LOGICAL_FRAMES.get().push(logical);
         try {
             Class<?> cls=ownerClass(owner);
