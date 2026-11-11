@@ -9,7 +9,7 @@ description = "Experimental Python (3.13+) AST to JVM classfile transpiler"
 requires-python = ">=3.13"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-license-files = ["LICENSE", "THIRD_PARTY_LICENSES"]
+license-files = ["LICENSE", "LICENSE-EXCEPTION", "THIRD_PARTY_LICENSES"]
 authors = [{name = "OpenAI"}]
 dependencies = []
 

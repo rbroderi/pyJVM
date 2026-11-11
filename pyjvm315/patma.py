@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception
 """Lower structural pattern matching (PEP 634) to plain statements.
 
 ``match`` statements are rewritten right after parsing into an ``if/elif`` chain whose

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception
 """AST helpers that need nothing but the ast module (usable when the compiler compiles itself)."""
 from __future__ import annotations
 

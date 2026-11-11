@@ -1,0 +1,44 @@
+pyJVM linking exception
+=======================
+
+SPDX identifier: AdditionRef-pyJVM-Linking-Exception
+
+Applies to:
+  * every file under runtime/ (the pyJVM runtime and parser: Java packages
+    pyjvm315.runtime and pyjvm315.parser);
+  * the in-process compiler that `exec`, `eval` and `compile` load from the
+    classpath, i.e. the Python modules listed in `CORE` in
+    pyjvm315/selfhost.py (compiler, classfile, stackmap, patma, annot,
+    astutil, versions) and the class files built from them;
+  * the runtime, compiler and stdlib jars built from the above.
+
+These files are licensed under the GNU General Public License, version 3 or
+(at your option) any later version (see the LICENSE file next to this one),
+with the following additional permission under section 7 of the GNU GPL
+version 3:
+
+  As a special exception, the copyright holders of the covered files give
+  you permission to link or combine them with independent modules (Java,
+  Kotlin or other JVM code, and Python programs compiled by the pyJVM
+  compiler), to call them at run time (for example through `exec`, `eval` or
+  `compile`), and to copy and distribute the resulting combined work under
+  terms of your choice, regardless of the license terms of those independent
+  modules, provided that you also meet, for each linked independent module,
+  the terms and conditions of the license of that module. An independent
+  module is a module which is not derived from or based on the covered files.
+  Class files produced by the pyJVM compiler from your own sources are
+  independent modules for this purpose.
+
+  If you modify these files, you may extend this exception to your
+  version, but you are not obligated to do so. If you do not
+  wish to do so, delete this exception statement from your version. Modified
+  copies of the covered files themselves remain under the GPL (with or without
+  this exception).
+
+This exception does not apply to the rest of the compiler and tools (the other
+files in pyjvm315/, tools/ and tests/, including the command-line driver and
+the host-Python fallback service), which are licensed under the GPL version 3
+or later without it. See the "Licensing" section of README.md.
+
+DRAFT NOTE: this wording is modelled on the GNU Classpath exception and has
+not yet been reviewed by a lawyer.

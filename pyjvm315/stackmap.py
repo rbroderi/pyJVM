@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception
 """Verifier dataflow for the instruction subset emitted by this backend.
 
 Frames describe JVM verification types, not inferred Python value types. New

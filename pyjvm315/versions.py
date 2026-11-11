@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception
 """Python version policy. Self-hostable: only ``sys`` is needed (host-only helpers live in hostver.py).
 
 The compiler runs on, and parses source with, the *host* interpreter's ``ast``. Supported host range is

@@ -103,22 +103,21 @@ lower proven-safe hot locals all the way to primitive JVM `long` values.
 
 | Part | License |
 |---|---|
-| Compiler and tools: `pyjvm315/`, `tools/`, `tests/` | GPL-3.0-or-later |
-| Runtime and parser: `runtime/` (Java packages `pyjvm315.runtime`, `pyjvm315.parser`) | GPL-3.0-or-later with the [pyJVM runtime linking exception](runtime/LICENSE-EXCEPTION) (SPDX `GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception`) |
+| Runtime and parser: `runtime/` (Java packages `pyjvm315.runtime`, `pyjvm315.parser`) | GPL-3.0-or-later with the [pyJVM linking exception](LICENSE-EXCEPTION) |
+| In-process compiler used by `exec`/`eval`/`compile`: the `CORE` modules in `pyjvm315/selfhost.py` (`compiler`, `classfile`, `stackmap`, `patma`, `annot`, `astutil`, `versions`) | same: GPL-3.0-or-later with the linking exception |
+| Everything else in `pyjvm315/`, `tools/`, `tests/` (CLI driver, probes, conformance runner, build tooling) | GPL-3.0-or-later |
 | CPython-derived code (the future stdlib jar) | PSF License, kept as-is; see [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) |
 
-The linking exception lets Java/Kotlin applications, and Python programs
-compiled by pyJVM, use the runtime without becoming GPL themselves. Changes to
-the runtime files still have to be shared under the GPL. Every source file
-carries an SPDX header, enforced by `tests/test_licenses.py`.
+SPDX identifiers: `GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception`
+and `GPL-3.0-or-later`. The linking exception lets Java/Kotlin applications,
+and Python programs compiled by pyJVM, use the runtime and call `exec`, `eval`
+and `compile` without becoming GPL themselves. Changes to the covered files
+still have to be shared under the GPL. Every source file carries an SPDX
+header, enforced by `tests/test_licenses.py`.
 
-Open point: `exec`, `eval` and `compile` load the self-hosted compiler classes
-(compiled from the GPL-only `pyjvm315/`) from the classpath. An application
-that ships those classes is therefore combined with GPL-only code, which the
-runtime exception does not cover. Options: extend the exception to the
-compiler classes, or keep them a separate optional jar and treat use of
-`exec`/`eval` as opting in to the GPL. This is undecided. The exception text is
-a draft and has not been reviewed by a lawyer.
+Contributions require agreement to the [CLA](CLA.md), under which the Project
+Owner holds the copyright (see [CONTRIBUTING.md](CONTRIBUTING.md)). The
+exception text and the CLA are drafts and have not been reviewed by a lawyer.
 
 ## Architecture
 
