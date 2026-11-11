@@ -15,7 +15,7 @@ from .typeparams import lower_type_params, TP_PREFIX, HELPERS as TYPEPARAM_HELPE
 def _preserve_codegen_state(compile_method):
     """Synthetic/nested methods must not consume the caller's control stacks."""
     def wrapped(self, *args, **kwargs):
-        names = ("loop_stack", "exception_stack", "cleanup_stack", "finally_stack",
+        names = ("loop_stack", "exception_stack", "handler_depths", "cleanup_stack", "finally_stack",
                  "current_frame_name", "current_frame_firstlineno")
         saved = {name: getattr(self, name) for name in names}
         try:
@@ -222,6 +222,7 @@ class Compiler:
         self._async_comp_compiled: dict[int, str] = {}
         self.loop_stack: list[tuple[object, object]] = []  # (continue, break)
         self.exception_stack: list[int] = []
+        self.handler_depths: list[tuple[int, int]] = []
         self.dynamic_reraise = False
         self.cleanup_stack: list[tuple[str, object]] = []
         self.finally_stack: list[FinallyContext] = []
@@ -921,7 +922,7 @@ class Compiler:
             b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, self._global_field(name), OBJ)
         if self.has_implicit_exec:
             b.invokestatic(RUNTIME, "dict0", f"(){OBJ}"); b.putstatic(self.class_name, "__py_extras", OBJ)
-        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b); self._emit_owner(b)
         b.invokestatic(RUNTIME,"pushModuleFrame",f"({OBJ*4})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
@@ -960,7 +961,7 @@ class Compiler:
         scope = Scope(start_slot=2, module=True)
         b.aload(0); b.putstatic(self.class_name, "__py_globals", OBJ)
         b.aload(1); b.putstatic(self.class_name, "__py_locals", OBJ)
-        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1, b); self._emit_owner(b)
         b.invokestatic(RUNTIME, "pushModuleFrame", f"({OBJ*4})V")
         b.ldc_class(self.class_name); b.aload(1)
@@ -1033,7 +1034,7 @@ class Compiler:
                 if not scope.has_local(name):
                     b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.astore(scope.define(name))
                 scope.checked_names.add(name)
-        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []; self.cleanup_stack = []; self.finally_stack = []
         for stmt in node.body:
             self._stmt(stmt, b, scope, in_function=True)
         b.aconst_null(); b.areturn()
@@ -1366,7 +1367,7 @@ class Compiler:
             b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(label)
         b.goto(invalid)
         b.mark(labels[0])
-        self.loop_stack=[]; self.exception_stack=[]; self.cleanup_stack=[]; self.finally_stack=[]
+        self.loop_stack=[]; self.exception_stack=[]; self.handler_depths=[]; self.cleanup_stack=[]; self.finally_stack=[]
         gen_finally_stack: list[list[ast.stmt]] = []
         gen_cleanup_order: list[tuple[str, object]] = []
         gen_active_exception_env: list[str] = []
@@ -1688,11 +1689,16 @@ class Compiler:
                 # one or more yields.
                 exc_env = f"$active_exc_{synthetic_counter[0]}"; synthetic_counter[0] += 1
                 self._gen_env_store(exc_env, exc_slot, b, scope)
+                depth_env = f"$active_depth_{synthetic_counter[0]}"; synthetic_counter[0] += 1
+                depth_tmp = scope.temp()
+                b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_tmp)
+                self._gen_env_store(depth_env, depth_tmp, b, scope)
                 self.exception_stack.append(exc_slot)
                 gen_active_exception_env.append(exc_env)
                 for x in self._handler_body(handler): gen_stmt(x)
                 gen_active_exception_env.pop()
                 self.exception_stack.pop()
+                self._gen_env_load(depth_env, b, scope); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
                 b.goto(done)
                 b.mark(next_handler)
             b.aload(exc_slot); b.athrow()
@@ -2857,12 +2863,14 @@ class Compiler:
                 case ast.Break():
                     if not self.loop_stack: raise CompileError("break outside loop")
                     target = self.loop_stack[-1][1]
+                    self._leave_handlers_for_branch(b)
                     if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
                     else: b.goto(target)
                     return True
                 case ast.Continue():
                     if not self.loop_stack: raise CompileError("continue outside loop")
                     target = self.loop_stack[-1][0]
+                    self._leave_handlers_for_branch(b)
                     if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
                     else: b.goto(target)
                     return True
@@ -3340,6 +3348,9 @@ class Compiler:
                 b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}"); self._store_name(handler.name, b, scope)
             self.exception_stack.append(exc_slot)
             handler_body = self._handler_body(handler)
+            frame_depth = None
+            if not self.dynamic_reraise:
+                frame_depth = self._handler_enter(exc_slot, b, scope)
             if self.dynamic_reraise:
                 depth_slot = scope.temp()
                 b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_slot)
@@ -3349,10 +3360,30 @@ class Compiler:
                 handler_body = [ast.fix_missing_locations(wrapped_body)]
             for stmt in handler_body: self._stmt(stmt, b, scope, in_function)
             self.exception_stack.pop()
+            if frame_depth is not None: self._handler_leave(frame_depth, b)
             b.goto(done)
             b.mark(next_handler)
         b.aload(exc_slot); b.athrow()
         b.mark(done)
+
+    def _handler_enter(self, exc_slot: int, b: CodeBuilder, scope: Scope) -> int:
+        """Record the exception an except clause is handling (sys.exception()); returns the slot holding the previous depth."""
+        depth_slot = scope.temp()
+        b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_slot)
+        self.handler_depths.append((depth_slot, len(self.loop_stack)))
+        return depth_slot
+
+    def _handler_leave(self, depth_slot: int, b: CodeBuilder) -> None:
+        self.handler_depths.pop()
+        b.aload(depth_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
+
+    def _leave_handlers_for_branch(self, b: CodeBuilder) -> None:
+        """break/continue leaves every except clause opened inside the loop it jumps out of."""
+        depth = len(self.loop_stack)
+        for slot, loop_depth in self.handler_depths:
+            if loop_depth == depth:
+                b.aload(slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
+                return
 
     def _except_name_is_variable(self, name: str, scope: Scope) -> bool:
         if name in EXCEPTION_TYPES or name in self.classes or name in self.functions:

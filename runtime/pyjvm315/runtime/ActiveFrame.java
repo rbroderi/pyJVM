@@ -24,6 +24,8 @@ import java.util.Set;
 final class ActiveFrame {
     final String name, filename; final long firstlineno; long line;
     final LinkedHashMap<Object,Object> locals = new LinkedHashMap<>();
+    /** Exceptions being handled by except clauses of this frame, innermost last (sys.exception()). */
+    java.util.ArrayList<Object> handled;
     Object owner; PyFrame pyFrame; Object localTrace; boolean resumed;
     boolean inspectSupported=true; String firstArgument; PyEnv classEnv,argumentEnv,closure; List<String> freeNames=List.of(); Map<Object,Object> namespace;
     ActiveFrame(String name,String filename,long firstlineno){this.name=name;this.filename=filename;this.firstlineno=firstlineno;this.line=firstlineno;}

@@ -222,6 +222,7 @@ public final class BuiltinsExtra {
         m.attrs.put("__stdout__", STDOUT); m.attrs.put("__stderr__", STDERR); m.attrs.put("__stdin__", STDIN);
         NativeFunction hook = new NativeFunction("breakpointhook", (a, k) -> defaultBreakpointHook());
         m.attrs.put("breakpointhook", hook); m.attrs.put("__breakpointhook__", hook);
+        ExceptionGroupSupport.installSys(m);
     }
 
     /** The live ``sys.<name>`` when ``sys`` has been loaded, otherwise the process stream. */
@@ -429,23 +430,38 @@ public final class BuiltinsExtra {
     // ---------- Handled exception stack (bare raise outside the handler's own function) ----------
     static final ThreadLocal<ArrayList<Object>> HANDLED = ThreadLocal.withInitial(ArrayList::new);
 
+    private static ArrayList<Object> handledStack() {
+        ActiveFrame frame = currentLogicalFrame();
+        if (frame == null) return HANDLED.get();
+        if (frame.handled == null) frame.handled = new ArrayList<>();
+        return frame.handled;
+    }
+
     public static Object excEnter(Object throwable) {
-        ArrayList<Object> stack = HANDLED.get();
+        ArrayList<Object> stack = handledStack();
         long depth = stack.size();
         stack.add(throwable);
         return depth;
     }
 
     public static void excLeave(Object depth) {
-        ArrayList<Object> stack = HANDLED.get();
+        ArrayList<Object> stack = handledStack();
         int keep = (int) (long) (Long) depth;
         while (stack.size() > keep) stack.remove(stack.size() - 1);
     }
 
-    public static void reraiseCurrent() {
+    /** The exception being handled by the innermost running except clause (any frame), or null. */
+    static Object currentHandled() {
+        for (ActiveFrame frame : LOGICAL_FRAMES.get())
+            if (frame.handled != null && !frame.handled.isEmpty()) return frame.handled.get(frame.handled.size() - 1);
         ArrayList<Object> stack = HANDLED.get();
-        if (stack.isEmpty()) throw new PyException("RuntimeError", "No active exception to reraise");
-        rethrowThrowable(stack.get(stack.size() - 1));
+        return stack.isEmpty() ? null : stack.get(stack.size() - 1);
+    }
+
+    public static void reraiseCurrent() {
+        Object current = currentHandled();
+        if (current == null) throw new PyException("RuntimeError", "No active exception to reraise");
+        rethrowThrowable(current);
     }
 
     // ---------- class statements ----------

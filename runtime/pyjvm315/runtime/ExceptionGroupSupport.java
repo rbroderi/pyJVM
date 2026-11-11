@@ -215,9 +215,7 @@ final class ExceptionGroupSupport {
 
     static boolean delattr(Object e, String name) {
         switch (name) {
-            case "__cause__": setCause(e, null); return true;
-            case "__context__": setContext(e, null); return true;
-            case "__traceback__": setTraceback(e, null); return true;
+            case "__cause__": case "__context__": case "__traceback__": throw new PyException("TypeError", name + " may not be deleted");
             case "__suppress_context__": throw new PyException("TypeError", "cannot delete __suppress_context__");
             default: break;
         }
@@ -250,7 +248,7 @@ final class ExceptionGroupSupport {
     static Object addNote(Object e, List<Object> args) {
         if (args.size() != 1) throw new PyException("TypeError", "BaseException.add_note() takes exactly one argument (" + args.size() + " given)");
         Object note = args.get(0);
-        if (!(note instanceof String)) throw new PyException("TypeError", "note must be a str, not '" + typeName(note) + "'");
+        if (!(note instanceof String)) throw new PyException("TypeError", LangVersion.atLeast(3, 14) ? "add_note() argument must be str, not " + typeName(note) : "note must be a str, not '" + typeName(note) + "'");
         Object notes = notes(e);
         if (notes == MISSING) { notes = new ArrayList<Object>(); dict(e, true).put("__notes__", notes); }
         if (!(notes instanceof List<?>)) throw new PyException("TypeError", "Cannot add note: __notes__ is not a list");
@@ -262,6 +260,23 @@ final class ExceptionGroupSupport {
         if (args.size() != 1) throw new PyException("TypeError", "BaseException.with_traceback() takes exactly one argument (" + args.size() + " given)");
         setattr(e, "__traceback__", args.get(0));
         return e;
+    }
+
+    // ---------- sys.exception / sys.exc_info ----------
+    static void installSys(PyModule sys) {
+        sys.attrs.put("exception", new NativeFunction("exception", (a, k) -> {
+            Object t = BuiltinsExtra.currentHandled();
+            return t == null ? null : exceptionInstance(t);
+        }));
+        sys.attrs.put("exc_info", new NativeFunction("exc_info", (a, k) -> {
+            PyTuple out = new PyTuple();
+            Object t = BuiltinsExtra.currentHandled();
+            Object value = t == null ? null : exceptionInstance(t);
+            out.items.add(value == null ? null : typeOf(value));
+            out.items.add(value);
+            out.items.add(value == null ? null : traceback(value));
+            return out;
+        }));
     }
 
     // ---------- BaseExceptionGroup methods ----------
