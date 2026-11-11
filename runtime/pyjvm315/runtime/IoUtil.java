@@ -40,6 +40,8 @@ final class IoUtil {
         o = NativeSubclass.unwrap(o);
         if (o instanceof PyBytes b) return b.data;
         if (o instanceof PyByteSequence s) return s.toByteArray();
+        ArrayData arr = ArrayModule.asArray(o);
+        if (arr != null) return arr.toByteArray();
         throw new PyException("TypeError", "a bytes-like object is required, not '" + PyRuntime.typeName(o) + "'");
     }
 
@@ -48,12 +50,16 @@ final class IoUtil {
         target = NativeSubclass.unwrap(target);
         if (target instanceof PyByteArray a) { for (int i = 0; i < n; i++) a.data.set(i, src[off + i]); return; }
         if (target instanceof PyMemoryView m && !m.readonly()) { for (int i = 0; i < n; i++) m.setUnsigned(i, src[off + i] & 0xFF); return; }
+        ArrayData arr = ArrayModule.asArray(target);
+        if (arr != null) { System.arraycopy(src, off, arr.buf, 0, n); return; }
         throw new PyException("TypeError", "readinto() argument 1 must be read-write bytes-like object, not " + PyRuntime.typeName(target));
     }
 
     static int bufferSize(Object target) {
         target = NativeSubclass.unwrap(target);
         if (target instanceof PyByteSequence s) return s.byteSize();
+        ArrayData arr = ArrayModule.asArray(target);
+        if (arr != null) return arr.byteSize();
         throw new PyException("TypeError", "readinto() argument 1 must be read-write bytes-like object, not " + PyRuntime.typeName(target));
     }
 

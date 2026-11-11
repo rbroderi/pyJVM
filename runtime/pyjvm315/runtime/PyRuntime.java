@@ -783,7 +783,8 @@ public final class PyRuntime {
         if(a instanceof PyByteArray array) {
             if((a==b || b instanceof PyMemoryView view && view.source==a) && ((PyByteSequence)b).byteSize()>0)
                 throw new PyException("BufferError","Existing exports of data: object cannot be re-sized");
-            if(!(b instanceof PyByteSequence seq))throw new PyException("TypeError","cannot concatenate bytearray and non-buffer object");
+            PyByteSequence seq=b instanceof PyByteSequence bs?bs:ArrayModule.asArray(b);
+            if(seq==null)throw new PyException("TypeError","cannot concatenate bytearray and non-buffer object");
             byte[] data=seq.toByteArray(); for(byte value:data)array.data.add(value); return array;
         }
         if(a instanceof List<?>){listExtend(a,a==b?new ArrayList<>((List<?>)b):b);return a;}
@@ -1955,6 +1956,7 @@ public final class PyRuntime {
     static byte[] bytesFromObject(Object value){
         if(value instanceof PyInstance w && w.payload!=null && w.cls.lookupMethod("__iter__")==null && w.cls.lookupMethod("__index__")==null) value=w.payload;
         if(value instanceof PyByteSequence seq) return seq.toByteArray();
+        { ArrayData arr=ArrayModule.asArray(value); if(arr!=null) return arr.toByteArray(); }
         if(value instanceof PyInstance instance && instance.cls.lookupMethod("__index__")!=null)
             value=invoke(instance,instance.cls.lookupMethod("__index__"),new Object[0]);
         if(isIntLike(value)) {
@@ -1979,6 +1981,7 @@ public final class PyRuntime {
         value=NativeSubclass.unwrap(value);
         if(value instanceof PyMemoryView view) return new PyMemoryView(view.source,view.start,view.length);
         if(value instanceof PyByteSequence seq) return new PyMemoryView(seq);
+        { ArrayData arr=ArrayModule.asArray(value); if(arr!=null) return new PyMemoryView(arr); }
         throw new PyException("TypeError","memoryview: a bytes-like object is required");
     }
     public static Object bytesFromHexLiteral(Object hexObj){
