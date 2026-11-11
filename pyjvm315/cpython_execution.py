@@ -11,6 +11,7 @@ import ast
 import copy
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -214,7 +215,17 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
                 if reference.returncode != 0:
                     result = Result(name, 'ERROR', 'CPython reference failed: ' + reference.stderr)
                 else:
-                    result = compare_file(source, python, runtime_cache=runtime, target=target, selfhosted=classes)
+                    # bodies under an @imports block resolve their stdlib imports from the corpus Lib at run time
+                    saved = os.environ.get('PYJVM_STDLIB')
+                    if imports:
+                        os.environ['PYJVM_STDLIB'] = str(root / 'Lib')
+                    try:
+                        result = compare_file(source, python, runtime_cache=runtime, target=target, selfhosted=classes)
+                    finally:
+                        if saved is None:
+                            os.environ.pop('PYJVM_STDLIB', None)
+                        else:
+                            os.environ['PYJVM_STDLIB'] = saved
                     result.name = name
                 results.append(result)
     version = subprocess.run([python, '--version'], text=True, capture_output=True, check=True).stdout.strip()
