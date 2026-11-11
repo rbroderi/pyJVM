@@ -1363,7 +1363,13 @@ public final class PyRuntime {
         }
         if((isIntLike(a)||a instanceof Double) && (isIntLike(b)||b instanceof Double)
             && (a instanceof Double x && Double.isNaN(x) || b instanceof Double y && Double.isNaN(y)))return false;
-        int c=cmp(a,b); return switch(fallback){case -2->c<0;case -1->c<=0;case 1->c>=0;default->c>0;};
+        int c;
+        try{c=cmp(a,b);}catch(IllegalArgumentException e){
+            if(e.getMessage()!=null && e.getMessage().startsWith("comparison not supported"))
+                throw new PyException("TypeError","'"+switch(fallback){case -2->"<";case -1->"<=";case 1->">=";default->">";}+"' not supported between instances of '"+typeName(a)+"' and '"+typeName(b)+"'");
+            throw e;
+        }
+        return switch(fallback){case -2->c<0;case -1->c<=0;case 1->c>=0;default->c>0;};
     }
     public static Object lt(Object a, Object b) { return richCompare(a,b,"__lt__","__gt__",-2); }
     public static Object le(Object a, Object b) { return richCompare(a,b,"__le__","__ge__",-1); }
@@ -2597,6 +2603,8 @@ public final class PyRuntime {
                     return NativeSubclassMethods.callInitNew(nativeType.name,method.name,args,kwargs);
                 if(method.self instanceof Map<?,?> && method.name.equals("update")) return callMethodDynamic(method.self,method.name,args,kwargs);
                 if(method.self instanceof List<?> && method.name.equals("sort")) return callMethodDynamic(method.self,method.name,args,kwargs);
+                if(method.self instanceof PyBuiltinType listType && listType.name.equals("list") && method.name.equals("sort") && !args.isEmpty() && args.get(0) instanceof List<?>)
+                    return callMethodDynamic(args.get(0),method.name,new ArrayList<>(args.subList(1,args.size())),kwargs);
                 if(method.self instanceof String fmt && method.name.equals("format")) return StrFormat.format(fmt,args,kwargs);
                 List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : null;
                 if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
@@ -2693,7 +2701,7 @@ public final class PyRuntime {
             PyMethod method=instance.cls.lookupMethod("__call__");
             if(method!=null)return invokeKw(instance,method,args,kwargs);
         }
-        throw new PyException("TypeError", "object is not callable");
+        throw new PyException("TypeError", "'"+typeName(callable)+"' object is not callable");
     }
 
 
