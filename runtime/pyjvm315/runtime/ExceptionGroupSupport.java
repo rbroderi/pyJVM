@@ -327,7 +327,6 @@ public final class ExceptionGroupSupport {
         BuiltinsExtra.attachContext(p);
         tracebackAddCurrentFrame(p);
         Object value = exceptionInstance(p);
-        System.out.flush();
         if (excTypeName(value).equals("SystemExit")) { System.exit(systemExitStatus(value)); return; }
         try {
             PyModule sys = (PyModule) importNative("sys");

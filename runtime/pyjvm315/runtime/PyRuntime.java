@@ -213,7 +213,7 @@ public final class PyRuntime {
     // ---------- Builtin type objects / introspection ----------
     public static Object methodDescriptor(Object function,Object kind){return new PyMethodDescriptor(function,(String)kind);}
     static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
-    public static Object builtinFunction(Object name) { return BUILTIN_FUNCTIONS.computeIfAbsent((String)name,PyBuiltinFunction::new); }
+    public static Object builtinFunction(Object name) { if("open".equals(name)) return IoModule.openFunction(); return BUILTIN_FUNCTIONS.computeIfAbsent((String)name,PyBuiltinFunction::new); }
     static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
         if(AnnotationSupport.isHelper(name))return AnnotationSupport.callHelper(name,args);
         if(name.equals("print")) return BuiltinsExtra.printKw(args,kwargs);
@@ -486,7 +486,10 @@ public final class PyRuntime {
 
     // ---------- Display / truth ----------
     public static Object print(Object value) {
-        System.out.println(pyStr(value));
+        Object out = BuiltinsExtra.currentStream("stdout");
+        if (out == null) return null;
+        String text = pyStr(value) + "\n";
+        if (!IoText.fastWrite(out, text)) callMethod(out, "write", new Object[]{text});
         return null;
     }
 
@@ -1418,7 +1421,7 @@ public final class PyRuntime {
             if (i != 0) out.append(sep);
             out.append(pyStr(args.get(i)));
         }
-        System.out.print(out.toString()); System.out.print(end); return null;
+        return BuiltinsExtra.printCall(args, sep, end, null, null);
     }
 
     public static void assertFail(Object msg) {
@@ -1944,7 +1947,7 @@ public final class PyRuntime {
     public static Object bytes2(Object value,Object encoding){
         if(!(value instanceof String text) || !(encoding instanceof String enc))
             throw new PyException("TypeError","encoding without a string argument");
-        return new PyBytes(text.getBytes(pyCharset(enc)));
+        return new PyBytes(Codecs.encode(text,enc,"strict"));
     }
     public static Object bytearray0(){return new PyByteArray();}
     public static Object bytearray1(Object value){return new PyByteArray(bytesFromObject(value));}
@@ -2368,7 +2371,7 @@ public final class PyRuntime {
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
-        if(AnnotationSupport.isHelper(name))return builtinFunction(name);
+        if(AnnotationSupport.isHelper(name) || BuiltinsExtra.handles(name) || name.equals("open"))return builtinFunction(name);
         if(Set.of("exec","eval","compile","aiter","anext","ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round","globals","locals").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","sentinel","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
@@ -2597,7 +2600,7 @@ public final class PyRuntime {
                 if(method.self instanceof PyBuiltinType listType && listType.name.equals("list") && method.name.equals("sort") && !args.isEmpty() && args.get(0) instanceof List<?>)
                     return callMethodDynamic(args.get(0),method.name,new ArrayList<>(args.subList(1,args.size())),kwargs);
                 if(method.self instanceof String fmt && method.name.equals("format")) return FormatTemplate.format(fmt,args,kwargs);
-                List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : null;
+                List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : method.self instanceof PyByteSequence && method.name.equals("decode") ? List.of("encoding","errors") : null;
                 if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
                 Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
                 for(int i=0;i<args.size();i++) positional[i]=args.get(i);
@@ -2894,7 +2897,15 @@ public final class PyRuntime {
         Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
         Map.entry("ProcessLookupError","OSError")));
     static { BuiltinsExtra.registerExceptionTypes(EXCEPTION_PARENTS); }
+    /** Further exception bases of a class with several (class UnsupportedOperation(OSError, ValueError)). */
+    static final Map<String,List<String>> EXTRA_EXCEPTION_PARENTS = new java.util.concurrent.ConcurrentHashMap<>();
     static boolean exceptionIsSubclass(String actual, String requested) {
+        if(!EXTRA_EXCEPTION_PARENTS.isEmpty()) {
+            for(String n=actual;n!=null;n=EXCEPTION_PARENTS.get(n)) {
+                List<String> extra=EXTRA_EXCEPTION_PARENTS.get(n);
+                if(extra!=null) for(String e:extra) if(exceptionIsSubclass(e,requested)) return true;
+            }
+        }
         if(actual.equals(requested)) return actual.equals("BaseException") || EXCEPTION_PARENTS.containsKey(actual);
         if(actual.equals("ExceptionGroup") && requested.equals("BaseExceptionGroup")) return true;
         for(String parent=EXCEPTION_PARENTS.get(actual);parent!=null;parent=EXCEPTION_PARENTS.get(parent))
@@ -2945,6 +2956,7 @@ public final class PyRuntime {
         if(base instanceof PyBuiltinType sealed && sealed.name.equals("sentinel")) throw new PyException("TypeError","type 'sentinel' is not an acceptable base type");
         if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
+            else if(!target.exceptionBase.equals("BaseExceptionGroup") && !exceptionIsSubclass(target.exceptionBase,exc.name)) EXTRA_EXCEPTION_PARENTS.computeIfAbsent(target.name,k->new java.util.concurrent.CopyOnWriteArrayList<>()).add(exc.name);
             else if(target.exceptionBase.equals("BaseExceptionGroup") && exceptionIsSubclass(exc.name,"Exception")){ target.exceptionBase="ExceptionGroup"; target.builtinBaseName="ExceptionGroup"; EXCEPTION_PARENTS.put(target.name,"ExceptionGroup"); }
             return;
         }

@@ -29,7 +29,7 @@ public final class ImportSupport {
     static final PyDict MODULES = new PyDict();
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
     static final Set<String> NATIVE_NAMES = Set.of("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
-        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars");
+        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale");
     private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal"};
 
     private static boolean bootstrapping, bootstrapped;
@@ -60,6 +60,8 @@ public final class ImportSupport {
             case "math" -> MathModule.create();
             case "time" -> TimeModule.create();
             case "_contextvars" -> ContextvarsModule.create();
+            case "_codecs" -> CodecsModule.create();
+            case "_locale" -> LocaleModule.create();
             default -> throw new PyException("ModuleNotFoundError", new PyExcArgs(tuple("No module named '" + name + "'"), null, attrs("name", name)));
         };
     }

@@ -230,7 +230,7 @@ final class NativeSubclass {
         Object raw = unwrap(obj);
         if (!(raw instanceof PyByteSequence seq)) throw new PyException("TypeError", "decoding to str: need a bytes-like object, " + typeName(obj) + " found");
         String enc = encoding == null ? "utf-8" : (String) unwrap(encoding);
-        return new String(seq.toByteArray(), pyCharset(enc));
+        return Codecs.decode(seq.toByteArray(), enc, errors == null ? "strict" : (String) unwrap(errors));
     }
 
     private static Object constructBytes(String kind, List<Object> args, Map<Object, Object> kwargs) {
@@ -249,7 +249,7 @@ final class NativeSubclass {
             return isBytes ? bytes1(a.get(0)) : bytearray1(a.get(0));
         }
         if (!(a.get(0) instanceof String text)) throw new PyException("TypeError", "encoding without a string argument");
-        byte[] data = text.getBytes(pyCharset((String) a.get(1)));
+        byte[] data = Codecs.encode(text, (String) a.get(1), a.size() > 2 ? (String) a.get(2) : "strict");
         return isBytes ? new PyBytes(data) : new PyByteArray(data);
     }
 

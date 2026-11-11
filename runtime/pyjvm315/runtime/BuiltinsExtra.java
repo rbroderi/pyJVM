@@ -152,19 +152,19 @@ public final class BuiltinsExtra {
         List<Object> args = (List<Object>) argsObj;
         String sep = printSeparator(sepObj, "sep", " "), end = printSeparator(endObj, "end", "\n");
         Object file = fileObj != null ? fileObj : currentStream("stdout");
-        if (file == STDOUT || file == STDERR) {
-            java.io.PrintStream stream = file == STDOUT ? System.out : System.err;
+        if (file == null) return null; // sys.stdout is None: print() is a no-op
+        if (file instanceof PyInstance fi && fi.cls == IoText.cls) {
             StringBuilder out = new StringBuilder();
             for (int i = 0; i < args.size(); i++) {
                 if (i != 0) out.append(sep);
                 out.append(pyStr(args.get(i)));
             }
             out.append(end);
-            stream.print(out.toString());
-            if (truth(flushObj)) stream.flush();
-            return null;
+            if (IoText.fastWrite(file, out.toString())) {
+                if (truth(flushObj)) callMethod(file, "flush", new Object[0]);
+                return null;
+            }
         }
-        if (file == null) return null; // sys.stdout is None: print() is a no-op
         for (int i = 0; i < args.size(); i++) {
             if (i != 0) callMethod(file, "write", new Object[]{sep});
             callMethod(file, "write", new Object[]{pyStr(args.get(i))});
@@ -175,51 +175,9 @@ public final class BuiltinsExtra {
     }
 
     // ---------- sys streams, input(), breakpoint(), __import__ ----------
-    static final PyModule STDOUT = stream("stdout"), STDERR = stream("stderr"), STDIN = stream("stdin");
-    static BufferedReader stdinReader;
-
-    private static PyModule stream(String name) {
-        PyModule m = new PyModule("<" + name + ">", "pyjvm315.runtime.NativeModules");
-        m.attrs.put("name", "<" + name + ">");
-        m.attrs.put("encoding", "utf-8");
-        m.attrs.put("errors", name.equals("stderr") ? "backslashreplace" : "strict");
-        m.attrs.put("closed", false);
-        if (name.equals("stdin")) {
-            m.attrs.put("readline", new NativeFunction("readline", (a, k) -> {
-                String line = readStdinLine(true);
-                return line == null ? "" : line;
-            }));
-        } else {
-            java.io.PrintStream target = name.equals("stdout") ? System.out : System.err;
-            m.attrs.put("write", new NativeFunction("write", (a, k) -> {
-                if (a.size() != 1) throw new PyException("TypeError", "write() takes exactly one argument (" + a.size() + " given)");
-                if (!(a.get(0) instanceof String text)) throw new PyException("TypeError", "write() argument must be str, not " + typeName(a.get(0)));
-                target.print(text);
-                return (long) text.codePointCount(0, text.length());
-            }));
-            m.attrs.put("flush", new NativeFunction("flush", (a, k) -> { target.flush(); return null; }));
-        }
-        return m;
-    }
-
-    static synchronized String readStdinLine(boolean keepNewline) {
-        try {
-            if (stdinReader == null) stdinReader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-            StringBuilder line = new StringBuilder();
-            int c;
-            while ((c = stdinReader.read()) >= 0) {
-                if (c == '\n') { if (keepNewline) line.append('\n'); return line.toString(); }
-                line.append((char) c);
-            }
-            return line.length() == 0 ? null : line.toString();
-        } catch (IOException e) {
-            throw new PyException("OSError", "cannot read standard input: " + e.getMessage());
-        }
-    }
-
     static void installSys(PyModule m) {
-        m.attrs.put("stdout", STDOUT); m.attrs.put("stderr", STDERR); m.attrs.put("stdin", STDIN);
-        m.attrs.put("__stdout__", STDOUT); m.attrs.put("__stderr__", STDERR); m.attrs.put("__stdin__", STDIN);
+        m.attrs.put("stdout", IoStd.stdout()); m.attrs.put("stderr", IoStd.stderr()); m.attrs.put("stdin", IoStd.stdin());
+        m.attrs.put("__stdout__", IoStd.stdout()); m.attrs.put("__stderr__", IoStd.stderr()); m.attrs.put("__stdin__", IoStd.stdin());
         NativeFunction hook = new NativeFunction("breakpointhook", (a, k) -> defaultBreakpointHook());
         m.attrs.put("breakpointhook", hook); m.attrs.put("__breakpointhook__", hook);
         ExceptionGroupSupport.installSys(m);
@@ -228,7 +186,7 @@ public final class BuiltinsExtra {
     /** The live ``sys.<name>`` when ``sys`` has been loaded, otherwise the process stream. */
     static Object currentStream(String name) {
         PyModule sys = MODULE_CACHE.get("sys");
-        if (sys == null) return name.equals("stdout") ? STDOUT : name.equals("stderr") ? STDERR : STDIN;
+        if (sys == null) return IoStd.stream(name);
         if (!sys.attrs.containsKey(name)) throw new PyException("RuntimeError", "lost sys." + name);
         return sys.attrs.get(name);
     }
@@ -236,20 +194,16 @@ public final class BuiltinsExtra {
     static Object input(List<Object> args) {
         if (args.size() > 1) throw new PyException("TypeError", "input expected at most 1 argument, got " + args.size());
         Object stdin = currentStream("stdin"), stdout = currentStream("stdout");
+        if (stdin == null) throw new PyException("RuntimeError", "input(): lost sys.stdin");
         String prompt = args.isEmpty() ? "" : pyStr(args.get(0));
-        if (stdout == STDOUT) { System.out.print(prompt); System.out.flush(); }
-        else if (stdout != null) { callMethod(stdout, "write", new Object[]{prompt}); callMethod(stdout, "flush", new Object[0]); }
-        String line;
-        if (stdin == STDIN) {
-            line = readStdinLine(false);
-            if (line == null) throw new PyException("EOFError", "EOF when reading a line");
-        } else {
-            Object raw = callMethod(stdin, "readline", new Object[0]);
-            if (!(raw instanceof String text)) throw new PyException("TypeError", "object.readline() returned non-string");
-            if (text.isEmpty()) throw new PyException("EOFError", "EOF when reading a line");
-            line = text.endsWith("\n") ? text.substring(0, text.length() - 1) : text;
+        if (stdout != null) {
+            if (!prompt.isEmpty()) callMethod(stdout, "write", new Object[]{prompt});
+            callMethod(stdout, "flush", new Object[0]);
         }
-        return line;
+        Object raw = callMethod(stdin, "readline", new Object[0]);
+        if (!(NativeSubclass.unwrap(raw) instanceof String text)) throw new PyException("TypeError", "object.readline() returned non-string");
+        if (text.isEmpty()) throw new PyException("EOFError", "EOF when reading a line");
+        return text.endsWith("\n") ? text.substring(0, text.length() - 1) : text;
     }
 
     @SuppressWarnings("unchecked")
@@ -302,6 +256,7 @@ public final class BuiltinsExtra {
 
     static Object newException(String type, List<Object> args) {
         if (isGroupType(type)) return newGroup(type, args);
+        if (type.startsWith("Unicode")) { PyExceptionValue u = CodecErrors.fromArgs(type, args); if (u != null) return u; }
         if (args.isEmpty()) return new PyExceptionValue(type, null);
         if (args.size() == 1 && args.get(0) != null) return new PyExceptionValue(type, args.get(0));
         PyTuple all = new PyTuple(); all.items.addAll(args);

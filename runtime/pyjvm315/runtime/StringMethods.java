@@ -196,29 +196,8 @@ final class StringMethods {
         return t;
     }
 
-    /** str.encode with the error handlers the runtime and compiler rely on. */
-    static PyBytes encode(String str, String encoding, String errors) {
-        String enc = encoding.toLowerCase(Locale.ROOT).replace('_', '-');
-        boolean be = enc.equals("utf-16-be") || enc.equals("utf-16be"), le = enc.equals("utf-16-le") || enc.equals("utf-16le");
-        if (be || le) { // code units are emitted as they are; a lone surrogate needs the surrogatepass handler
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            for (int i = 0; i < str.length(); i++) {
-                char c = str.charAt(i);
-                boolean lone = Character.isHighSurrogate(c) ? !(i + 1 < str.length() && Character.isLowSurrogate(str.charAt(i + 1))) : Character.isLowSurrogate(c) && !(i > 0 && Character.isHighSurrogate(str.charAt(i - 1)));
-                if (lone && !errors.equals("surrogatepass")) {
-                    if (errors.equals("ignore")) continue;
-                    if (errors.equals("replace")) c = '?'; else throw new PyException("UnicodeEncodeError", "'" + encoding + "' codec can't encode character '\\u" + Integer.toHexString(c) + "': surrogates not allowed");
-                }
-                if (be) { out.write(c >> 8); out.write(c & 0xFF); } else { out.write(c & 0xFF); out.write(c >> 8); }
-            }
-            return new PyBytes(out.toByteArray());
-        }
-        java.nio.charset.Charset cs = PyRuntime.pyCharset(encoding);
-        java.nio.charset.CharsetEncoder encoder = cs.newEncoder();
-        if (!errors.equals("strict")) return new PyBytes(str.getBytes(cs));
-        try { java.nio.ByteBuffer b = encoder.encode(java.nio.CharBuffer.wrap(str)); byte[] data = new byte[b.remaining()]; b.get(data); return new PyBytes(data); }
-        catch (java.nio.charset.CharacterCodingException e) { throw new PyException("UnicodeEncodeError", "'" + encoding + "' codec can't encode characters: " + e.getMessage()); }
-    }
+    /** str.encode: native utf-8/ascii/latin-1/utf-16/utf-32, other encodings through the codec registry. */
+    static PyBytes encode(String str, String encoding, String errors) { return new PyBytes(Codecs.encode(str, encoding, errors)); }
 
     static Object call(Object obj, String name, Object[] args) {
         String str=(String)obj;

@@ -33,6 +33,12 @@ public final class PosixModule {
     static synchronized PyModule create() {
         PyModule m = new PyModule("posix", "pyjvm315.runtime.PosixModule");
         statResult = define("os", "stat_result", null);
+        method(statResult, PosixModule.class, "__getitem__", "srGetitem", "self,index");
+        method(statResult, PosixModule.class, "__len__", "srLen", "self");
+        method(statResult, PosixModule.class, "__iter__", "srIter", "self");
+        method(statResult, PosixModule.class, "__repr__", "srRepr", "self");
+        method(statResult, PosixModule.class, "__eq__", "srEq", "self,other");
+        method(statResult, PosixModule.class, "__hash__", "srHash", "self");
         finish(statResult);
         m.attrs.put("stat_result", statResult);
         m.attrs.put("error", PyRuntime.builtinType("OSError"));
@@ -51,7 +57,83 @@ public final class PosixModule {
         return m;
     }
 
-    static String cwd() { return Path.of("").toAbsolutePath().toString(); }
+    /** The working directory the process emulates: the JVM cannot chdir, so relative paths resolve against this. */
+    private static volatile Path cwd;
+
+    static String cwd() { return (cwd != null ? cwd : Path.of("").toAbsolutePath()).toString(); }
+
+    static Path resolve(String p) {
+        Path q = Path.of(p);
+        return q.isAbsolute() || cwd == null ? q : cwd.resolve(q).normalize();
+    }
+
+    static void chdir(Object p) {
+        String path = pathString(p);
+        Path target = resolve(path).toAbsolutePath().normalize();
+        if (!Files.exists(target)) throw osError("FileNotFoundError", 2, strerror(2), path);
+        if (!Files.isDirectory(target)) throw osError("NotADirectoryError", 20, strerror(20), path);
+        cwd = target;
+    }
+
+    static void setSize(Object st, long size) {
+        PyInstance r = (PyInstance) st;
+        r.fields.put("st_size", size);
+        PyTuple t = (PyTuple) r.slotValues.get(STATE);
+        t.items.set(6, size);
+    }
+
+    static Object utime(java.util.List<Object> a, Map<Object,Object> k) {
+        IoUtil.syncAll();
+        Object target = a.get(0);
+        String path = pathString(target);
+        Object times = a.size() > 1 ? a.get(1) : k.get("times");
+        Object ns = k.get("ns");
+        long atime, mtime;     // nanoseconds
+        if (times != null && ns != null) throw new PyException("ValueError", "utime: you may specify either 'times' or 'ns' but not both");
+        if (times != null) {
+            if (!(times instanceof PyTuple t) || t.items.size() != 2) throw new PyException("TypeError", "utime: 'times' must be either a tuple of two ints or None");
+            atime = secondsToNs(t.items.get(0)); mtime = secondsToNs(t.items.get(1));
+        } else if (ns != null) {
+            if (!(ns instanceof PyTuple t) || t.items.size() != 2) throw new PyException("TypeError", "utime: 'ns' must be a tuple of two ints");
+            atime = IoUtil.asLong(t.items.get(0)); mtime = IoUtil.asLong(t.items.get(1));
+        } else { atime = mtime = System.currentTimeMillis() * 1_000_000L; }
+        try {
+            java.nio.file.attribute.BasicFileAttributeView v = Files.getFileAttributeView(resolve(path), java.nio.file.attribute.BasicFileAttributeView.class);
+            v.setTimes(java.nio.file.attribute.FileTime.from(mtime, java.util.concurrent.TimeUnit.NANOSECONDS),
+                       java.nio.file.attribute.FileTime.from(atime, java.util.concurrent.TimeUnit.NANOSECONDS), null);
+            return null;
+        } catch (IOException e) { throw osError(e, path); }
+    }
+
+    private static long secondsToNs(Object o) {
+        o = NativeSubclass.unwrap(o);
+        if (o instanceof Double d) return (long) (d * 1e9);
+        return IoUtil.asLong(o) * 1_000_000_000L;
+    }
+
+    // ---- os.stat_result: a struct sequence of the first ten fields plus named extras ------------------
+
+    private static final String[] SR_NAMES = {"st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime", "st_ctime"};
+
+    private static PyTuple srItems(Object self) { return state(self, PyTuple.class, "stat_result"); }
+    public static Object srGetitem(Object self, Object index) { return PyRuntime.getitem(srItems(self), index); }
+    public static Object srLen(Object self) { return (long) srItems(self).items.size(); }
+    public static Object srIter(Object self) { return PyRuntime.iter(srItems(self)); }
+    public static Object srEq(Object self, Object other) {
+        Object o = other instanceof PyInstance i && i.slotValues.get(STATE) instanceof PyTuple t ? t : other;
+        return PyRuntime.eq(srItems(self), o);
+    }
+    public static Object srHash(Object self) { return PyRuntime.hash(srItems(self)); }
+    public static Object srRepr(Object self) {
+        PyTuple t = srItems(self);
+        StringBuilder sb = new StringBuilder("os.stat_result(");
+        for (int i = 0; i < SR_NAMES.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(SR_NAMES[i]).append('=').append(PyRuntime.pyRepr(t.items.get(i)));
+        }
+        return sb.append(')').toString();
+    }
+
 
     /** os.fspath for str and bytes-free paths; objects with __fspath__ are asked. */
     static Object fspath(Object p) {
@@ -107,47 +189,54 @@ public final class PosixModule {
     }
 
     static Object stat(String path, boolean follow) {
-        Path p = Path.of(path);
+        IoUtil.syncAll();
+        Path p = resolve(path);
         try {
             LinkOption[] opts = follow ? new LinkOption[0] : new LinkOption[]{LinkOption.NOFOLLOW_LINKS};
             Map<String,Object> a;
             try { a = Files.readAttributes(p, "unix:*", opts); }
             catch (UnsupportedOperationException | IllegalArgumentException e) { a = null; }
             PyInstance r = new PyInstance(statResult);
+            long mode, ino, dev, nlink, uid, gid, size;
+            long[] at = new long[3];
             if (a != null) {
-                long mode = ((Number) a.get("mode")).longValue();
-                put(r, "st_mode", mode); put(r, "st_ino", ((Number) a.get("ino")).longValue());
-                put(r, "st_dev", ((Number) a.get("dev")).longValue()); put(r, "st_nlink", ((Number) a.get("nlink")).longValue());
-                put(r, "st_uid", ((Number) a.get("uid")).longValue()); put(r, "st_gid", ((Number) a.get("gid")).longValue());
-                put(r, "st_size", ((Number) a.get("size")).longValue());
-                time(r, "st_atime", (java.nio.file.attribute.FileTime) a.get("lastAccessTime"));
-                time(r, "st_mtime", (java.nio.file.attribute.FileTime) a.get("lastModifiedTime"));
-                time(r, "st_ctime", (java.nio.file.attribute.FileTime) a.get("ctime"));
+                mode = ((Number) a.get("mode")).longValue(); ino = ((Number) a.get("ino")).longValue();
+                dev = ((Number) a.get("dev")).longValue(); nlink = ((Number) a.get("nlink")).longValue();
+                uid = ((Number) a.get("uid")).longValue(); gid = ((Number) a.get("gid")).longValue();
+                size = ((Number) a.get("size")).longValue();
+                at[0] = ns((java.nio.file.attribute.FileTime) a.get("lastAccessTime"));
+                at[1] = ns((java.nio.file.attribute.FileTime) a.get("lastModifiedTime"));
+                at[2] = ns((java.nio.file.attribute.FileTime) a.get("ctime"));
+                put(r, "st_rdev", a.get("rdev") instanceof Number rd ? rd.longValue() : 0L);
             } else {
                 java.nio.file.attribute.BasicFileAttributes b = Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class, opts);
-                long mode = (b.isDirectory() ? 0040000L : b.isSymbolicLink() ? 0120000L : 0100000L) | 0644;
-                put(r, "st_mode", mode); put(r, "st_ino", 0L); put(r, "st_dev", 0L); put(r, "st_nlink", 1L);
-                put(r, "st_uid", 0L); put(r, "st_gid", 0L); put(r, "st_size", b.size());
-                time(r, "st_atime", b.lastAccessTime()); time(r, "st_mtime", b.lastModifiedTime()); time(r, "st_ctime", b.creationTime());
+                mode = (b.isDirectory() ? 0040000L : b.isSymbolicLink() ? 0120000L : 0100000L) | 0644;
+                ino = 0; dev = 0; nlink = 1; uid = 0; gid = 0; size = b.size();
+                at[0] = ns(b.lastAccessTime()); at[1] = ns(b.lastModifiedTime()); at[2] = ns(b.creationTime());
+                put(r, "st_rdev", 0L);
             }
+            PyTuple items = tuple(mode, ino, dev, nlink, uid, gid, size, Math.floorDiv(at[0], 1_000_000_000L), Math.floorDiv(at[1], 1_000_000_000L), Math.floorDiv(at[2], 1_000_000_000L));
+            r.slotValues.put(STATE, items);
+            String[] names = {"st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size"};
+            for (int i = 0; i < names.length; i++) put(r, names[i], items.items.get(i));
+            String[] tn = {"st_atime", "st_mtime", "st_ctime"};
+            for (int i = 0; i < 3; i++) { put(r, tn[i], at[i] / 1e9); put(r, tn[i] + "_ns", at[i]); }
+            put(r, "st_blksize", 4096L); put(r, "st_blocks", (size + 511) / 512);
             return r;
         } catch (IOException e) {
             throw osError(e, path);
         }
     }
 
+    private static long ns(java.nio.file.attribute.FileTime t) { return t.to(java.util.concurrent.TimeUnit.NANOSECONDS); }
+
     private static void put(PyInstance r, String name, Object value) { r.fields.put(name, value); }
 
-    private static void time(PyInstance r, String name, java.nio.file.attribute.FileTime t) {
-        long ns = t.to(java.util.concurrent.TimeUnit.NANOSECONDS);
-        put(r, name, ns / 1e9);
-        put(r, name + "_ns", ns);
-    }
-
     static Object listdir(Object p) {
+        IoUtil.syncAll();
         String path = p == null ? "." : pathString(p);
         boolean bytes = p instanceof PyBytes;
-        try (Stream<Path> s = Files.list(Path.of(path))) {
+        try (Stream<Path> s = Files.list(resolve(path))) {
             ArrayList<Object> out = new ArrayList<>();
             s.forEach(e -> {
                 String n = e.getFileName().toString();
