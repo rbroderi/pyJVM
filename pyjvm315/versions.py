@@ -21,3 +21,8 @@ def check_host() -> None:
 def feature_version():
     """Grammar level for ``ast.parse``: the host's own (newer syntax cannot be parsed on older hosts)."""
     return sys.version_info[:2]
+
+
+def deferred_annotations() -> bool:
+    """PEP 649/749: annotations are evaluated lazily from Python 3.14 on (the host's own level, as for feature_version)."""
+    return sys.version_info[:2] >= (3, 14)

@@ -31,7 +31,7 @@ final class PyFunction {
     final PyEnv closure;
     final boolean envMode;
     String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
-    boolean hasAnnotations=false,hasClassCell=false;
+    boolean hasClassCell=false;
     List<String> freeNames=List.of();
     PyTuple closureTuple;
 
