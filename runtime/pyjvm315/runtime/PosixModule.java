@@ -181,6 +181,16 @@ public final class PosixModule {
         return osError(type, errno, errno == 5 ? String.valueOf(e.getMessage()) : strerror(errno), path);
     }
 
+    /** An error that names two paths (rename, link, symlink, replace). */
+    static PyException osError(IOException e, String path, String path2) {
+        PyException base = osError(e, path);
+        PyExcArgs a = (PyExcArgs) base.value;
+        java.util.LinkedHashMap<String,Object> attrs = new java.util.LinkedHashMap<>(a.attrs);
+        attrs.put("filename2", path2);
+        PyTuple t = a.args;
+        return new PyException(base.typeName, new PyExcArgs(tuple(t.items.get(0), t.items.get(1), path, null, path2), null, attrs));
+    }
+
     static PyException osError(String type, int errno, String strerror, String path) {
         java.util.LinkedHashMap<String,Object> attrs = new java.util.LinkedHashMap<>();
         attrs.put("errno", (long) errno); attrs.put("strerror", strerror); attrs.put("filename", path);

@@ -37,6 +37,25 @@ public final class IoModule {
         IoBuffered.define(m);
         IoCodec.define(m);
         IoText.define(m);
+        String[][] docs = {
+            {"_IOBase", "The abstract base class for all I/O classes.\n\nThis class provides dummy implementations for many methods that\nderived classes can override selectively; the default implementations\nrepresent a file that cannot be read, written or seeked."},
+            {"_RawIOBase", "Base class for raw binary I/O."},
+            {"_BufferedIOBase", "Base class for buffered IO objects.\n\nThe main difference with RawIOBase is that the read() method\nsupports omitting the size argument, and does not have a default\nimplementation that defers to readinto()."},
+            {"_TextIOBase", "Base class for text I/O.\n\nThis class provides a character and line based interface to stream\nI/O. There is no readinto method because Python's character strings\nare immutable."},
+            {"FileIO", "Open a file.\n\nThe mode can be 'r' (default), 'w', 'x' or 'a' for reading,\nwriting, exclusive creation or appending."},
+            {"BytesIO", "Buffered I/O implementation using an in-memory bytes buffer."},
+            {"StringIO", "Text I/O implementation using an in-memory buffer."},
+            {"BufferedReader", "Create a new buffered reader using the given readable raw IO object."},
+            {"BufferedWriter", "A buffer for a writeable sequential RawIO object."},
+            {"BufferedRandom", "A buffered interface to random access streams."},
+            {"BufferedRWPair", "A buffered reader and writer object together."},
+            {"TextIOWrapper", "Character and line based layer over a BufferedIOBase object, buffer."},
+            {"IncrementalNewlineDecoder", "Codec used when reading a file in universal newlines mode."},
+        };
+        for (String[] d : docs) {
+            Object c = m.attrs.get(d[0]);
+            if (c instanceof PyClass pc && !pc.attrs.containsKey("__doc__")) PyRuntime.setattr(pc, "__doc__", d[1]);
+        }
         m.attrs.put("open", openFunction());
         fn(m, "open_code", (a, k) -> {
             Object p = a.size() == 1 ? a.get(0) : k.get("path");

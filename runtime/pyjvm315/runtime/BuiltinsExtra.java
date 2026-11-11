@@ -165,6 +165,7 @@ public final class BuiltinsExtra {
                 return null;
             }
         }
+        getattr(file, "write");
         for (int i = 0; i < args.size(); i++) {
             if (i != 0) callMethod(file, "write", new Object[]{sep});
             callMethod(file, "write", new Object[]{pyStr(args.get(i))});

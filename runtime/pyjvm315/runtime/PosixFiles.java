@@ -165,7 +165,7 @@ final class PosixFiles {
             if (replace) Files.move(PosixModule.resolve(from), PosixModule.resolve(to), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             else Files.move(PosixModule.resolve(from), PosixModule.resolve(to));
             return null;
-        } catch (IOException e) { throw PosixModule.osError(e, from); }
+        } catch (IOException e) { throw PosixModule.osError(e, from, to); }
     }
 
     private static Object access(String path, int mode) {
