@@ -2949,15 +2949,40 @@ public final class PyRuntime {
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
             return;
         }
-        if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super"))) {
+        if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super") || DESCRIPTOR_TYPES.contains(builtin.name) || builtin.name.equals("GenericAlias"))) {
             target.builtinBaseName=builtin.name;
             return;
         }
         if(base instanceof PyBuiltinType nativeBase && NativeSubclass.isKind(nativeBase.name)){ NativeSubclass.addBase(target,nativeBase); return; }
-        throw new PyException("TypeError","class base must be a class");
+        throw new PyException("TypeError","class base must be a class (got "+(base instanceof PyBuiltinType bt?"builtin type "+bt.name:typeName(base))+")");
+    }
+    static final Set<String> DESCRIPTOR_TYPES=Set.of("classmethod","staticmethod","property");
+    /** classmethod/staticmethod/property.__init__ on an instance of a user subclass: the state is kept in the instance until the class attribute is installed. */
+    static void descriptorInit(String type,Object[] args){
+        if(args.length<1 || !(args[0] instanceof PyInstance self))throw new PyException("TypeError",type+".__init__ requires a "+type+" subclass instance");
+        if(type.equals("property")){
+            String[] names={"fget","fset","fdel","doc"};
+            if(args.length>5)throw new PyException("TypeError","property() takes at most 4 arguments");
+            for(int i=0;i<4;i++)self.fields.put(names[i],i+1<args.length?args[i+1]:null);
+            return;
+        }
+        if(args.length!=2)throw new PyException("TypeError",type+"() requires one positional argument");
+        self.fields.put("__func__",args[1]);
+    }
+    /** The builtin descriptor behind an instance of a classmethod/staticmethod/property subclass, else the value unchanged. */
+    static Object descriptorOf(Object value){
+        if(!(value instanceof PyInstance inst) || inst.payload!=null)return value;
+        String kind=null;
+        for(PyClass c:inst.cls.mro)if(c.builtinBaseName!=null && DESCRIPTOR_TYPES.contains(c.builtinBaseName)){kind=c.builtinBaseName;break;}
+        if(kind==null)return value;
+        if(kind.equals("property"))return new PyManagedProperty(inst.fields.get("fget"),inst.fields.get("fset"),inst.fields.get("fdel"),inst.fields.get("doc"));
+        Object func=inst.fields.get("__func__");
+        if(func==null)throw new PyException("RuntimeError","uninitialized "+kind+" object");
+        return methodDescriptor(func,kind.equals("classmethod")?"class":"static");
     }
     public static void classAddAttr(Object cls, Object pyName, Object value) {
         PyClass target=(PyClass)cls;String name=(String)pyName;
+        value=descriptorOf(value);
         if(value instanceof PyFunction && Set.of("__new__","__init_subclass__","__class_getitem__").contains(name))
             value=methodDescriptor(value,name.equals("__new__")?"static":"class");
         target.attrs.put(name, value);
@@ -3299,6 +3324,8 @@ public final class PyRuntime {
             case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__","__getattribute__").contains(name);
             case "type" -> Set.of("__new__","__init__","__call__","__setattr__","__delattr__").contains(name);
             case "super" -> Set.of("__new__","__init__","__get__").contains(name);
+            case "classmethod","staticmethod","property" -> name.equals("__init__");
+            case "GenericAlias" -> name.equals("__new__") || name.equals("__init__");
             default -> false;
         };
     }
@@ -3454,6 +3481,17 @@ public final class PyRuntime {
             if(args[0] instanceof PyBuiltinType type && type.name.equals("super"))return new PySuper(SUPER_CLASS);
             if(args[0] instanceof PyClass cls && typeMro(cls).contains(builtinType("super")))return new PySuper(cls);
             throw new PyException("TypeError","super.__new__ requires a super subtype");
+        }
+        if(DESCRIPTOR_TYPES.contains(builtin.name) && name.equals("__init__")){descriptorInit(builtin.name,args);return null;}
+        if(builtin.name.equals("GenericAlias") && name.equals("__init__"))return null;
+        if(builtin.name.equals("GenericAlias") && name.equals("__new__")){
+            // user subclass of types.GenericAlias: an ordinary instance that carries the alias's origin and arguments
+            if(args.length!=3 || !(args[0] instanceof PyClass subclass))throw new PyException("TypeError","GenericAlias.__new__ expects (cls, origin, args)");
+            PyInstance alias=new PyInstance(subclass);
+            alias.fields.put("__origin__",args[1]);
+            alias.fields.put("__args__",args[2] instanceof PyTuple t?t:TypeParamsObject.tuple(new ArrayList<Object>(List.of(args[2]))));
+            alias.fields.put("__parameters__",new PyTuple());
+            return alias;
         }
         if(builtin.name.equals("object") && name.equals("__init__")){requireArgs(name,args,1);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
@@ -3686,6 +3724,14 @@ public final class PyRuntime {
         if((obj instanceof Long || obj instanceof BigInteger || obj instanceof Boolean) && IntMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(obj instanceof PyBuiltinType type && type.name.equals("function") && Set.of("__code__","__globals__","__closure__","__defaults__","__kwdefaults__").contains(name))return new BuiltinBoundMethod(type,name);
+        if(obj instanceof PyBuiltinType type && name.equals("__dict__")){   // read-only view of the type's own attributes (CPython: mappingproxy)
+            LinkedHashSet<Object> names=new LinkedHashSet<>();nativeDirNames(type.name,names);
+            LinkedHashMap<Object,Object> view=new LinkedHashMap<>();
+            for(Object n:names)if(n instanceof String s)view.put(s,new BuiltinBoundMethod(type,s));
+            for(String n:switch(type.name){case "dict"->List.of("fromkeys");case "int"->List.of("from_bytes");case "float"->List.of("fromhex");case "str","bytes"->List.of("maketrans");default->List.<String>of();})view.putIfAbsent(n,new BuiltinBoundMethod(type,n));
+            return view;
+        }
         if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__dir__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__format__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
@@ -3833,6 +3879,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
         {Object nativeValue=NativeSubclassMethods.plainAttribute(obj,name);if(nativeValue!=MISSING)return nativeValue;}
+        if(obj instanceof PyObject && Set.of("__str__","__repr__","__hash__","__eq__","__ne__","__format__","__reduce_ex__","__sizeof__").contains(name))return new BuiltinBoundMethod(obj,name);
         throw new PyException("AttributeError","'"+typeName(obj)+"' object has no attribute '"+name+"'");
     }
 
