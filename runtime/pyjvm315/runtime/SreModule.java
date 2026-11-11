@@ -262,7 +262,7 @@ public final class SreModule {
                 d.put(t.items.get(0), t.items.get(1));
             }
         }
-        p.groupindex = d.freeze();
+        p.groupindex = d;
         p.indexgroup = ig;
         PyInstance obj = newInstance(patClass, p);
         p.obj = obj;
@@ -299,7 +299,11 @@ public final class SreModule {
     public static Object patPattern(Object self) { return pat(self).pattern; }
     public static Object patFlags(Object self) { return (long) pat(self).flags; }
     public static Object patGroups(Object self) { return (long) pat(self).groups; }
-    public static Object patGroupindex(Object self) { return pat(self).groupindex; }
+    public static Object patGroupindex(Object self) {
+        PyDict copy = new PyDict();
+        for (Map.Entry<Object,Object> en : pat(self).groupindex.entrySet()) copy.put(en.getKey(), en.getValue());
+        return copy;
+    }
 
     private static Object doMatch(Object self, Object string, Object pos, Object endpos, int mode) {
         Pat p = pat(self);

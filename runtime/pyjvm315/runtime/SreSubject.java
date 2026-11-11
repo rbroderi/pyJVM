@@ -69,7 +69,6 @@ final class SreSubject {
     Object slice(int from, int to) {
         if (isBytes) {
             if (from == 0 && to == raw.length && orig instanceof PyBytes) return orig;
-            if (orig instanceof PyByteArray) return new PyByteArray(Arrays.copyOfRange(raw, from, to));
             return new PyBytes(Arrays.copyOfRange(raw, from, to));
         }
         if (bmp) return str.substring(from, to);

@@ -30,6 +30,19 @@ final class PyByteArrayMethods {
             case "append" -> { requireArgs(name,args,1); bytes.appendUnsigned(byteValue(args[0])); yield null; }
             case "extend" -> { requireArgs(name,args,1); for(Object x:iterable(args[0])) bytes.appendUnsigned(byteValue(x)); yield null; }
             case "clear" -> { requireArgs(name,args,0); bytes.data.clear(); yield null; }
+            case "take_bytes" -> {
+                if(!LangVersion.atLeast(3,15)) throw new PyException("AttributeError","'bytearray' object has no attribute 'take_bytes'");
+                if(args.length>1)throw new PyException("TypeError","take_bytes expected at most 1 argument, got "+args.length);
+                int size=bytes.data.size(), n=size;
+                if(args.length==1&&args[0]!=null){
+                    long k=asIndex(args[0]); if(k<0)k+=size;
+                    if(k<0||k>size)throw new PyException("IndexError","index out of range");
+                    n=(int)k;
+                }
+                byte[] taken=new byte[n]; for(int i=0;i<n;i++)taken[i]=bytes.data.get(i);
+                bytes.data.subList(0,n).clear();
+                yield new PyBytes(taken);
+            }
             case "copy" -> { requireArgs(name,args,0); yield new PyByteArray(bytes.toByteArray()); }
             case "reverse" -> { requireArgs(name,args,0); Collections.reverse(bytes.data); yield null; }
             case "pop" -> {

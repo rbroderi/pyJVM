@@ -1598,6 +1598,7 @@ public final class PyRuntime {
         {Object meta=metaSpecial(value,"__len__");if(meta!=MISSING)return meta;}
         long n;
         if (value instanceof String s) n = s.codePointCount(0, s.length());
+        else if (value instanceof PyMemoryView mv) n = mv.byteSize() / mv.itemsize;
         else if (value instanceof PyByteSequence seq) n = seq.byteSize();
         else if (value instanceof List<?> xs) n = xs.size();
         else if (value instanceof Map<?, ?> xs) n = xs.size();
@@ -3894,6 +3895,9 @@ public final class PyRuntime {
         }
         if(obj instanceof PyMemoryView view) {
             if(name.equals("readonly")) return view.readonly();
+            if(name.equals("itemsize")) return (long)view.itemsize;
+            if(name.equals("format")) return String.valueOf(view.fmt);
+            if(name.equals("nbytes")) return (long)view.byteSize();
         }
         if(obj instanceof PyModuleSpec spec) {
             return switch(name) {
