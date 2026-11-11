@@ -1696,9 +1696,17 @@ public final class PyRuntime {
         }
         if (container instanceof Map<?, ?> m) return m.containsKey(needle);
         if (container instanceof Set<?> s) return s.contains(needle);
-        if (container instanceof List<?> xs) return xs.contains(needle);
-        if (container instanceof PyTuple t) return t.items.contains(needle);
+        if (container instanceof List<?> xs) return sequenceContains(xs, needle);
+        if (container instanceof PyTuple t) return sequenceContains(t.items, needle);
         for (Object value : iterable(container)) if ((Boolean)eq(value, needle)) return true;
+        return false;
+    }
+
+    private static boolean sequenceContains(List<?> xs, Object needle) {
+        for (int i = 0; i < xs.size(); i++) {
+            Object x = xs.get(i);
+            if (x == needle || (x instanceof PyInstance || needle instanceof PyInstance ? eq(x, needle) == Boolean.TRUE : x == null ? needle == null : x.equals(needle))) return true;
+        }
         return false;
     }
 
@@ -2667,6 +2675,7 @@ public final class PyRuntime {
                 throw new PyException("TypeError","type() takes 1 or 3 arguments");
             }
             if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
+            if(type.name.equals("method") && kwargs.isEmpty() && args.size()==2)return new BoundCallable(args.get(0),args.get(1));   // types.MethodType(func, obj)
             if(type.name.equals("sentinel"))return TypeParamsSentinel.construct(args,kwargs);
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(Set.of("map","zip","enumerate","filter").contains(type.name)) return callBuiltin(type.name,args,kwargs);
@@ -3010,6 +3019,7 @@ public final class PyRuntime {
         if(value instanceof PyFunction && Set.of("__new__","__init_subclass__","__class_getitem__").contains(name))
             value=methodDescriptor(value,name.equals("__new__")?"static":"class");
         target.attrs.put(name, value);
+        if(value!=null && name.equals("__del__"))target.hasDel=true;
         target.methods.remove(name);target.properties.remove(name);
         PyMethod method=methodFromDescriptor(value);
         if(method!=null)target.methods.put(name,method);
@@ -3209,6 +3219,7 @@ public final class PyRuntime {
         if(spec==null) {
             cls.slotsDeclared=false;
             cls.instanceDictAllowed=true;
+            WeakrefModule.configureClass(cls,true);
             return;
         }
 
@@ -3221,11 +3232,12 @@ public final class PyRuntime {
         else throw new PyException("TypeError","__slots__ must be a string or iterable of strings");
 
         LinkedHashSet<String> names=new LinkedHashSet<>();
+        boolean weakrefSlot=false;
         for(Object raw:rawNames) {
             if(!(raw instanceof String name)) throw new PyException("TypeError","__slots__ items must be strings");
             if(!isPythonIdentifier(name)) throw new PyException("TypeError","__slots__ must be identifiers");
             if(name.equals("__dict__")) { cls.instanceDictAllowed=true; continue; }
-            if(name.equals("__weakref__")) continue;
+            if(name.equals("__weakref__")) { weakrefSlot=true; continue; }
             String slotName=mangleSlotName(cls.name,name);
             names.add(slotName);
         }
@@ -3237,6 +3249,7 @@ public final class PyRuntime {
             cls.ownSlots.add(slotName);
             cls.attrs.put(slotName,new PySlotDescriptor(cls,slotName));
         }
+        WeakrefModule.configureClass(cls,weakrefSlot);
     }
 
     static boolean isPythonIdentifier(String name) {
@@ -3267,6 +3280,7 @@ public final class PyRuntime {
         cls.computeMro();
         cls.nativeKind=NativeSubclass.resolveKind(cls);
         configureSlots(cls);
+        for(PyClass c:cls.mro)if(c.methods.containsKey("__del__")||c.attrs.get("__del__")!=null){cls.hasDel=true;break;}
 
         // PEP 487: descriptors receive their owner/name before __init_subclass__.
         for(var entry:new ArrayList<>(cls.attrs.entrySet())) {
@@ -3412,7 +3426,7 @@ public final class PyRuntime {
             newArgs.addAll(Arrays.asList(args));
             created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
         } else {
-            created=cls.nativeKind!=null?NativeSubclass.allocate(cls,cls.nativeKind,args,kwargs):typeMro(cls).contains(builtinType("super"))?new PySuper(cls):new PyInstance(cls);
+            created=cls.nativeKind!=null?NativeSubclass.allocate(cls,cls.nativeKind,args,kwargs):typeMro(cls).contains(builtinType("super"))?new PySuper(cls):PyInstance.create(cls);
             if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
@@ -3562,7 +3576,7 @@ public final class PyRuntime {
         if(builtin.name.equals("object") && name.equals("__new__")) {
             requireArgs(name,args,1);
             if(!(args[0] instanceof PyClass cls)) throw new PyException("TypeError","object.__new__() argument must be a type");
-            return new PyInstance(cls);
+            return PyInstance.create(cls);
         }
         if(builtin.name.equals("type") && name.equals("__new__")) {
             requireArgs(name,args,4);
@@ -3967,6 +3981,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
+            if(instance.cls.weakProxy) return WeakrefProxy.getattr(instance,name);
             if(name.equals("__class__")) return instance.cls;
             if(name.equals("__dict__")) {
                 if(!instance.cls.instanceDictAllowed)
@@ -4026,6 +4041,7 @@ public final class PyRuntime {
         if(obj instanceof PyExceptionValue || obj instanceof PyInstance excInstance && excInstance.cls.exceptionBase!=null && excInstance.cls.lookupAttr(name)==MISSING && excInstance.cls.lookupProperty(name)==null)
             if(ExceptionGroupSupport.setattr(obj,name,value)) return;
         if (obj instanceof PyInstance instance) {
+            if(instance.cls.weakProxy){WeakrefProxy.setattr(instance,name,value);return;}
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) {
                 if(prop.setter==null) throw new PyException("AttributeError", "property '"+name+"' of '"+instance.cls.name+"' object has no setter");
@@ -4076,6 +4092,7 @@ public final class PyRuntime {
         }
         if(obj instanceof PyInstance instance) {
             String name=(String)nameObj;
+            if(instance.cls.weakProxy){WeakrefProxy.delattr(instance,name);return;}
             if(instance.cls.lookupProperty(name)!=null) throw new PyException("AttributeError","property '"+name+"' has no deleter");
             Object descriptor=instance.cls.lookupAttr(name);
             if(descriptor instanceof PyManagedProperty property){
@@ -4105,6 +4122,7 @@ public final class PyRuntime {
             for(Object c:tuple.items) if((Boolean)isInstance(obj,c)) return true;
             return false;
         }
+        if (obj instanceof PyInstance proxy && proxy.cls.weakProxy && !(clsObj instanceof PyClass pc && pc.weakProxy)) { Object target=WeakrefProxy.referent(proxy); if(truth(isInstance(target,clsObj)))return true; }
         if (clsObj instanceof PyClass cls) return obj instanceof PyInstance instance ? instance.cls.mro.contains(cls) : obj instanceof PyClass oc && oc.metaclass!=null && oc.metaclass.mro.contains(cls);
         if (clsObj instanceof PyBuiltinType bt) {
             if(obj instanceof PyExceptionValue error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);

@@ -30,5 +30,7 @@ class PyInstance {
     /** __cause__/__context__/__traceback__ of an exception instance; null for every other object. */
     ExcState exc;
     PyInstance(PyClass cls) { this.cls = cls; }
+    /** A new instance of cls; classes with a __del__ get a GcFinalizable so the finalizer runs once the object is unreachable. */
+    static PyInstance create(PyClass cls) { return cls.hasDel ? new GcFinalizable(cls) : new PyInstance(cls); }
     @Override public String toString() { return "<" + cls.name + " object>"; }
 }

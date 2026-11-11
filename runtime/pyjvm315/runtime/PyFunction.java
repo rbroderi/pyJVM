@@ -102,6 +102,7 @@ final class PyFunction {
     }
 
     Object invokeStatic(Object[] bound) {
+        WeakrefDelivery.poll();
         if(Tracing.enabled && !generatorLike) return invokeStaticTraced(bound);
         ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
         logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
