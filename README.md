@@ -1059,3 +1059,32 @@ Pattern matching (283 unsupported bodies) is the largest next language gap. Dyna
 execution (`exec`, `eval`, `compile`), external modules and other missing builtins
 also remain. Baseline updates must record deliberate progress or corpus changes;
 they must not hide regressions. The benchmark regression gates remain enabled.
+
+## Weak references, finalization, `gc` and `atexit`
+
+`_weakref`, `gc` and `atexit` are native modules (`WeakrefModule`, `GcModule`, `AtexitModule`); CPython's own
+`weakref.py` and `_weakrefset.py` run unchanged on top of them (`PYJVM_STDLIB`).
+
+* `weakref.ref` hashes and compares by referent, exposes `__callback__`, can be subclassed (`KeyedRef`, `WeakMethod`)
+  and is shared between callback-less exact refs. `proxy` and `callableproxy` forward every operator and attribute
+  access and raise `ReferenceError` once the referent is gone. `getweakrefcount`/`getweakrefs` follow CPython's order.
+* Weakref-ability follows CPython: plain classes and classes with a `__weakref__` slot are weakrefable, `__slots__`
+  without it, `list`, `dict`, `int`, `str`, `tuple`, `bytes` and `None` raise `TypeError: cannot create weak
+  reference to 'X' object`.
+* `__del__` runs when the JVM finds the instance unreachable (PEP 442: at most once, resurrection allowed, cycles
+  are finalized). It is implemented with `Object.finalize`, which only resurrects the object and queues it.
+* Deterministic delivery. A watcher thread drains the JVM `ReferenceQueue` but never runs Python code; it posts
+  callbacks and finalizers to the thread that created the reference/object. They run on that thread at a safe
+  point (the start of every compiled function call) or inside `gc.collect()`, never concurrently with it.
+  Finalizers run before weakref callbacks, newest callback first. Errors go to `sys.unraisablehook`.
+* There is no reference counting, so timing is not CPython's: objects are collected when the JVM decides or at
+  `gc.collect()` (two full collections plus reference processing, returning the number of callbacks and finalizers
+  run). Code that needs an object to die should loop on `gc.collect()`. Locals of the compiled caller can keep a
+  value alive until the frame exits, and closures capture their whole enclosing environment, so a callback
+  closure can pin the object it was created next to (this keeps a `weakref.WeakMethod` target alive).
+* `gc`: `enable/disable/isenabled`, thresholds, counts, stats, `callbacks`, `garbage` (always empty), `freeze`,
+  `is_tracked`, `is_finalized`, shallow `get_referents`. `get_objects` and `get_referrers` raise
+  `NotImplementedError` because the JVM heap cannot be enumerated. `sys.getrefcount` does not exist.
+* `atexit` callbacks run from a JVM shutdown hook after `sys.exit`, normal completion or an uncaught exception
+  (traceback first), last registered first; callbacks registered while exiting are dropped, `SystemExit` is
+  ignored and other exceptions are reported through the unraisable hook.
