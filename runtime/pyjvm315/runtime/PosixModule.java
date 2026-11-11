@@ -48,6 +48,7 @@ public final class PosixModule {
         fn(m, "lstat", (a, k) -> stat(path(a, "lstat"), false));
         fn(m, "listdir", (a, k) -> listdir(a.isEmpty() ? null : a.get(0)));
         fn(m, "getpid", (a, k) -> ProcessHandle.current().pid());
+        fn(m, "kill", (a, k) -> { SignalModule.kill(IoUtil.asLong(a.get(0)), IoUtil.asLong(a.get(1))); return null; });
         fn(m, "strerror", (a, k) -> strerror(((Number) a.get(0)).intValue()));
         PyDict env = new PyDict();
         for (Map.Entry<String,String> e : System.getenv().entrySet())

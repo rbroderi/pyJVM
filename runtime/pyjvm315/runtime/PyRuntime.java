@@ -3852,6 +3852,7 @@ public final class PyRuntime {
         if(obj instanceof NativeFunction nf){
             if(nf.attrs.containsKey(name))return nf.attrs.get(name);
             if(name.equals("__name__") || name.equals("__qualname__"))return nf.name;
+            if(name.equals("__doc__"))return null;
         }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(obj instanceof PyBuiltinType type && name.equals("__mro__")){

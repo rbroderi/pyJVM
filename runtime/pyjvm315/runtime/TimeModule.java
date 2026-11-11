@@ -38,6 +38,7 @@ public final class TimeModule {
             if (a.size() != 1) throw new PyException("TypeError", "sleep() takes exactly one argument (" + a.size() + " given)");
             double s = seconds(a.get(0));
             if (s < 0) throw new PyException("ValueError", "sleep length must be non-negative");
+            if (SignalModule.active) { SignalModule.sleep((long) (s * 1e9)); return null; }
             try { Thread.sleep((long) (s * 1000), (int) ((s * 1e9) % 1_000_000)); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             return null;
