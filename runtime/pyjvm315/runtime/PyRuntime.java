@@ -2042,7 +2042,7 @@ public final class PyRuntime {
     }
     static Object binarySearch(PyByteSequence seq,Object[] args,boolean reverse,boolean raising){
         if(args.length<1||args.length>3)throw new PyException("TypeError",(reverse?(raising?"rindex":"rfind"):(raising?"index":"find"))+"() takes from 1 to 3 arguments");
-        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        byte[] hay=seq.toByteArray(), needle=isIntLike(args[0])?new byte[]{(byte)byteValue(args[0])}:requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
         int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
         int found=reverse?binaryLastIndexOf(hay,needle,start,end):binaryIndexOf(hay,needle,start,end);
@@ -2144,7 +2144,7 @@ public final class PyRuntime {
 
     static Object binaryFind(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>3)throw new PyException("TypeError","find() takes from 1 to 3 arguments");
-        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        byte[] hay=seq.toByteArray(), needle=isIntLike(args[0])?new byte[]{(byte)byteValue(args[0])}:requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
         int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
         return (long)binaryIndexOf(hay,needle,start,end);

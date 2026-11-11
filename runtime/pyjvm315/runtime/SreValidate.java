@@ -183,7 +183,8 @@ final class SreValidate {
             p += 2 + 2 * (int) plen;
             need(p == next);
         } else if ((flags & SreState.INFO_CHARSET) != 0) {
-            charset(c, p, next);
+            need(next - 1 >= p && c[next - 1] == SreState.FAILURE);
+            charset(c, p, next - 1);
             p = next;
         }
         need(p == next);
