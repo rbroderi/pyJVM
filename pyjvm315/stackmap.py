@@ -6,9 +6,6 @@ them. No host JVM, class loading, or Java source rewriting is involved.
 """
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass
-import struct
 
 # verification_type_info tags (JVMS 4.7.4)
 TOP, INT, FLOAT, DOUBLE, LONG, NULL, UNINIT_THIS = [(n, None) for n in range(7)]
@@ -63,12 +60,18 @@ def width(value):
     return 2 if value in (LONG, DOUBLE) else 1
 
 
-@dataclass(frozen=True)
 class Instruction:
-    pc: int
-    opcode: int
-    operand: int | None
-    end: int
+    def __init__(self, pc, opcode, operand, end):
+        self.pc = pc
+        self.opcode = opcode
+        self.operand = operand
+        self.end = end
+
+    def __eq__(self, other):
+        return isinstance(other, Instruction) and (self.pc, self.opcode, self.operand, self.end,) == (other.pc, other.opcode, other.operand, other.end,)
+
+    def __hash__(self):
+        return hash((self.pc, self.opcode, self.operand, self.end,))
 
 
 def decode(code):
@@ -77,6 +80,7 @@ def decode(code):
     one = {0x00, 0x01, 0x57, 0x59, 0xB0, 0xB1, 0xBF, *range(0x2A, 0x2E), *range(0x4B, 0x4F)}
     two = {0x12, 0x19, 0x3A}
     three = {0x13, 0x99, 0x9A, 0xA7, 0xB2, 0xB3, 0xB6, 0xB7, 0xB8, 0xBB, 0xC0}
+    five = {0xC8}   # goto_w
     while pc < len(code):
         opcode = code[pc]
         operand = None
@@ -91,12 +95,14 @@ def decode(code):
             size = 2
         elif opcode in three:
             size = 3
+        elif opcode in five:
+            size = 5
         elif opcode not in one:
             raise FrameError(f"Unsupported JVM opcode 0x{opcode:02x} at {pc}")
         if pc + size > len(code):
             raise FrameError(f"Truncated instruction at {pc}")
         if operand is None and size > 1:
-            operand = int.from_bytes(code[pc + 1:pc + size], 'big', signed=opcode in (0x99, 0x9A, 0xA7))
+            operand = int.from_bytes(code[pc + 1:pc + size], 'big', signed=opcode in (0x99, 0x9A, 0xA7, 0xC8))
         instructions[pc] = Instruction(pc, opcode, operand, pc + size)
         pc += size
     return instructions
@@ -137,7 +143,7 @@ def analyze(cp, owner, method):
     exceptions = method.exception_table or []
     required = set()
     for ins in insns.values():
-        if ins.opcode in (0x99, 0x9A, 0xA7):
+        if ins.opcode in (0x99, 0x9A, 0xA7, 0xC8):
             target = ins.pc + ins.operand
             if target not in insns:
                 raise FrameError(f"Branch at {ins.pc} targets non-instruction {target}")
@@ -147,7 +153,8 @@ def analyze(cp, owner, method):
             raise FrameError("Invalid exception-table boundary")
         required.add(handler)
     states = {0: (tuple(initial), ())}
-    pending = deque([0])
+    pending = [0]
+    cursor = 0
     max_stack = 0
 
     def propagate(pc, locals_, stack):
@@ -164,8 +171,9 @@ def analyze(cp, owner, method):
             states[pc] = state
             pending.append(pc)
 
-    while pending:
-        pc = pending.popleft()
+    while cursor < len(pending):
+        pc = pending[cursor]
+        cursor += 1
         before_locals, before_stack = states[pc]
         locals_, stack = list(before_locals), list(before_stack)
         ins = insns[pc]
@@ -247,9 +255,9 @@ def analyze(cp, owner, method):
         for start, end, handler, catch in exceptions:
             if start <= pc < end:
                 propagate(handler, before_locals, [(7, catch or 'java/lang/Throwable')])
-        if op in (0x99, 0x9A, 0xA7):
+        if op in (0x99, 0x9A, 0xA7, 0xC8):
             propagate(pc + operand, locals_, stack)
-        if op not in (0xA7, 0xB0, 0xB1, 0xBF):
+        if op not in (0xA7, 0xC8, 0xB0, 0xB1, 0xBF):
             propagate(ins.end, locals_, stack)
 
     # Preserve offsets: dead blocks become nop ... athrow with a synthetic
@@ -287,7 +295,7 @@ def analyze(cp, owner, method):
 
 def encode_frames(cp, frames):
     """Use full_frame initially; compact encoding can be added without reanalysis."""
-    def u2(n): return struct.pack('>H', n)
+    def u2(n): return bytes([(n >> 8) & 0xFF, n & 0xFF])
     def verification(value):
         tag, data = value
         return bytes([tag]) + (u2(cp.class_(data)) if tag == 7 else u2(data) if tag == 8 else b'')

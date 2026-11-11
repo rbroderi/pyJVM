@@ -140,10 +140,9 @@ def test_class_suite_cannot_branch_to_enclosing_loop(statement):
         compile_source(f'for value in range(2):\n    class Invalid:\n        {statement}\n')
 
 
-def test_annotation_only_class_assignment_remains_explicitly_unsupported():
-    from pyjvm315.compiler import CompileError
-    with pytest.raises(CompileError, match='annotation-only'):
-        compile_source('class Annotated:\n    value: int\n')
+def test_annotation_only_assignments_are_recorded():
+    # lowered to __annotations__ stores (see pyjvm315/annot.py); deferred PEP 649 evaluation is a later step
+    compile_source('class Annotated:\n    value: int\n    other: "str" = "x"\nz: float\n')
 
 
 def test_execution_fixture_assert_hasattr_rejects_missing_attributes():

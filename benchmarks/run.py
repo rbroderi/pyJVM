@@ -144,11 +144,17 @@ def main(argv=None):
         classes = Path(temp)
         # A separate Python process guarantees imports use the requested compiler,
         # even if it predates this harness. Same workload/harness for base and head.
-        code = ("import sys; from pathlib import Path; "
-                "from pyjvm315.compiler import compile_file; "
-                "from pyjvm315.cli import build_runtime; "
-                "compile_file(sys.argv[1], Path(sys.argv[2]), 'Kernels'); "
-                "build_runtime(Path(sys.argv[2]))")
+        code = "\n".join([
+            "import sys",
+            "from pathlib import Path",
+            "try:",
+            "    from pyjvm315.driver import compile_file   # current layout",
+            "except ImportError:",
+            "    from pyjvm315.compiler import compile_file  # older checkouts (the base of a comparison)",
+            "from pyjvm315.cli import build_runtime",
+            "compile_file(sys.argv[1], Path(sys.argv[2]), 'Kernels')",
+            "build_runtime(Path(sys.argv[2]))",
+        ])
         env = {**os.environ, "PYTHONPATH": str(root)}
         run([sys.executable, "-c", code, str(HERE / "kernels.py"), str(classes)], cwd=root, env=env)
         run(["javac", "-cp", str(classes), "-d", str(classes), str(HERE / "Bench.java")])

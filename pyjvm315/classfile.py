@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-import struct
 
 from .stackmap import FrameError, analyze, encode_frames
 
@@ -9,21 +7,38 @@ JAVA_TARGETS = (21,)
 DEFAULT_TARGET = 21
 
 
+def be(value, size):
+    """Big-endian two's-complement bytes of ``value`` in ``size`` bytes (no struct module needed)."""
+    value &= (1 << (8 * size)) - 1
+    out = bytearray()
+    shift = 8 * (size - 1)
+    while shift >= 0:
+        out.append((value >> shift) & 0xFF)
+        shift -= 8
+    return bytes(out)
+
+
 def u1(v: int) -> bytes:
-    return struct.pack(">B", v & 0xFF)
+    return be(v, 1)
 
 
 def u2(v: int) -> bytes:
-    return struct.pack(">H", v & 0xFFFF)
+    return be(v, 2)
 
 
 def u4(v: int) -> bytes:
-    return struct.pack(">I", v & 0xFFFFFFFF)
+    return be(v, 4)
 
 
-@dataclass(frozen=True)
 class Label:
-    ident: int
+    def __init__(self, ident):
+        self.ident = ident
+
+    def __eq__(self, other):
+        return isinstance(other, Label) and (self.ident,) == (other.ident,)
+
+    def __hash__(self):
+        return hash((self.ident,))
 
 
 class ConstantPool:
@@ -65,7 +80,7 @@ class ConstantPool:
         return self._add(("string", value), u1(8) + u2(self.utf8(value)))
 
     def integer(self, value: int) -> int:
-        return self._add(("int", value), u1(3) + struct.pack(">i", value))
+        return self._add(("int", value), u1(3) + be(value, 4))
 
     def long(self, value: int) -> int:
         # JVM long constants consume two constant-pool slots. We avoid them in
@@ -131,22 +146,64 @@ class CodeBuilder:
     def add_exception_handler(self, start: Label, end: Label, handler: Label, catch_class: str | None) -> None:
         self._exception_specs.append((start.ident, end.ident, handler.ident, catch_class))
 
+    # ifeq/ifne are the only conditional branches the compiler emits; a branch whose target is out of 16-bit
+    # range becomes the inverted condition skipping a goto_w (and goto becomes goto_w).
+    _INVERT = {0x99: 0x9A, 0x9A: 0x99}
+
     def finish(self) -> bytes:
-        out = bytearray(self.code)
-        for op_pos, patch_pos, ident in self._fixups:
+        for _op, _patch, ident in self._fixups:
             if ident not in self._labels:
                 raise ValueError(f"Unresolved label {ident}")
-            target = self._labels[ident]
-            offset = target - op_pos
-            if not -32768 <= offset <= 32767:
-                raise ValueError("Branch exceeds 16-bit JVM offset")
-            out[patch_pos:patch_pos + 2] = struct.pack(">h", offset)
+        long_branches: set[int] = set()          # op positions of branches rewritten to the long form
+        growth = {0xA7: 2, 0x99: 5, 0x9A: 5}     # extra bytes of the long form of each opcode
+        while True:
+            ops = sorted(long_branches)
+            def moved(pos: int) -> int:           # new position of an old code position
+                return pos + sum(growth[self.code[o]] for o in ops if o < pos)
+            changed = False
+            for op_pos, _patch, ident in self._fixups:
+                if op_pos in long_branches:
+                    continue
+                if not -32768 <= moved(self._labels[ident]) - moved(op_pos) <= 32767:
+                    long_branches.add(op_pos); changed = True
+            if not changed:
+                break
+        if not long_branches:
+            out = bytearray(self.code)
+            for op_pos, patch_pos, ident in self._fixups:
+                out[patch_pos:patch_pos + 2] = be(self._labels[ident] - op_pos, 2)
+            result = bytes(out)
+            self._finish_exceptions(lambda p: p)
+            return result
+        ops = sorted(long_branches)
+        def moved(pos: int) -> int:
+            return pos + sum(growth[self.code[o]] for o in ops if o < pos)
+        fixups = {op_pos: ident for op_pos, _patch, ident in self._fixups}
+        out = bytearray()
+        pos = 0
+        while pos < len(self.code):
+            if pos in fixups:
+                opcode = self.code[pos]
+                target = moved(self._labels[fixups[pos]])
+                if pos in long_branches:
+                    if opcode != 0xA7:   # conditional: jump over the goto_w when the original condition is false
+                        out.append(self._INVERT[opcode]); out += be(8, 2)
+                    out += be(0xC8, 1) + be(target - len(out), 4)
+                else:
+                    out.append(opcode); out += be(target - len(out) + 1, 2)
+                pos += 3
+            else:
+                out.append(self.code[pos]); pos += 1
+        self._finish_exceptions(moved)
+        self._relaxed_labels = {ident: moved(p) for ident, p in self._labels.items()}
+        return bytes(out)
+
+    def _finish_exceptions(self, moved) -> None:
         self._resolved_exceptions = []
         for start, end, handler, catch_class in self._exception_specs:
             if start not in self._labels or end not in self._labels or handler not in self._labels:
                 raise ValueError("Unresolved exception-table label")
-            self._resolved_exceptions.append((self._labels[start], self._labels[end], self._labels[handler], catch_class))
-        return bytes(out)
+            self._resolved_exceptions.append((moved(self._labels[start]), moved(self._labels[end]), moved(self._labels[handler]), catch_class))
 
     @property
     def exception_table(self) -> list[tuple[int, int, int, str | None]]:
@@ -216,22 +273,22 @@ class CodeBuilder:
     def ifne(self, label: Label): self.branch(0x9A, label)
 
 
-@dataclass
 class Field:
-    name: str
-    desc: str = "Ljava/lang/Object;"
-    access: int = 0x0009  # public static
+    def __init__(self, name, desc='Ljava/lang/Object;', access=9):
+        self.name = name
+        self.desc = desc
+        self.access = access
 
 
-@dataclass
 class Method:
-    name: str
-    desc: str
-    code: bytes
-    max_stack: int = 128
-    max_locals: int = 64
-    access: int = 0x0009  # public static
-    exception_table: list[tuple[int, int, int, str | None]] | None = None
+    def __init__(self, name, desc, code, max_stack=128, max_locals=64, access=9, exception_table=None):
+        self.name = name
+        self.desc = desc
+        self.code = code
+        self.max_stack = max_stack
+        self.max_locals = max_locals
+        self.access = access
+        self.exception_table = exception_table
 
 
 class ClassFile:

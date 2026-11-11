@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import ast
-import copy
-from functools import wraps
-from dataclasses import dataclass
-from pathlib import Path
+from .astutil import deepcopy_ast
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
 from .versions import feature_version
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
+from .annot import lower_annotations
 
 
 def _preserve_codegen_state(compile_method):
     """Synthetic/nested methods must not consume the caller's control stacks."""
-    @wraps(compile_method)
     def wrapped(self, *args, **kwargs):
         names = ("loop_stack", "exception_stack", "cleanup_stack", "finally_stack",
                  "current_frame_name", "current_frame_firstlineno")
@@ -57,27 +54,27 @@ BUILTIN_FUNCTIONS = {
 }
 
 
-@dataclass
 class FunctionInfo:
-    name: str
-    java_name: str
-    posonly: list[str]
-    poskw: list[str]
-    kwonly: list[str]
-    vararg: str | None
-    kwarg: str | None
-    defaults: dict[str, ast.expr]
-    kw_defaults: dict[str, ast.expr]
-    function_field: str | None
-    top_level: bool
-    env_mode: bool
-    local_names: set[str]
-    free_names: set[str]
-    nonlocal_names: set[str]
-    is_generator: bool = False
-    is_async: bool = False
-    is_async_generator: bool = False
-    qualname: str = ""
+    def __init__(self, name, java_name, posonly, poskw, kwonly, vararg, kwarg, defaults, kw_defaults, function_field, top_level, env_mode, local_names, free_names, nonlocal_names, is_generator=False, is_async=False, is_async_generator=False, qualname=''):
+        self.name = name
+        self.java_name = java_name
+        self.posonly = posonly
+        self.poskw = poskw
+        self.kwonly = kwonly
+        self.vararg = vararg
+        self.kwarg = kwarg
+        self.defaults = defaults
+        self.kw_defaults = kw_defaults
+        self.function_field = function_field
+        self.top_level = top_level
+        self.env_mode = env_mode
+        self.local_names = local_names
+        self.free_names = free_names
+        self.nonlocal_names = nonlocal_names
+        self.is_generator = is_generator
+        self.is_async = is_async
+        self.is_async_generator = is_async_generator
+        self.qualname = qualname
 
     @property
     def positional(self) -> list[str]:
@@ -98,26 +95,26 @@ class FunctionInfo:
         return "(" + hidden + (OBJ * len(self.bound_args)) + ")" + OBJ
 
 
-@dataclass
 class ClassInfo:
-    name: str
-    bases: list[ast.expr]
-    class_field: str
-    metaclass: ast.expr | None = None
-    keywords: list[tuple[str, ast.expr]] | None = None
-    local: bool = False
-    qualname: str = ""
+    def __init__(self, name, bases, class_field, metaclass=None, keywords=None, local=False, qualname=''):
+        self.name = name
+        self.bases = bases
+        self.class_field = class_field
+        self.metaclass = metaclass
+        self.keywords = keywords
+        self.local = local
+        self.qualname = qualname
 
 
-@dataclass
 class FinallyContext:
-    finalbody: list[ast.stmt]
-    return_slot: int
-    return_entry: object
-    branch_entries: dict[object, object]
-    manager_slot: int | None = None
-    async_manager: bool = False
-    loop_depth: int = 0
+    def __init__(self, finalbody, return_slot, return_entry, branch_entries, manager_slot=None, async_manager=False, loop_depth=0):
+        self.finalbody = finalbody
+        self.return_slot = return_slot
+        self.return_entry = return_entry
+        self.branch_entries = branch_entries
+        self.manager_slot = manager_slot
+        self.async_manager = async_manager
+        self.loop_depth = loop_depth
 
 
 class Scope:
@@ -215,6 +212,7 @@ class Compiler:
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
+        tree = lower_annotations(tree)
         # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
         self.declared_global = {n for node in ast.walk(tree) if isinstance(node, ast.Global) for n in node.names}
         if not self.dynamic:
@@ -948,7 +946,7 @@ class Compiler:
         memo = {id(child): child for child in ast.walk(node)
                 if child is not node and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
                                                             ast.ClassDef, ast.Lambda))}
-        original = copy.deepcopy(node, memo)
+        original = deepcopy_ast(node, memo)
 
         compiler=self
         class Lower(ast.NodeTransformer):
@@ -990,7 +988,7 @@ class Compiler:
                     return self.generic_visit(n)
                 token=compiler._async_comp_counter
                 compiler._async_comp_counter += 1
-                compiler._async_comp_nodes[token]=copy.deepcopy(n)
+                compiler._async_comp_nodes[token]=deepcopy_ast(n)
                 helper=ast.Call(
                     func=ast.Name(id="__py_async_comp_internal",ctx=ast.Load()),
                     args=[ast.Constant(token)],
@@ -2246,6 +2244,12 @@ class Compiler:
                         self._store_name(top, b, scope)
                     else:
                         self._store_name(module_name, b, scope)
+            case ast.ImportFrom(module="__future__", level=0, names=names):
+                known = {"annotations", "generators", "nested_scopes", "division", "absolute_import", "with_statement",
+                         "print_function", "unicode_literals", "generator_stop", "barry_as_FLUFL"}
+                for alias in names:
+                    if alias.name not in known:
+                        raise CompileError(f"future feature {alias.name} is not defined")
             case ast.ImportFrom(module=module, names=names, level=level):
                 resolved = module
                 if level:
@@ -2864,13 +2868,6 @@ def compile_source(source: str, class_name: str = "Main", filename: str = "<stri
                     dynamic=dynamic, mode=mode).compile(source, filename)
 
 
-def _module_context(path: Path, root: Path) -> tuple[str, bool]:
-    rel=path.relative_to(root)
-    if rel.name == "__init__.py":
-        return '.'.join(rel.parent.parts), True
-    return '.'.join(rel.with_suffix('').parts), False
-
-
 def _resolve_import_name(current_module: str, current_is_package: bool, module: str | None, level: int) -> str | None:
     if level == 0:
         return module
@@ -2881,173 +2878,3 @@ def _resolve_import_name(current_module: str, current_is_package: bool, module: 
     base=parts[:len(parts)-up] if up else parts
     if module: base += module.split('.')
     return '.'.join(base)
-
-
-def _find_module(root: Path, mod: str) -> Path | None:
-    if not mod: return None
-    candidate=root.joinpath(*mod.split('.')).with_suffix('.py')
-    package=root.joinpath(*mod.split('.'),'__init__.py')
-    return candidate if candidate.exists() else package if package.exists() else None
-
-
-def _scan_local_imports(source_path: Path, root: Path, found: dict[str, Path], module_name: str, is_package: bool) -> None:
-    tree=ast.parse(source_path.read_text(encoding="utf-8"),filename=str(source_path),mode="exec")
-    for node in ast.walk(tree):
-        requested: list[str]=[]
-        if isinstance(node,ast.Import):
-            requested.extend(a.name for a in node.names)
-        elif isinstance(node,ast.ImportFrom):
-            resolved=_resolve_import_name(module_name,is_package,node.module,node.level)
-            if resolved: requested.append(resolved)
-            # `from pkg import child` may refer to a submodule.
-            if resolved:
-                for alias in node.names:
-                    if alias.name != '*': requested.append(resolved+'.'+alias.name)
-        for mod in requested:
-            if mod in found: continue
-            path=_find_module(root,mod)
-            if path is not None:
-                found[mod]=path
-                child_name, child_is_pkg=_module_context(path,root)
-                _scan_local_imports(path,root,found,child_name,child_is_pkg)
-
-
-def _static_module_export_info(path: Path, module_name: str, is_package: bool) -> tuple[list[str] | None | str, set[str], list[str]]:
-    tree=ast.parse(path.read_text(encoding="utf-8"),filename=str(path),mode="exec")
-    own: set[str]=set()
-    star_deps: list[str]=[]
-    explicit_all: list[str] | None | str = None
-
-    def bind_target(target: ast.expr) -> None:
-        if isinstance(target,ast.Name):
-            own.add(target.id)
-        elif isinstance(target,(ast.Tuple,ast.List)):
-            for elt in target.elts: bind_target(elt)
-
-    def literal_all(value: ast.expr) -> list[str] | None:
-        if not isinstance(value,(ast.List,ast.Tuple,ast.Set)):
-            return None
-        out=[]
-        for elt in value.elts:
-            if not isinstance(elt,ast.Constant) or not isinstance(elt.value,str):
-                return None
-            out.append(elt.value)
-        return out
-
-    def visit(stmt: ast.stmt) -> None:
-        nonlocal explicit_all
-        if isinstance(stmt,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)):
-            own.add(stmt.name); return
-        if isinstance(stmt,ast.Assign):
-            for target in stmt.targets: bind_target(target)
-            if any(isinstance(t,ast.Name) and t.id=="__all__" for t in stmt.targets):
-                parsed=literal_all(stmt.value); explicit_all=parsed if parsed is not None else "dynamic"
-            return
-        if isinstance(stmt,ast.AnnAssign):
-            bind_target(stmt.target)
-            if isinstance(stmt.target,ast.Name) and stmt.target.id=="__all__" and stmt.value is not None:
-                parsed=literal_all(stmt.value); explicit_all=parsed if parsed is not None else "dynamic"
-            return
-        if isinstance(stmt,ast.AugAssign):
-            bind_target(stmt.target)
-            if isinstance(stmt.target,ast.Name) and stmt.target.id=="__all__":
-                explicit_all="dynamic"
-            return
-        if isinstance(stmt,ast.Import):
-            for alias in stmt.names:
-                own.add(alias.asname or alias.name.split('.')[0])
-            return
-        if isinstance(stmt,ast.ImportFrom):
-            resolved=_resolve_import_name(module_name,is_package,stmt.module,stmt.level)
-            for alias in stmt.names:
-                if alias.name=="*":
-                    if resolved: star_deps.append(resolved)
-                else:
-                    own.add(alias.asname or alias.name)
-            return
-        if isinstance(stmt,(ast.If,ast.While,ast.For,ast.AsyncFor)):
-            if isinstance(stmt,(ast.For,ast.AsyncFor)): bind_target(stmt.target)
-            for child in stmt.body + stmt.orelse: visit(child)
-            return
-        if isinstance(stmt,ast.Try):
-            for child in stmt.body + stmt.orelse + stmt.finalbody: visit(child)
-            for handler in stmt.handlers:
-                if handler.name: own.add(handler.name)
-                for child in handler.body: visit(child)
-            return
-        if isinstance(stmt,(ast.With,ast.AsyncWith)):
-            for item in stmt.items:
-                if item.optional_vars is not None: bind_target(item.optional_vars)
-            for child in stmt.body: visit(child)
-
-    for stmt in tree.body: visit(stmt)
-    return explicit_all, own, star_deps
-
-
-def _build_import_exports(modules: dict[str, Path]) -> dict[str, list[str] | None]:
-    info: dict[str, tuple[list[str] | None | str, set[str], list[str]]] = {}
-    for name,path in modules.items():
-        info[name]=_static_module_export_info(path,name,path.name=="__init__.py")
-
-    cache: dict[str, list[str] | None]={}
-    visiting: set[str]=set()
-
-    def exports(name: str) -> list[str] | None:
-        if name in cache: return cache[name]
-        if name in visiting:
-            return []
-        details=info.get(name)
-        if details is None: return []
-        explicit,own,star_deps=details
-        if explicit=="dynamic":
-            cache[name]=None; return None
-        if isinstance(explicit,list):
-            cache[name]=list(explicit); return cache[name]
-        visiting.add(name)
-        names=set(own)
-        for dep in star_deps:
-            dep_exports=exports(dep)
-            if dep_exports is None:
-                cache[name]=None; visiting.remove(name); return None
-            names.update(n for n in dep_exports if not n.startswith("_"))
-        visiting.remove(name)
-        cache[name]=sorted(n for n in names if not n.startswith("_"))
-        return cache[name]
-
-    for name in modules: exports(name)
-    return cache
-
-
-def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None,
-                 *, target: int = DEFAULT_TARGET) -> Path:
-    source_path=Path(source_path); output_dir=Path(output_dir)
-    class_name=class_name or source_path.stem.title().replace("_","")
-    # Walk upward through package markers so imports are resolved from the package root.
-    root=source_path.parent
-    probe=source_path.parent
-    while (probe/'__init__.py').exists():
-        root=probe.parent; probe=probe.parent
-    main_module, main_is_package=_module_context(source_path,root)
-    modules: dict[str,Path]={}
-    _scan_local_imports(source_path,root,modules,main_module,main_is_package)
-    # Include package parents so `import pkg.sub` can expose pkg.
-    for name in list(modules):
-        parts=name.split('.')
-        for i in range(1,len(parts)):
-            parent='.'.join(parts[:i])
-            path=_find_module(root,parent)
-            if path is not None: modules.setdefault(parent,path)
-    import_map={name:"pyjvm315/imports/"+name.replace('.','/') for name in modules}
-    import_exports=_build_import_exports(modules)
-
-    def emit(path:Path,jvm_name:str,module_name:str)->Path:
-        is_pkg = path.name == "__init__.py"
-        package_name = module_name if is_pkg else module_name.rpartition('.')[0]
-        data=compile_source(path.read_text(encoding="utf-8"),jvm_name,str(path),
-                            import_map=import_map,import_exports=import_exports,
-                            module_name=module_name,package_name=package_name,target=target)
-        rel=Path(*jvm_name.replace('/','.').split('.')); out=output_dir/rel.with_suffix('.class')
-        out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data); return out
-
-    for name,path in modules.items(): emit(path,import_map[name],name)
-    return emit(source_path,class_name,"__main__")

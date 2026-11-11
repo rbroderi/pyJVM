@@ -41,6 +41,13 @@ def reference_version(python_exe: str) -> Version:
 
 
 _GATE = re.compile(r"^#\s*pyjvm:\s*requires-python\s*>=\s*(\d+\.\d+)\s*$", re.M)
+_GATE_BELOW = re.compile(r"^#\s*pyjvm:\s*requires-python\s*<\s*(\d+\.\d+)\s*$", re.M)
+
+
+def python_below(source_text: str) -> Version | None:
+    """A ``# pyjvm: requires-python < 3.14`` header limits a case to references older than that version."""
+    m = _GATE_BELOW.search("\n".join(source_text.splitlines()[:10]))
+    return parse_version(m.group(1)) if m else None
 
 
 def required_python(source_text: str) -> Version | None:

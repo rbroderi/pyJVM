@@ -6,7 +6,8 @@ import shutil
 import subprocess
 import sys
 
-from .compiler import CompileError, compile_file
+from .compiler import CompileError
+from .driver import compile_file
 from .classfile import DEFAULT_TARGET, JAVA_TARGETS
 from .stackmap import FrameError
 

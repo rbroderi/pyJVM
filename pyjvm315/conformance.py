@@ -12,10 +12,11 @@ import sys
 import tempfile
 import shutil
 
-from .compiler import CompileError, compile_file
+from .compiler import CompileError
+from .driver import compile_file
 from .cli import build_runtime
 from .classfile import DEFAULT_TARGET, JAVA_TARGETS
-from .versions import reference_version, required_python
+from .versions import python_below, reference_version, required_python
 
 
 @dataclass
@@ -72,6 +73,9 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
     needed = required_python(source.read_text(encoding="utf-8"))
     if needed is not None and reference_version(python_exe) < needed:
         return Result(source.name, "SKIP", "requires python >= %d.%d" % needed)
+    below = python_below(source.read_text(encoding="utf-8"))
+    if below is not None and reference_version(python_exe) >= below:
+        return Result(source.name, "SKIP", "requires python < %d.%d" % below)
     py = _run([python_exe, str(source)], cwd=source.parent)
 
     with tempfile.TemporaryDirectory(prefix="pyjvm315-") as td:

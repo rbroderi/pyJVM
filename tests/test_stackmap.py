@@ -7,7 +7,8 @@ import subprocess
 import pytest
 
 from pyjvm315.classfile import ClassFile, CodeBuilder, JAVA_TARGETS, Method
-from pyjvm315.compiler import compile_file, compile_source
+from pyjvm315.compiler import compile_source
+from pyjvm315.driver import compile_file
 from pyjvm315.stackmap import FrameError, TOP, analyze, descriptor_types
 
 
