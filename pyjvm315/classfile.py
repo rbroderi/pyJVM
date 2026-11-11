@@ -204,6 +204,8 @@ class CodeBuilder:
         for start, end, handler, catch_class in self._exception_specs:
             if start not in self._labels or end not in self._labels or handler not in self._labels:
                 raise ValueError("Unresolved exception-table label")
+            if self._labels[start] >= self._labels[end]:
+                continue  # empty protected range (for example around a return hole)
             self._resolved_exceptions.append((moved(self._labels[start]), moved(self._labels[end]), moved(self._labels[handler]), catch_class))
 
     @property

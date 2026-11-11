@@ -349,6 +349,10 @@ class Compiler:
         b.ldc_string(name); b.invokestatic(RUNTIME, "nsLoad", f"({OBJ*3}){OBJ}")
 
     def _load_name(self, name: str, b: CodeBuilder, scope: Scope, via_function: bool = False) -> None:
+        if name.startswith("$gen_hoist_"):
+            # Operand evaluated before a suspension and persisted in the generator environment.
+            self._gen_env_load(name, b, scope)
+            return
         if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
             key = self._class_attr_name(name)
             missing, done = b.label(), b.label()
@@ -927,6 +931,36 @@ class Compiler:
         )
 
     @staticmethod
+    def _comp_is_async(node: ast.AST) -> bool:
+        """True for async comprehensions and for comprehensions that await.
+
+        The outermost iterable runs in the enclosing scope, so an await there
+        belongs to the enclosing coroutine and does not make the comprehension
+        asynchronous.
+        """
+        if any(gen.is_async for gen in node.generators):
+            return True
+        class V(ast.NodeVisitor):
+            found = False
+            def visit_Await(self, n): self.found = True
+            def visit_Lambda(self, n): return
+            def visit_ListComp(self, n): self.nested(n)
+            def visit_SetComp(self, n): self.nested(n)
+            def visit_DictComp(self, n): self.nested(n)
+            def visit_GeneratorExp(self, n):
+                self.visit(n.generators[0].iter)
+            def nested(self, n):
+                if any(gen.is_async for gen in n.generators): self.found = True
+                self.generic_visit(n)
+        v = V()
+        parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        for index, gen in enumerate(node.generators):
+            if index > 0: parts.append(gen.iter)
+            parts.extend(gen.ifs)
+        for part in parts: v.visit(part)
+        return v.found
+
+    @staticmethod
     def _contains_await(node: ast.AST) -> bool:
         class V(ast.NodeVisitor):
             found = False
@@ -985,7 +1019,7 @@ class Compiler:
                 call=ast.Call(func=ast.Name(id="__py_await_iter_internal",ctx=ast.Load()),args=[awaited],keywords=[])
                 return ast.copy_location(ast.YieldFrom(value=call),n)
             def _async_comp(self, n):
-                if not any(gen.is_async for gen in n.generators):
+                if not compiler._comp_is_async(n):
                     return self.generic_visit(n)
                 token=compiler._async_comp_counter
                 compiler._async_comp_counter += 1
@@ -999,6 +1033,13 @@ class Compiler:
             def visit_ListComp(self, n): return self._async_comp(n)
             def visit_SetComp(self, n): return self._async_comp(n)
             def visit_DictComp(self, n): return self._async_comp(n)
+            def visit_GeneratorExp(self, n):
+                if not compiler._comp_is_async(n):
+                    return self.generic_visit(n)
+                # An asynchronous generator expression keeps its body for its own
+                # lowering; only the outermost iterable runs in this coroutine.
+                n.generators[0].iter=self.visit(n.generators[0].iter)
+                return n
             def visit_AsyncFor(self, n: ast.AsyncFor):
                 iterator_name=self.temp("iter")
                 exhausted_name=self.temp("exhausted")
@@ -1143,8 +1184,10 @@ class Compiler:
     def _generator_yields(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Yield | ast.YieldFrom]:
         out: list[ast.Yield | ast.YieldFrom] = []
         class V(ast.NodeVisitor):
-            def visit_Yield(self, n): out.append(n)
-            def visit_YieldFrom(self, n): out.append(n)
+            def visit_Yield(self, n):
+                out.append(n); self.generic_visit(n)
+            def visit_YieldFrom(self, n):
+                out.append(n); self.generic_visit(n)
             def visit_FunctionDef(self, n):
                 if n is node:
                     for st in n.body: self.visit(st)
@@ -1209,6 +1252,7 @@ class Compiler:
         gen_cleanup_order: list[tuple[str, object]] = []
         gen_active_exception_env: list[str] = []
         gen_finally_counter = [0]
+        gen_loop_floors: list[int] = []
 
         def emit_generator_cleanups():
             # Inline non-yielding generator-finally suites from inner to outer.
@@ -1232,6 +1276,9 @@ class Compiler:
                     if kind == "inline":
                         for cleanup_stmt in payload: gen_stmt(cleanup_stmt)
                         _route_return(ret_slot)
+                    elif kind == "with":
+                        emit_with_exit(payload)
+                        _route_return(ret_slot)
                     else:
                         ctx=payload
                         self._gen_env_store(ctx["value_env"],ret_slot,b,scope)
@@ -1243,19 +1290,33 @@ class Compiler:
             b.aload(gen_slot); b.aload(ret_slot)
             b.invokestatic(RUNTIME,"generatorFinish",f"({OBJ}{OBJ}){OBJ}"); b.areturn()
 
-        def _route_branch(target):
-            if gen_cleanup_order:
+        def emit_with_exit(payload):
+            # The exit call runs outside its own with block's exception range, so a
+            # failing __exit__ is not offered to the same manager a second time.
+            hole_start,hole_end=b.label(),b.label()
+            payload["holes"].append((hole_start,hole_end))
+            b.mark(hole_start)
+            self._gen_env_load(payload["manager"],b,scope); b.invokestatic(RUNTIME,"withExitNormal",f"({OBJ})V")
+            b.mark(hole_end)
+
+        def _route_branch(target, floor):
+            # Only cleanups entered after the loop began are unwound by break/continue.
+            if len(gen_cleanup_order) > floor:
                 kind,payload=gen_cleanup_order.pop()
                 try:
                     if kind == "inline":
                         for cleanup_stmt in payload: gen_stmt(cleanup_stmt)
-                        _route_branch(target)
+                        _route_branch(target,floor)
+                    elif kind == "with":
+                        emit_with_exit(payload)
+                        _route_branch(target,floor)
                     else:
                         ctx=payload
                         branch_kind=ctx["branches"].get(target)
                         if branch_kind is None:
                             branch_kind=f"branch_{len(ctx['branches'])}"
                             ctx["branches"][target]=branch_kind
+                            ctx["floors"][target]=floor
                         _store_env_literal(ctx["kind_env"],branch_kind)
                         b.goto(ctx["final_entry"])
                 finally:
@@ -1266,7 +1327,7 @@ class Compiler:
         def emit_yield(y: ast.Yield):
             value_slot=scope.temp()
             if y.value is None: b.aconst_null()
-            else: self._expr(y.value,b,scope)
+            else: gen_value(y.value)
             if async_generator_mode:
                 b.invokestatic(RUNTIME,"asyncGeneratorYield",f"({OBJ}){OBJ}")
             b.astore(value_slot)
@@ -1281,7 +1342,7 @@ class Compiler:
             # Persist the delegated iterator in the generator environment.  Each
             # resume forwards the value sent into this generator to the delegate.
             syn=f"$yieldfrom_{state_for[id(y)]}"
-            self._expr(y.value,b,scope); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
+            gen_value(y.value); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
             it_slot=scope.temp(); b.astore(it_slot); self._gen_env_store(syn,it_slot,b,scope)
             next_state=state_for[id(y)]
             done=b.label()
@@ -1353,6 +1414,10 @@ class Compiler:
                         self._gen_env_load(container,b,scope); self._gen_env_load(key_name,b,scope); b.aload(value_slot)
                         b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
                 self._gen_env_load(container,b,scope); return
+            if (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name)
+                    and expr.func.id == "__py_await_iter_internal" and len(expr.args) == 1):
+                gen_value(expr.args[0])
+                b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}"); return
             if isinstance(expr, ast.Call):
                 method_object_name = None
                 method_attr = None
@@ -1403,8 +1468,81 @@ class Compiler:
                     b.invokestatic(RUNTIME,"callFunction",f"({OBJ}{OBJ}{OBJ}){OBJ}")
                 return
             if isinstance(expr, ast.IfExp):
-                raise CompileError("suspension inside conditional expressions is not implemented yet")
-            raise CompileError(f"suspension inside {type(expr).__name__} is not implemented yet")
+                no,end=b.label(),b.label()
+                gen_truth(expr.test); b.ifeq(no)
+                gen_value(expr.body); b.goto(end); b.mark(no)
+                gen_value(expr.orelse); b.mark(end); return
+            if isinstance(expr, ast.BoolOp):
+                end=b.label(); is_and=isinstance(expr.op,ast.And)
+                for index,value in enumerate(expr.values):
+                    gen_value(value)
+                    if index+1 < len(expr.values):
+                        b.dup(); b.invokestatic(RUNTIME,"truth",f"({OBJ})Z")
+                        if is_and: b.ifeq(end)
+                        else: b.ifne(end)
+                        b.pop()
+                b.mark(end); return
+            node=hoist_apply(expr)
+            if node is None:
+                raise CompileError(f"suspension inside {type(expr).__name__} is not implemented yet")
+            self._expr(node,b,scope)
+
+        def hoist_apply(expr: ast.expr):
+            hoisted=hoist_operands(expr)
+            if hoisted is None: return None
+            node,slots=hoisted
+            last=max(index for index,(holder,key) in enumerate(slots) if self._contains_yield(slot_get(holder,key)))
+            for holder,key in slots[:last+1]:
+                gen_value(slot_get(holder,key))
+                name=persist_gen_value("gen_hoist")
+                slot_set(holder,key,ast.copy_location(ast.Name(id=name,ctx=ast.Load()),expr))
+            return node
+
+        def slot_get(holder, key):
+            return holder[key] if isinstance(holder,list) else getattr(holder,key)
+
+        def slot_set(holder, key, value):
+            if isinstance(holder,list): holder[key]=value
+            else: setattr(holder,key,value)
+
+        def gen_truth(test: ast.expr):
+            if self._contains_yield(test):
+                gen_value(test); b.invokestatic(RUNTIME,"truth",f"({OBJ})Z")
+            else:
+                self._truthy(test,b,scope)
+
+        def hoist_operands(expr: ast.expr):
+            # Copy the node and list its operand slots in evaluation order.  Operands up
+            # to the last suspending one are evaluated first and persisted, then the
+            # operation itself runs through the ordinary expression compiler.
+            node=copy.copy(expr); slots=[]
+            if isinstance(node,ast.UnaryOp): slots=[(node,"operand")]
+            elif isinstance(node,ast.Attribute): slots=[(node,"value")]
+            elif isinstance(node,ast.NamedExpr): slots=[(node,"value")]
+            elif isinstance(node,ast.Subscript):
+                slots=[(node,"value")]
+                if isinstance(node.slice,ast.Slice):
+                    node.slice=copy.copy(node.slice)
+                    slots.extend((node.slice,key) for key in ("lower","upper","step") if getattr(node.slice,key) is not None)
+                else:
+                    slots.append((node,"slice"))
+            elif isinstance(node,ast.Compare) and len(node.ops)==1:
+                node.comparators=list(node.comparators)
+                slots=[(node,"left"),(node.comparators,0)]
+            elif isinstance(node,ast.JoinedStr):
+                node.values=list(node.values)
+                for index,value in enumerate(node.values):
+                    if isinstance(value,ast.FormattedValue):
+                        value=copy.copy(value); node.values[index]=value
+                        slots.append((value,"value"))
+                        if value.format_spec is not None: slots.append((value,"format_spec"))
+            elif isinstance(node,(ast.ListComp,ast.SetComp,ast.DictComp,ast.GeneratorExp)):
+                node.generators=list(node.generators)
+                node.generators[0]=copy.copy(node.generators[0])
+                slots=[(node.generators[0],"iter")]
+            else:
+                return None
+            return node,slots
 
         def gen_try_except(body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt]):
             start, protected_end, dispatch, done = b.label(), b.label(), b.label(), b.label()
@@ -1450,6 +1588,18 @@ class Compiler:
             b.mark(done)
 
         def gen_stmt(stmt: ast.stmt):
+            if isinstance(stmt,ast.Assign) and any(self._contains_yield(t) for t in stmt.targets):
+                # The value is evaluated first, then each target's own operands.
+                gen_value(stmt.value); value_name=persist_gen_value("gen_hoist")
+                new_targets=[]
+                for target in stmt.targets:
+                    node=hoist_apply(target) if self._contains_yield(target) else target
+                    if node is None:
+                        raise CompileError(f"suspension inside assignment target {type(target).__name__} is not implemented yet")
+                    new_targets.append(node)
+                rewritten=ast.Assign(targets=new_targets,value=ast.Name(id=value_name,ctx=ast.Load()))
+                ast.copy_location(rewritten,stmt); ast.fix_missing_locations(rewritten)
+                self._stmt(rewritten,b,scope,in_function=True); return
             if isinstance(stmt,ast.Expr) and isinstance(stmt.value,ast.Yield):
                 emit_yield(stmt.value); b.pop(); return
             if isinstance(stmt,ast.Expr) and isinstance(stmt.value,ast.YieldFrom):
@@ -1505,40 +1655,37 @@ class Compiler:
             if isinstance(stmt,ast.Break):
                 if not self.loop_stack: raise CompileError("break outside loop")
                 target=self.loop_stack[-1][1]
-                _route_branch(target); return
+                _route_branch(target,gen_loop_floors[-1]); return
             if isinstance(stmt,ast.Continue):
                 if not self.loop_stack: raise CompileError("continue outside loop")
                 target=self.loop_stack[-1][0]
-                _route_branch(target); return
+                _route_branch(target,gen_loop_floors[-1]); return
             if isinstance(stmt,ast.For):
                 syn=f"$gen_iter_{synthetic_counter[0]}"; synthetic_counter[0]+=1
-                self._expr(stmt.iter,b,scope); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
+                gen_value(stmt.iter); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
                 it_slot=scope.temp(); b.astore(it_slot); self._gen_env_store(syn,it_slot,b,scope)
                 start,normal_end,break_end=b.label(),b.label(),b.label(); b.mark(start)
                 self._gen_env_load(syn,b,scope); b.invokestatic(RUNTIME,"iterHasNext",f"({OBJ})Z"); b.ifeq(normal_end)
                 self._gen_env_load(syn,b,scope); b.invokestatic(RUNTIME,"iterNext",f"({OBJ}){OBJ}"); self._store_target(stmt.target,b,scope)
-                self.loop_stack.append((start,break_end))
+                self.loop_stack.append((start,break_end)); gen_loop_floors.append(len(gen_cleanup_order))
                 for x in stmt.body: gen_stmt(x)
-                self.loop_stack.pop(); b.goto(start); b.mark(normal_end)
+                gen_loop_floors.pop(); self.loop_stack.pop(); b.goto(start); b.mark(normal_end)
                 for x in stmt.orelse: gen_stmt(x)
                 b.mark(break_end); return
             if isinstance(stmt,ast.If):
-                els,end=b.label(),b.label(); self._truthy(stmt.test,b,scope); b.ifeq(els)
+                els,end=b.label(),b.label(); gen_truth(stmt.test); b.ifeq(els)
                 for x in stmt.body: gen_stmt(x)
                 b.goto(end); b.mark(els)
                 for x in stmt.orelse: gen_stmt(x)
                 b.mark(end); return
             if isinstance(stmt,ast.While):
-                start,normal_end,break_end=b.label(),b.label(),b.label(); b.mark(start); self._truthy(stmt.test,b,scope); b.ifeq(normal_end)
-                self.loop_stack.append((start,break_end))
+                start,normal_end,break_end=b.label(),b.label(),b.label(); b.mark(start); gen_truth(stmt.test); b.ifeq(normal_end)
+                self.loop_stack.append((start,break_end)); gen_loop_floors.append(len(gen_cleanup_order))
                 for x in stmt.body: gen_stmt(x)
-                self.loop_stack.pop(); b.goto(start); b.mark(normal_end)
+                gen_loop_floors.pop(); self.loop_stack.pop(); b.goto(start); b.mark(normal_end)
                 for x in stmt.orelse: gen_stmt(x)
                 b.mark(break_end); return
             if isinstance(stmt, ast.With) and self._contains_yield(stmt):
-                if self._has_abrupt_control(stmt.body):
-                    raise CompileError("return/break/continue through a yielding generator with is not implemented yet")
-
                 def gen_with(items: list[ast.withitem], body: list[ast.stmt]):
                     if not items:
                         for x in body: gen_stmt(x)
@@ -1554,8 +1701,11 @@ class Compiler:
 
                     start, protected_end, handler, done = b.label(), b.label(), b.label(), b.label()
                     exc_slot = scope.temp()
+                    holes: list = []
                     b.mark(start)
+                    gen_cleanup_order.append(("with", {"manager": mgr_name, "holes": holes}))
                     gen_with(rest, body)
+                    gen_cleanup_order.pop()
                     b.mark(protected_end)
                     self._gen_env_load(mgr_name, b, scope); b.invokestatic(RUNTIME, "withExitNormal", f"({OBJ})V")
                     b.goto(done)
@@ -1563,7 +1713,11 @@ class Compiler:
                     self._gen_env_load(mgr_name, b, scope); b.aload(exc_slot)
                     b.invokestatic(RUNTIME, "withExitException", f"({OBJ}{OBJ})Z")
                     b.ifne(done); b.aload(exc_slot); b.athrow()
-                    b.add_exception_handler(start, protected_end, handler, "java/lang/Throwable")
+                    cursor = start
+                    for hole_start, hole_end in holes:
+                        b.add_exception_handler(cursor, hole_start, handler, "java/lang/Throwable")
+                        cursor = hole_end
+                    b.add_exception_handler(cursor, protected_end, handler, "java/lang/Throwable")
                     b.mark(done)
 
                 gen_with(stmt.items, stmt.body)
@@ -1585,6 +1739,7 @@ class Compiler:
                             "value_env":value_env,
                             "final_entry":final_entry,
                             "branches":{},
+                            "floors":{},
                         }
                         outer_exc=scope.temp()
 
@@ -1641,7 +1796,7 @@ class Compiler:
                         b.invokestatic(RUNTIME,"rethrowThrowable",f"({OBJ})V")
 
                         for target,label in branch_labels.items():
-                            b.mark(label); _route_branch(target)
+                            b.mark(label); _route_branch(target,ctx["floors"][target])
 
                         b.mark(dispatch_normal); b.goto(outer_done)
                         b.mark(outer_done)
@@ -1805,12 +1960,23 @@ class Compiler:
         if "__class__" in refs and "__class__" not in local_names and scope.namespace_slot is not None:
             free_names.add("__class__")
         java_name=f"__py_lambda_{self._method_counter}"; self._method_counter += 1
+        is_generator=self._contains_yield(node.body)
         info=FunctionInfo("<lambda>", java_name, posonly,poskw,kwonly,
             args_obj.vararg.arg if args_obj.vararg else None,
             args_obj.kwarg.arg if args_obj.kwarg else None,
-            defaults,kw_defaults,None,False,bool(scope.env_mode),local_names,free_names,set(),False,False)
+            defaults,kw_defaults,None,False,bool(scope.env_mode) or is_generator,local_names,free_names,set(),is_generator,False)
         self.function_infos[id(node)]=info
-        self._compile_lambda_method(node, info)
+        if is_generator:
+            # A lambda whose body yields is a generator function returning its body value.
+            synthetic=ast.FunctionDef(name="<lambda>",args=node.args,body=[ast.Return(value=node.body)],
+                                      decorator_list=[],returns=None,type_params=[])
+            ast.copy_location(synthetic,node); ast.fix_missing_locations(synthetic)
+            saved_frame=(self.current_frame_name,self.current_frame_firstlineno)
+            self.current_frame_name,self.current_frame_firstlineno="<lambda>",node.lineno
+            self._compile_generator_function(synthetic, info)
+            self.current_frame_name,self.current_frame_firstlineno=saved_frame
+        else:
+            self._compile_lambda_method(node, info)
         return info
 
     @_preserve_codegen_state
@@ -1878,7 +2044,7 @@ class Compiler:
         b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
 
     def _emit_generator_expression(self, node: ast.GeneratorExp, b: CodeBuilder, scope: Scope) -> None:
-        is_async = any(gen.is_async for gen in node.generators)
+        is_async = self._comp_is_async(node)
         # Python evaluates the outermost iterable expression immediately when the
         # generator expression is created. The actual iteration remains lazy.
         outer_name=f"$genexpr_outer_{self._method_counter}"

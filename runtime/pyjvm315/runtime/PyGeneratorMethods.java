@@ -26,8 +26,8 @@ final class PyGeneratorMethods {
     static Object call(Object obj, String name, Object[] args) {
         PyGenerator gen=(PyGenerator)obj;
         return switch(name) {
-            case "send" -> { requireArgs(name,args,1); yield gen.send(args[0]); }
-            case "throw" -> { requireArgs(name,args,1); yield gen.throw_(args[0]); }
+            case "send" -> { requireArgs(name,args,1); try { yield gen.send(args[0]); } catch(PyGeneratorEnd end) { throw new PyException("StopIteration",end.value); } }
+            case "throw" -> { requireArgs(name,args,1); try { yield gen.throw_(args[0]); } catch(PyGeneratorEnd end) { throw new PyException("StopIteration",end.value); } }
             case "close" -> { requireArgs(name,args,0); yield gen.close(); }
             case "__iter__" -> { requireArgs(name,args,0); yield gen; }
             case "__next__" -> { requireArgs(name,args,0); yield next_(gen); }
