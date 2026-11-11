@@ -19,31 +19,16 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
-
-final class PyMap implements Iterator<Object>, Iterable<Object> {
+final class PyMap extends PyLazyIterator {
     final Object function; final ArrayList<Object> iterators=new ArrayList<>();
-    Object buffered; boolean hasBuffered=false;
     PyMap(Object function,List<Object> sources) {
         this.function=function;
         for(Object source:sources) iterators.add(iter(source));
     }
-    public Iterator<Object> iterator(){return this;}
-    public boolean hasNext() {
-        if(hasBuffered) return true;
-        try { buffered=compute(); hasBuffered=true; return true; }
-        catch(NoSuchElementException end){return false;}
-        catch(PyException end){if(end.typeName.equals("StopIteration"))return false;throw end;}
-    }
+    String pyTypeName(){return "map";}
     Object compute() {
         ArrayList<Object> args=new ArrayList<>();
-        for(Object iterator:iterators) {
-            try { args.add(next_(iterator)); }
-            catch(PyException end) {if(end.typeName.equals("StopIteration"))throw new NoSuchElementException();throw end;}
-        }
+        for(Object iterator:iterators) args.add(pull(iterator));
         return callFunction(function,args,new LinkedHashMap<Object,Object>());
-    }
-    public Object next() {
-        if(hasBuffered){Object out=buffered;buffered=null;hasBuffered=false;return out;}
-        return compute();
     }
 }

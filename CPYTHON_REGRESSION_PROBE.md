@@ -7,8 +7,8 @@ not full CPython execution-suite compatibility.
 
 ## Status after pattern-matching lowering (P1-01..P1-03)
 
-Measured on a CPython 3.15.0b4 host against the pinned corpus: **2,510 of 3,000** bodies
-compile (was 2,247), 490 unsupported, 0 compiler errors, no regressions. The legacy
+Measured on a CPython 3.15.0b4 host against the pinned corpus: **2,531 of 3,000** bodies
+compile (was 2,247), 469 unsupported, 0 compiler errors, no regressions. The legacy
 358-body probe stays at 325/358. The strict execution lane now runs the previous 85
 executions plus **230 unchanged `test_patma` bodies** (315 total). The remaining
 `test_patma` bodies need `compile`/`exec`, `locals`, `collections`/`enum` imports, a

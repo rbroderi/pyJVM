@@ -91,7 +91,7 @@ public final class PyRuntime {
         if (value instanceof BoundCallable) return "method";
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
         if (value instanceof BuiltinBoundMethod) return "builtin_function_or_method";
-        if (value instanceof PyMap) return "map";
+        if (value instanceof PyLazyIterator it) return it.pyTypeName();
         if(value instanceof PySlice)return "slice";
         if(value==NOT_IMPLEMENTED)return "NotImplementedType";
         if(value==ELLIPSIS)return "ellipsis";
@@ -182,7 +182,27 @@ public final class PyRuntime {
         if(name.equals("min") || name.equals("max")) return extreme(args,kwargs,name.equals("min"));
         if(name.equals("sorted")) return sortedCall(args,kwargs);
         if(name.equals("round"))return roundCall(args,kwargs);
+        if(name.equals("zip")) {
+            for(Object key:kwargs.keySet()) if(!key.equals("strict")) throw new PyException("TypeError","zip() got an unexpected keyword argument '"+key+"'");
+            return new PyZip(args,truth(kwargs.getOrDefault("strict",false)));
+        }
+        if(name.equals("enumerate")) {
+            for(Object key:kwargs.keySet()) if(!key.equals("start") && !key.equals("iterable")) throw new PyException("TypeError","enumerate() got an unexpected keyword argument '"+key+"'");
+            Object iterable=args.size()>0?args.get(0):kwargs.get("iterable");
+            Object start=args.size()>1?args.get(1):kwargs.getOrDefault("start",0L);
+            if(args.size()>2 || iterable==null && !kwargs.containsKey("iterable")) throw new PyException("TypeError","enumerate() takes at most 2 arguments");
+            return new PyEnumerate(iterable,start);
+        }
         if(!kwargs.isEmpty()) throw new PyException("TypeError",name+"() does not accept keyword arguments");
+        if(name.equals("filter")) {
+            if(args.size()!=2) throw new PyException("TypeError","filter expected 2 arguments, got "+args.size());
+            return new PyFilter(args.get(0),args.get(1));
+        }
+        if(name.equals("aiter") && args.size()==1) return callMethod(args.get(0),"__aiter__",new Object[0]);
+        if(name.equals("anext")) {
+            if(args.size()!=1) throw new PyException("NotImplementedError","anext() with a default value");
+            return callMethod(args.get(0),"__anext__",new Object[0]);
+        }
         if(name.equals("map")) {
             if(args.size()<2) throw new PyException("TypeError","map() must have at least two arguments");
             return new PyMap(args.get(0),args.subList(1,args.size()));
@@ -1394,8 +1414,25 @@ public final class PyRuntime {
     }
     @SuppressWarnings("unchecked")
     public static void dictUpdate(Object dict, Object other) {
-        if (!(other instanceof Map<?,?> src)) throw new PyException("TypeError", "dictionary update sequence element has invalid form");
-        ((Map<Object,Object>)dict).putAll((Map<Object,Object>)src);
+        Map<Object,Object> target = (Map<Object,Object>) dict;
+        if (other instanceof Map<?,?> src) { target.putAll((Map<Object,Object>) src); return; }
+        if (other instanceof PyInstance && hasattr(other, "keys") == Boolean.TRUE) {
+            for (Object key : iterable(callMethod(other, "keys", new Object[0]))) target.put(key, getitem(other, key));
+            return;
+        }
+        long index = 0;
+        for (Object item : iterable(other)) {
+            ArrayList<Object> pair = new ArrayList<>();
+            try { for (Object part : iterable(item)) pair.add(part); }
+            catch (PyException | IllegalArgumentException e) {
+                if (e instanceof PyException pe && !pe.typeName.equals("TypeError")) throw e;
+                throw new PyException("TypeError", "cannot convert dictionary update sequence element #" + index + " to a sequence");
+            }
+            if (pair.size() != 2)
+                throw new PyException("ValueError", "dictionary update sequence element #" + index + " has length " + pair.size() + "; 2 is required");
+            target.put(pair.get(0), pair.get(1));
+            index++;
+        }
     }
     public static Object dictFrom(Object value) { Object out=dict0(); dictUpdate(out,value); return out; }
 
@@ -1617,16 +1654,6 @@ public final class PyRuntime {
         return out;
     }
 
-    public static Object enumerate1(Object value) {
-        ArrayList<Object> out = new ArrayList<>(); long i=0;
-        for (Object x : iterable(value)) { PyTuple t=new PyTuple(); t.items.add(i++); t.items.add(x); out.add(t); }
-        return out;
-    }
-    public static Object zip2(Object a, Object b) {
-        ArrayList<Object> out = new ArrayList<>(); Iterator<?> ia=iterable(a).iterator(), ib=iterable(b).iterator();
-        while (ia.hasNext() && ib.hasNext()) { PyTuple t=new PyTuple(); t.items.add(ia.next()); t.items.add(ib.next()); out.add(t); }
-        return out;
-    }
     public static Object sorted(Object value) { return sortedCall(Collections.singletonList(value),Collections.emptyMap()); }
     static Object sortedCall(List<Object> args,Map<Object,Object> kwargs) {
         if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 positional argument");
@@ -1747,7 +1774,7 @@ public final class PyRuntime {
             s.codePoints().forEach(cp -> chars.add(new String(Character.toChars(cp))));
             return chars;
         }
-        throw typeError("object is not iterable", value);
+        throw new PyException("TypeError", "'" + typeName(value) + "' object is not iterable");
     }
 
     static Iterator<Object> sequenceIterator(PyInstance instance){
@@ -2174,7 +2201,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","range","type","map","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -2425,7 +2452,7 @@ public final class PyRuntime {
             }
             if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
-            if(type.name.equals("map")) return callBuiltin("map",args,kwargs);
+            if(Set.of("map","zip","enumerate","filter").contains(type.name)) return callBuiltin(type.name,args,kwargs);
             if(type.name.equals("slice")) {
                 if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3) throw new PyException("TypeError","slice() requires 1 to 3 positional arguments");
                 return new PySlice(args.size()==1?null:args.get(0),args.size()==1?args.get(0):args.get(1),args.size()<3?null:args.get(2));
@@ -3604,6 +3631,9 @@ public final class PyRuntime {
                 case "frozenset" -> obj instanceof PyFrozenSet;
                 case "range" -> obj instanceof PyRange;
                 case "map" -> obj instanceof PyMap;
+                case "zip" -> obj instanceof PyZip;
+                case "enumerate" -> obj instanceof PyEnumerate;
+                case "filter" -> obj instanceof PyFilter;
                 case "slice" -> obj instanceof PySlice;
                 case "type" -> obj instanceof PyClass || obj instanceof PyBuiltinType;
                 case "BaseException", "Exception" -> obj instanceof PyExceptionValue || obj instanceof PyException;

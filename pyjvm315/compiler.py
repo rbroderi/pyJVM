@@ -51,6 +51,7 @@ BUILTIN_FUNCTIONS = {
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
+    "aiter", "anext",
 }
 
 
@@ -337,7 +338,7 @@ class Compiler:
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
         if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
-                    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "slice", "super"} | EXCEPTION_TYPES:
+                    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         raise CompileError(f"Name {name!r} referenced before assignment")
 
@@ -2575,10 +2576,6 @@ class Compiler:
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id="next"), args=[arg], keywords=[]):
                 self._expr(arg, b, scope); b.invokestatic(RUNTIME, "next_", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="enumerate"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "enumerate1", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="zip"), args=[a, c], keywords=[]):
-                self._expr(a, b, scope); self._expr(c, b, scope); b.invokestatic(RUNTIME, "zip2", f"({OBJ}{OBJ}){OBJ}")
             case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in EXCEPTION_TYPES:
                 if len(args) > 1: raise CompileError("exception constructors currently accept zero or one positional argument")
                 b.ldc_string(name)
