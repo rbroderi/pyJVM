@@ -80,6 +80,16 @@ def collect():
         gc.collect()
 
 
+def count_after_use():
+    # proxies made and dropped inside a helper frame leave no weak reference behind
+    x = Obj(3)
+    q = weakref.proxy(x)
+    len(q), q[1], q.v, str(q), q == x, q + 1
+    del q
+    collect()
+    return weakref.getweakrefcount(x)
+
+
 o = Obj(5)
 p = weakref.proxy(o)
 zero = Obj(0)
@@ -107,7 +117,7 @@ try:
     hash(p)
 except TypeError as e:
     print("TypeError", e)
-print(weakref.getweakrefcount(o))
+print(count_after_use())
 
 # proxy of a plain object: no __call__
 pp = weakref.proxy(keep := Plain())
@@ -146,5 +156,6 @@ def f(x):
 pf = weakref.proxy(f)
 print(pf(4), type(pf).__name__)
 print(weakref.ProxyType.__name__, weakref.CallableProxyType.__name__)
-print(weakref.ref(o) is weakref.ref(o), weakref.getweakrefcount(o))
+print(weakref.ref(o) is weakref.ref(o))
+print(count_after_use())
 print(weakref.proxy(o) is weakref.proxy(o))

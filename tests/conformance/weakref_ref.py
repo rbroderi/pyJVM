@@ -70,7 +70,7 @@ for obj in ([], {}, 1, "s", (1, 2), None, 2.5, b"x", object()):
         print(e)
 for obj in (c, C, collect, weakref, set(), frozenset(), len, int, (x for x in ()), E()):
     try:
-        print(type(weakref.ref(obj)()).__name__, "ok")
+        print(weakref.ref(obj)() is obj, "ok")
     except TypeError as e:
         print(e)
 try:

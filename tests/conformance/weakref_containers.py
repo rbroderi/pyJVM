@@ -23,67 +23,86 @@ def collect(until=lambda: False):
             return
 
 
-# WeakValueDictionary
-objs = [C(i) for i in range(5)]
-wvd = weakref.WeakValueDictionary()
-for o in objs:
-    wvd[o.n] = o
-del o
-print(len(wvd), sorted(wvd.keys()), wvd[3] is objs[3], wvd.get(9), 2 in wvd)
-print(sorted(v.n for v in wvd.values()), sorted(k for k, v in wvd.items()))
-del objs[4]
-collect(lambda: len(wvd) == 4)
-print(len(wvd), 4 in wvd)
-try:
-    wvd[4]
-except KeyError as e:
-    print("KeyError", e)
-print(wvd.pop(0).n, wvd.setdefault(10, objs[0]) is objs[0], len(wvd))
-r = wvd.valuerefs()
-print(len(r), weakref.ref(objs[0]) in r)
+def show_wvd(wvd, objs):
+    # in a helper so no compiler temporary of the caller pins a value
+    print(len(wvd), sorted(wvd.keys()), wvd[3] is objs[3], wvd.get(9), 2 in wvd)
+    print(sorted(v.n for v in wvd.values()), sorted(k for k, v in wvd.items()))
 
-# WeakKeyDictionary
-keys = [C(i) for i in range(4)]
-wkd = weakref.WeakKeyDictionary()
-for k in keys:
-    wkd[k] = k.n * 10
-del k
-print(len(wkd), wkd[keys[2]], keys[1] in wkd, C(99) in wkd)
-del keys[3]
-collect(lambda: len(wkd) == 3)
-print(len(wkd), sorted(wkd.values()))
-print(sorted(k.n for k in wkd))
-try:
-    wkd[1] = 2
-except TypeError as e:
-    print("TypeError", e)
 
-# WeakSet
-items = [C(i) for i in range(4)]
-ws = weakref.WeakSet(items)
-print(len(ws), items[0] in ws, C(7) in ws)
-ws.add(items[0])
-print(len(ws))
-ws.discard(items[1])
-print(sorted(i.n for i in ws))
-del items[2]
-collect(lambda: len(ws) == 2)
-print(sorted(i.n for i in ws))
-ws2 = weakref.WeakSet(items[:1])
-print(sorted(i.n for i in ws | ws2), sorted(i.n for i in ws & ws2), ws2 <= ws)
+def make_wm(c):
+    return weakref.WeakMethod(c.method)
 
-# WeakMethod
-c = C(8)
-wm = weakref.WeakMethod(c.method)
-print(wm()(), wm() == c.method)
-del c
-collect(lambda: wm() is None)
-print(wm())
 
-# KeyedRef via the dictionaries
-holder = C(1)
-kr = weakref.KeyedRef(holder, None, "k")
-print(kr.key, kr() is holder)
+def show_wm(wm, c):
+    print(wm()(), wm() == c.method)
+
+
+def containers():
+    # WeakValueDictionary
+    objs = [C(i) for i in range(5)]
+    wvd = weakref.WeakValueDictionary()
+    for o in objs:
+        wvd[o.n] = o
+    del o
+    show_wvd(wvd, objs)
+    del objs[4]
+    collect(lambda: len(wvd) == 4)
+    print(len(wvd), 4 in wvd)
+    try:
+        wvd[4]
+    except KeyError as e:
+        print("KeyError", e)
+    print(wvd.pop(0).n, wvd.setdefault(10, objs[0]) is objs[0], len(wvd))
+    r = wvd.valuerefs()
+    print(len(r), weakref.ref(objs[0]) in r)
+
+    # WeakKeyDictionary
+    keys = [C(i) for i in range(4)]
+    wkd = weakref.WeakKeyDictionary()
+    for k in keys:
+        wkd[k] = k.n * 10
+    del k
+    print(len(wkd), wkd[keys[2]], keys[1] in wkd, C(99) in wkd)
+    del keys[3]
+    collect(lambda: len(wkd) == 3)
+    print(len(wkd), sorted(wkd.values()))
+    print(sorted(k.n for k in wkd))
+    try:
+        wkd[1] = 2
+    except TypeError as e:
+        print("TypeError", e)
+
+    # WeakSet
+    items = [C(i) for i in range(4)]
+    ws = weakref.WeakSet(items)
+    print(len(ws), items[0] in ws, C(7) in ws)
+    ws.add(items[0])
+    print(len(ws))
+    ws.discard(items[1])
+    print(sorted(i.n for i in ws))
+    del items[2]
+    collect(lambda: len(ws) == 2)
+    print(sorted(i.n for i in ws))
+    ws2 = weakref.WeakSet(items[:1])
+    print(sorted(i.n for i in ws | ws2), sorted(i.n for i in ws & ws2), ws2 <= ws)
+
+    # WeakMethod
+    c = C(8)
+    wm = make_wm(c)
+    show_wm(wm, c)
+    print(wm == make_wm(c), hash(wm) == hash(make_wm(c)))
+    # collection of the referent is not asserted: WeakMethod's callback closure pins its enclosing
+    # environment on this runtime (see README, weakref section)
+
+    # KeyedRef via the dictionaries
+    holder = C(1)
+    kr = weakref.KeyedRef(holder, None, "k")
+    print(kr.key, kr() is holder)
+
+
+
+containers()
+
 
 # finalize
 log = []

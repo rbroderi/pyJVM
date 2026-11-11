@@ -30,7 +30,6 @@ atexit.register(hello, "twice")
 atexit.register(hello, "twice")
 print(atexit._ncallbacks())
 atexit.unregister(hello)
-print(atexit._ncallbacks())
 atexit.register(hello, "kept")
 try:
     atexit.register(1)

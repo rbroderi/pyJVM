@@ -119,7 +119,7 @@ final class NativeSubclass {
     static Object allocate(Object cls, String kind, Object[] args, Map<Object, Object> kwargs) {
         if (!(cls instanceof PyClass pc)) return mutable(kind) ? emptyPayload(kind) : construct(kind, args, kwargs);
         if (!kind.equals(pc.nativeKind)) throw new PyException("TypeError", kind + ".__new__(" + pc.name + "): " + pc.name + " is not a subtype of " + kind);
-        PyInstance inst = new PyInstance(pc);
+        PyInstance inst = PyInstance.create(pc);
         inst.payload = mutable(kind) ? emptyPayload(kind) : construct(kind, args, kwargs);
         return inst;
     }
