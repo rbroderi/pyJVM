@@ -3047,7 +3047,7 @@ class Compiler:
 
 
 # Compile-time errors CPython also reports as SyntaxError (everything else CompileError raises is an unsupported feature).
-GENUINE_SYNTAX_ERRORS = ("break outside loop", "continue outside loop", "return outside function", "no binding for nonlocal")
+GENUINE_SYNTAX_ERRORS = ("break outside loop", "continue outside loop", "return outside function")
 
 
 def compile_source(source: str, class_name: str = "Main", filename: str = "<string>",
