@@ -1781,30 +1781,9 @@ public final class PyRuntime {
 
     public static Object sorted(Object value) { return sortedCall(Collections.singletonList(value),Collections.emptyMap()); }
     static Object sortedCall(List<Object> args,Map<Object,Object> kwargs) {
-        if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 positional argument");
+        if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 argument, got "+args.size());
         ArrayList<Object> values=new ArrayList<>();for(Object value:iterable(args.get(0)))values.add(value);
-        for(Object keyword:kwargs.keySet()) if(!keyword.equals("key") && !keyword.equals("reverse"))
-            throw new PyException("TypeError","invalid keyword argument for sorted()");
-        boolean reverse=truth(kwargs.get("reverse"));
-        Object key=kwargs.get("key");
-        ArrayList<SortItem> items=new ArrayList<>();
-        for(Object value:values)items.add(new SortItem(value,key==null?value:unaryCall(key,value)));
-        // Stable merge sort asks only <, like Python, and does not impose Java's
-        // comparator contract on user-defined partial/inconsistent orderings.
-        ArrayList<SortItem> scratch=new ArrayList<>(items);
-        int size=items.size();
-        for(long width=1;width<size;width*=2) {
-            for(long start=0;start<size;start+=2*width) {
-                int left=(int)start,middle=(int)Math.min(start+width,size),right=middle,end=(int)Math.min(start+2*width,size);
-                for(int output=(int)start;output<end;output++) {
-                    boolean takeRight=left>=middle || right<end && truth(reverse?
-                        lt(items.get(left).key,items.get(right).key):lt(items.get(right).key,items.get(left).key));
-                    scratch.set(output,takeRight?items.get(right++):items.get(left++));
-                }
-            }
-            ArrayList<SortItem> old=items;items=scratch;scratch=old;
-        }
-        values.clear();for(SortItem item:items)values.add(item.value);
+        ListMethods.sortInPlace(values,kwargs);
         return values;
     }
     public static Object reversed(Object value) {
