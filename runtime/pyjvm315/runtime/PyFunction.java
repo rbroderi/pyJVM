@@ -22,7 +22,7 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyFunction {
-    final LinkedHashMap<Object,Object> attrs=new LinkedHashMap<>();
+    final LinkedHashMap<Object,Object> attrs=new SyncMap<>();
     final LinkedHashMap<Object,Object> metadata=new LinkedHashMap<>();
     final Object owner; final String method;
     final List<String> posonly, poskw, kwonly;
