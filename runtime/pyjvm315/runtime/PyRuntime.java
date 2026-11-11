@@ -2709,6 +2709,13 @@ public final class PyRuntime {
     public static void pushLogicalFrame(Object nameObj,Object filenameObj,Object firstlineObj){
         LOGICAL_FRAMES.get().push(new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()));
     }
+    public static void pushModuleFrame(Object nameObj,Object filenameObj,Object firstlineObj,Object owner){
+        ActiveFrame frame=new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()); frame.owner=owner;
+        LOGICAL_FRAMES.get().push(frame);
+    }
+    public static void setFunctionGenerator(Object functionObj){((PyFunction)functionObj).generatorLike=true;}
+    public static void traceLine(Object lineObj){Tracing.traceLine(lineObj);}
+    public static void traceHandler(Object throwable){Tracing.traceHandler(throwable);}
     public static void popLogicalFrame(){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.pop();}
     public static void setCurrentLine(Object lineObj){ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();if(!stack.isEmpty())stack.peek().line=bigInt(lineObj).longValue();}
     @SuppressWarnings("unchecked")
@@ -2725,7 +2732,8 @@ public final class PyRuntime {
             ? active.locals : new LinkedHashMap<Object,Object>();
         if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
         PyCode code=new PyCode(name,filename,firstline);
-        return new PyTraceback(new PyFrame(code,locals),line,current);
+        PyFrame shown=new PyFrame(code,locals); shown.fixedLine=line;
+        return new PyTraceback(shown,line,current);
     }
     public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
         if(!(throwableObj instanceof PyException p)) return;
@@ -3649,12 +3657,11 @@ public final class PyRuntime {
         if(obj instanceof PyTraceback tb) {
             return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
         }
-        if(obj instanceof PyFrame frame) {
-            return switch(name){case "f_code" -> frame.code; case "f_locals" -> frame.locals; default -> throw new PyException("AttributeError","frame has no attribute '"+name+"'");};
-        }
-        if(obj instanceof PyCode code) {
-            return switch(name){case "co_name" -> code.coName; case "co_filename" -> code.coFilename; case "co_firstlineno" -> code.coFirstlineno; default -> throw new PyException("AttributeError","code has no attribute '"+name+"'");};
-        }
+        if(obj instanceof PyFrame frame) return PyFrameSupport.frameAttr(frame,name);
+        if(obj instanceof PyCode code) return PyFrameSupport.codeAttr(code,name);
+        if(obj instanceof PyGenerator gen && (name.equals("gi_frame") || name.equals("gi_running") || name.equals("gi_code"))) return PyFrameSupport.generatorAttr(gen,name);
+        if(obj instanceof PyCoroutine co && (name.equals("cr_frame") || name.equals("cr_running") || name.equals("cr_code"))) return PyFrameSupport.coroutineAttr(co,name);
+        if(obj instanceof PyAsyncGenerator ag && (name.equals("ag_frame") || name.equals("ag_running") || name.equals("ag_code"))) return PyFrameSupport.generatorAttr(ag.frame,name.replace("ag_","gi_"));
         if (obj instanceof PySuper sup) {
             switch(name){
                 case "__class__": return typeOf(sup);
@@ -3745,6 +3752,7 @@ public final class PyRuntime {
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
         String name=(String)nameObj;
+        if(obj instanceof PyFrame frame){PyFrameSupport.setFrameAttr(frame,name,value);return;}
         if(obj instanceof PyCell cell && name.equals("cell_contents")){cell.set(value);return;}
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");

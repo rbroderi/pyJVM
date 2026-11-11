@@ -47,18 +47,23 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
     Object advance() {
         if (finished) throw new PyGeneratorEnd(returnValue);
         started = true;
-        ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
-        logical.inspectSupported=false;logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
+        ActiveFrame logical=logicalFrame();
         LOGICAL_FRAMES.get().push(logical);
+        boolean traced=Tracing.enabled;
+        running=true;
         try {
+            if(traced){Tracing.call(logical);}
+            logical.resumed=true;
             Class<?> cls=ownerClass(owner);
             var reflected=cls.getDeclaredMethod(resumeMethod, Object.class);
             Object value=reflected.invoke(null, this);
-            if (value == GENERATOR_DONE) { finished=true; throw new PyGeneratorEnd(returnValue); }
+            if (value == GENERATOR_DONE) { finished=true; if(traced) Tracing.ret(logical,returnValue,false); throw new PyGeneratorEnd(returnValue); }
+            if(traced) Tracing.ret(logical,value,true);
             return value;
         } catch (java.lang.reflect.InvocationTargetException exc) {
             Throwable cause=exc.getCause();
-            if (cause instanceof PyGeneratorEnd e) { finished=true; throw e; }
+            if (cause instanceof PyGeneratorEnd e) { finished=true; if(traced) Tracing.ret(logical,e.value,false); throw e; }
+            if (cause instanceof PyException p && traced) Tracing.unwind(logical,p);
             if (cause instanceof PyException p && p.typeName.equals("StopIteration")) {
                 finished=true;
                 PyException wrapped=new PyException("RuntimeError", "generator raised StopIteration"); wrapped.addFrame(displayName,filename,logical.firstlineno,logical.line); throw wrapped;
@@ -70,8 +75,20 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
         } catch (ReflectiveOperationException exc) {
             throw new RuntimeException(exc);
         } finally {
+            running=false;
             ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
         }
+    }
+
+    boolean running=false; private ActiveFrame logicalFrame;
+    /** The generator's one persistent frame: it keeps its line and locals across suspensions. */
+    ActiveFrame logicalFrame(){
+        if(logicalFrame==null){
+            logicalFrame=new ActiveFrame(displayName,filename,firstlineno);
+            logicalFrame.inspectSupported=false;logicalFrame.firstArgument=firstArgument;logicalFrame.argumentEnv=env;logicalFrame.classEnv=hasClassCell?env:null;
+            logicalFrame.owner=owner;
+        }
+        return logicalFrame;
     }
 
     @Override public boolean hasNext() {

@@ -171,7 +171,10 @@ class Compiler:
     def __init__(self, class_name: str, import_map: dict[str, str] | None = None,
                  import_exports: dict[str, list[str] | None] | None = None, *,
                  module_name: str = "__main__", package_name: str | None = None,
-                 target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> None:
+                 target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec", trace: bool = False) -> None:
+        # trace: instrumented mode (line/handler events for sys.settrace, setprofile and sys.monitoring).
+        self.trace = trace
+        self._line_emitted = None
         # dynamic: exec()/eval() compilation. Module-level names live in caller-supplied
         # namespace mappings (static fields __py_globals/__py_locals) instead of static fields.
         self.dynamic = dynamic
@@ -214,6 +217,9 @@ class Compiler:
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
         tree = lower_annotations(tree)
+        if not self.trace:
+            # Code that installs a trace/profile/monitoring hook is compiled in instrumented mode automatically.
+            self.trace = any(isinstance(n, ast.Attribute) and n.attr in ("settrace", "setprofile", "monitoring") for n in ast.walk(tree))
         # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
         self.declared_global = {n for node in ast.walk(tree) if isinstance(node, ast.Global) for n in node.names}
         if not self.dynamic:
@@ -804,8 +810,8 @@ class Compiler:
         if self.has_implicit_exec:
             b.invokestatic(RUNTIME, "dict0", f"(){OBJ}"); b.putstatic(self.class_name, "__py_extras", OBJ)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
-        b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b)
-        b.invokestatic(RUNTIME,"pushLogicalFrame",f"({OBJ*3})V")
+        b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b); self._emit_owner(b)
+        b.invokestatic(RUNTIME,"pushModuleFrame",f"({OBJ*4})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         if self.module_name == "__main__":
             b.aconst_null()
@@ -843,8 +849,8 @@ class Compiler:
         b.aload(0); b.putstatic(self.class_name, "__py_globals", OBJ)
         b.aload(1); b.putstatic(self.class_name, "__py_locals", OBJ)
         self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
-        b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1, b)
-        b.invokestatic(RUNTIME, "pushLogicalFrame", f"({OBJ*3})V")
+        b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1, b); self._emit_owner(b)
+        b.invokestatic(RUNTIME, "pushModuleFrame", f"({OBJ*4})V")
         if self.mode == "eval":
             assert self.eval_expr is not None
             self._expr(self.eval_expr, b, scope)
@@ -1554,8 +1560,10 @@ class Compiler:
             b.goto(done)
             b.mark(dispatch); b.astore(exc_slot)
             b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
+            self._trace_handler_entry(None, exc_slot, b)
             for handler in handlers:
                 next_handler = b.label()
+                self._trace_handler_line(handler, b)
                 if handler.type is not None:
                     if isinstance(handler.type, ast.Name):
                         b.aload(exc_slot); b.ldc_string(handler.type.id)
@@ -1588,6 +1596,8 @@ class Compiler:
             b.mark(done)
 
         def gen_stmt(stmt: ast.stmt):
+            if hasattr(stmt, "lineno"):
+                self._emit_stmt_line(stmt.lineno, b); self._line_emitted = stmt
             if isinstance(stmt,ast.Assign) and any(self._contains_yield(t) for t in stmt.targets):
                 # The value is evaluated first, then each target's own operands.
                 gen_value(stmt.value); value_name=persist_gen_value("gen_hoist")
@@ -1664,7 +1674,7 @@ class Compiler:
                 syn=f"$gen_iter_{synthetic_counter[0]}"; synthetic_counter[0]+=1
                 gen_value(stmt.iter); b.invokestatic(RUNTIME,"iter",f"({OBJ}){OBJ}")
                 it_slot=scope.temp(); b.astore(it_slot); self._gen_env_store(syn,it_slot,b,scope)
-                start,normal_end,break_end=b.label(),b.label(),b.label(); b.mark(start)
+                start,normal_end,break_end=b.label(),b.label(),b.label(); self._loop_head(stmt,start,b)
                 self._gen_env_load(syn,b,scope); b.invokestatic(RUNTIME,"iterHasNext",f"({OBJ})Z"); b.ifeq(normal_end)
                 self._gen_env_load(syn,b,scope); b.invokestatic(RUNTIME,"iterNext",f"({OBJ}){OBJ}"); self._store_target(stmt.target,b,scope)
                 self.loop_stack.append((start,break_end)); gen_loop_floors.append(len(gen_cleanup_order))
@@ -1679,7 +1689,7 @@ class Compiler:
                 for x in stmt.orelse: gen_stmt(x)
                 b.mark(end); return
             if isinstance(stmt,ast.While):
-                start,normal_end,break_end=b.label(),b.label(),b.label(); b.mark(start); gen_truth(stmt.test); b.ifeq(normal_end)
+                start,normal_end,break_end=b.label(),b.label(),b.label(); self._loop_head(stmt,start,b); gen_truth(stmt.test); b.ifeq(normal_end)
                 self.loop_stack.append((start,break_end)); gen_loop_floors.append(len(gen_cleanup_order))
                 for x in stmt.body: gen_stmt(x)
                 gen_loop_floors.pop(); self.loop_stack.pop(); b.goto(start); b.mark(normal_end)
@@ -1916,6 +1926,8 @@ class Compiler:
         b.invokestatic(RUNTIME, "setFunctionFreeNames", f"({OBJ * 2})V")
         if node.returns is not None or any(arg.annotation is not None for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs, *([node.args.vararg] if node.args.vararg else []), *([node.args.kwarg] if node.args.kwarg else [])]):
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAnnotated", f"({OBJ})V")
+        if self.trace and (info.is_generator or info.is_async or info.is_async_generator):
+            b.dup(); b.invokestatic(RUNTIME, "setFunctionGenerator", f"({OBJ})V")
         if info.is_async_generator:
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAsyncGenerator", f"({OBJ})V")
         elif info.is_async:
@@ -2372,9 +2384,29 @@ class Compiler:
             self._forward_branch_after_cleanup(target, b)
         b.mark(done)
 
+    def _emit_stmt_line(self, lineno: int, b: CodeBuilder) -> None:
+        self._emit_int(lineno, b)
+        b.invokestatic(RUNTIME, "traceLine" if self.trace else "setCurrentLine", f"({OBJ})V")
+
+    def _loop_head(self, node, start, b: CodeBuilder) -> None:
+        """Mark a loop's back-edge target. Instrumented code reports the header line on every re-entry."""
+        if not self.trace:
+            b.mark(start); return
+        check = b.label()
+        b.goto(check); b.mark(start); self._emit_stmt_line(node.lineno, b); b.mark(check)
+
+    def _trace_handler_entry(self, handler, exc_slot: int, b: CodeBuilder) -> None:
+        if self.trace:
+            b.aload(exc_slot); b.invokestatic(RUNTIME, "traceHandler", f"({OBJ})V")
+
+    def _trace_handler_line(self, handler, b: CodeBuilder) -> None:
+        if self.trace:
+            self._emit_stmt_line(handler.lineno, b)
+
     def _stmt(self, node: ast.stmt, b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         if hasattr(node, "lineno"):
-            self._emit_int(node.lineno, b); b.invokestatic(RUNTIME,"setCurrentLine",f"({OBJ})V")
+            if self._line_emitted is node: self._line_emitted = None
+            else: self._emit_stmt_line(node.lineno, b)
         if self._stmt_part0(node, b, scope, in_function):
             return
         if self._stmt_part1(node, b, scope, in_function):
@@ -2656,7 +2688,7 @@ class Compiler:
                     return True
                 case ast.While(test=test, body=body, orelse=orelse):
                     start, normal_end, break_end = b.label(), b.label(), b.label()
-                    b.mark(start)
+                    self._loop_head(node, start, b)
                     self._truthy(test, b, scope); b.ifeq(normal_end)
                     self.loop_stack.append((start, break_end))
                     for s in body: self._stmt(s, b, scope, in_function)
@@ -2669,7 +2701,7 @@ class Compiler:
                     iterator_slot = scope.temp()
                     self._expr(iterable, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
                     start, normal_end, break_end = b.label(), b.label(), b.label()
-                    b.mark(start); b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterHasNext", f"({OBJ})Z"); b.ifeq(normal_end)
+                    self._loop_head(node, start, b); b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterHasNext", f"({OBJ})Z"); b.ifeq(normal_end)
                     b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterNext", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
                     self.loop_stack.append((start, break_end))
                     for s in body: self._stmt(s, b, scope, in_function)
@@ -3147,8 +3179,10 @@ class Compiler:
         b.mark(dispatch); b.astore(exc_slot)
         b.aload(exc_slot); b.invokestatic(RUNTIME,"tracebackAddCurrentFrame",f"({OBJ})V")
         b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
+        self._trace_handler_entry(None, exc_slot, b)
         for handler in handlers:
             next_handler = b.label()
+            self._trace_handler_line(handler, b)
             if handler.type is not None:
                 if isinstance(handler.type, ast.Name):
                     b.aload(exc_slot); b.ldc_string(handler.type.id)
@@ -3221,11 +3255,11 @@ def compile_source(source: str, class_name: str = "Main", filename: str = "<stri
                    import_map: dict[str,str] | None = None,
                    import_exports: dict[str, list[str] | None] | None = None,
                    module_name: str = "__main__", package_name: str | None = None,
-                   *, target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> bytes:
+                   *, target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec", trace: bool = False) -> bytes:
     try:
         return Compiler(class_name, import_map=import_map, import_exports=import_exports,
                         module_name=module_name, package_name=package_name, target=target,
-                        dynamic=dynamic, mode=mode).compile(source, filename)
+                        dynamic=dynamic, mode=mode, trace=trace).compile(source, filename)
     except CompileError as exc:
         if str(exc).startswith(GENUINE_SYNTAX_ERRORS):
             raise SyntaxError(str(exc)) from None

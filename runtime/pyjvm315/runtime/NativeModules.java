@@ -31,6 +31,14 @@ public final class NativeModules {
         ArrayList<Object> args = new ArrayList<>();
         for (String a : argv) args.add(a);
         m.attrs.put("argv", args);
+        fn(m, "_getframe", (a, k) -> PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)));
+        fn(m, "settrace", (a, k) -> Tracing.settrace(a.get(0)));
+        fn(m, "gettrace", (a, k) -> Tracing.traceFn);
+        fn(m, "setprofile", (a, k) -> Tracing.setprofile(a.get(0)));
+        fn(m, "getprofile", (a, k) -> Tracing.profileFn);
+        PyModule monitoring = new PyModule("sys.monitoring", "pyjvm315.runtime.Monitoring");
+        Monitoring.install(monitoring);
+        m.attrs.put("monitoring", monitoring);
         return m;
     }
 
