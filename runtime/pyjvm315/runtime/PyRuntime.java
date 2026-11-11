@@ -3466,6 +3466,7 @@ public final class PyRuntime {
             created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
         } else {
             created=cls.nativeKind!=null?NativeSubclass.allocate(cls,cls.nativeKind,args,kwargs):typeMro(cls).contains(builtinType("super"))?new PySuper(cls):PyInstance.create(cls);
+            if(created instanceof PyInstance li && li.fields instanceof ThreadModule.LocalFields lf) lf.recordInit(args,kwargs);
             if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 

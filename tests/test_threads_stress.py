@@ -4,6 +4,7 @@ facts (final sizes, sums, uniqueness) so its output must equal CPython's, and ea
 finished well inside the time budget."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -380,6 +381,9 @@ def combined_source() -> str:
     return "\n".join(out)
 
 
+# Opt-in: compiling the self-hosted threading stack costs minutes per lane.
+# CI runs it with PYJVM_STRESS=1.
+@pytest.mark.skipif(os.environ.get("PYJVM_STRESS") != "1", reason="set PYJVM_STRESS=1 to run the thread stress programs")
 @pytest.mark.parametrize("python_exe", _lanes())
 def test_stress_programs_match_cpython(python_exe, jvm_kit, tmp_path):
     runtime, selfhosted = jvm_kit
