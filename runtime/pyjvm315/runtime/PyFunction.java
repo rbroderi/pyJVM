@@ -94,7 +94,7 @@ final class PyFunction {
         for (String name : positional) bound.add(assigned.get(name));
         for (String name : kwonly) bound.add(assigned.get(name));
         if (vararg != null) { PyTuple tuple=new PyTuple(); tuple.items.addAll(extraPos); bound.add(tuple); }
-        if (kwarg != null) bound.add(new LinkedHashMap<Object,Object>(extraKw));
+        if (kwarg != null) bound.add(new PyDict(extraKw));
         Object[] boundArray=bound.toArray();
         if(asyncMode) return new PyCoroutine(this,boundArray);
         return invokeStatic(boundArray);

@@ -38,7 +38,7 @@ public final class PatternMatch {
 
     /** The subject's mapping with the already-matched keys removed (a new dict). */
     public static Object rest(Object subject, Object keys) {
-        LinkedHashMap<Object,Object> copy = new LinkedHashMap<>((Map<?,?>) subject);
+        PyDict copy = new PyDict((Map<?,?>) subject);
         for (Object key : PyRuntime.iterable(keys)) PyRuntime.callMethod(copy, "pop", new Object[]{key, null});
         return copy;
     }

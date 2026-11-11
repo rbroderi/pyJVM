@@ -752,7 +752,7 @@ public final class PyRuntime {
         return number(a) + number(b);
     }
 
-    public static Object sub(Object a, Object b) {
+    public static Object sub(Object a, Object b) {if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} 
         if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"difference");
         if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__sub__","__rsub__",false);if(result!=NOT_IMPLEMENTED)return result;}
         if(a instanceof PyComplex x){if(b instanceof PyComplex y)return new PyComplex(x.real-y.real,x.imag-y.imag);return new PyComplex(x.real-complexReal(b,false),x.imag);}
@@ -1159,7 +1159,7 @@ public final class PyRuntime {
     }
     public static Object isub(Object a,Object b){return inplaceSetBinary(a,b,"difference","__isub__");}
     public static Object ibitAnd(Object a,Object b){return inplaceSetBinary(a,b,"intersection","__iand__");}
-    public static Object ibitOr(Object a,Object b){return inplaceSetBinary(a,b,"union","__ior__");}
+    public static Object ibitOr(Object a,Object b){if(a instanceof Map<?,?>){dictUpdate(a,b);return a;}return inplaceSetBinary(a,b,"union","__ior__");}
     public static Object ibitXor(Object a,Object b){return inplaceSetBinary(a,b,"symmetric_difference","__ixor__");}
     static Object inplaceSetBinary(Object a,Object b,String operation,String special){
         if(a instanceof PyInstance instance){
@@ -1177,9 +1177,9 @@ public final class PyRuntime {
         else {Set<Object> target=(Set<Object>)destination;target.clear();target.addAll(source);}
     }
 
-    public static Object bitAnd(Object a, Object b) { if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__and__","__rand__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
-    public static Object bitOr(Object a, Object b) { if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");return compact(bigInt(a).or(bigInt(b))); }
-    public static Object bitXor(Object a, Object b) { if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__xor__","__rxor__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
+    public static Object bitAnd(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__and__","__rand__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
+    public static Object bitOr(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");if(a instanceof Map<?,?> && b instanceof Map<?,?>){PyDict out=new PyDict((Map<?,?>)a);dictUpdate(out,b);return out;}return compact(bigInt(a).or(bigInt(b))); }
+    public static Object bitXor(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__xor__","__rxor__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
     public static Object lshift(Object a, Object b) {
         BigInteger n = bigInt(b); if (n.signum() < 0) throw new ArithmeticException("negative shift count");
         if (n.bitLength() > 31) throw new ArithmeticException("shift count too large");
@@ -1199,6 +1199,14 @@ public final class PyRuntime {
             return x.imag==0 && (isIntLike(b)?integerFloatEqual(bigInt(b),x.real):b instanceof Double d && x.real==d);
         }
         if(b instanceof PyComplex)return eq(b,a);
+        if((a instanceof PyDictView || b instanceof PyDictView) && (a instanceof Set<?> || b instanceof Set<?> || (a instanceof PyDictView && b instanceof PyDictView))){
+            boolean aKind=!(a instanceof PyDictView v) || !v.kind.equals("values"), bKind=!(b instanceof PyDictView w) || !w.kind.equals("values");
+            if(aKind && bKind){
+                Set<?> left=a instanceof Set<?> s0?s0:new PySet(a), right=b instanceof Set<?> s1?s1:new PySet(b);
+                return left.size()==right.size() && left.containsAll(right);
+            }
+            return a==b;
+        }
         if(isIntLike(a) && isIntLike(b))return bigInt(a).equals(bigInt(b));
         if(a instanceof Double x && b instanceof Double y)return x.doubleValue()==y.doubleValue();
         if(isIntLike(a) && b instanceof Double d)return integerFloatEqual(bigInt(a),d);
@@ -1392,7 +1400,7 @@ public final class PyRuntime {
     public static void tupleExtend(Object tuple, Object values) { for(Object x:iterable(values)) ((PyTuple)tuple).items.add(x); }
     public static Object tupleFrom(Object values) { PyTuple out=new PyTuple(); for(Object x:iterable(values)) out.items.add(x); return out; }
 
-    public static Object dict0() { return new LinkedHashMap<Object, Object>(); }
+    public static Object dict0() { return new PyDict(); }
     @SuppressWarnings("unchecked")
     public static void dictPut(Object dict, Object key, Object value) { ((Map<Object, Object>) dict).put(key, value); }
     @SuppressWarnings("unchecked")
@@ -1436,9 +1444,21 @@ public final class PyRuntime {
     }
     public static Object dictFrom(Object value) { Object out=dict0(); dictUpdate(out,value); return out; }
 
+    static final Set<String> DICT_METHODS=Set.of("copy","get","keys","values","items","update","pop","popitem","setdefault","clear",
+        "__contains__","__len__","__getitem__","__setitem__","__delitem__","__iter__","__reversed__","__eq__","__ne__","__or__","__ror__","__ior__");
     static boolean setMethodKnown(String name,boolean frozen){
         return Set.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__").contains(name)
             || !frozen && Set.of("add","remove","discard","clear","pop","update","intersection_update","difference_update","symmetric_difference_update","__ior__","__iand__","__ixor__","__isub__").contains(name);
+    }
+    /** keys()/items() views are set-like: operate on them (and any iterable partner) as sets. */
+    static Object[] viewOperands(Object a,Object b){
+        boolean aSetLike=a instanceof PyDictView v && !v.kind.equals("values"), bSetLike=b instanceof PyDictView w && !w.kind.equals("values");
+        if(!aSetLike && !bSetLike)return null;
+        if((a instanceof PyDictView v2 && v2.kind.equals("values")) || (b instanceof PyDictView w2 && w2.kind.equals("values")))return null;
+        Object left=aSetLike?new PySet(a):a, right=bSetLike?new PySet(b):b;
+        if(!(left instanceof Set<?>)){ if(!(left instanceof Iterable<?>) && !(left instanceof List<?>) && !(left instanceof String)) return null; left=new PySet(left); }
+        if(!(right instanceof Set<?>)){ if(!(right instanceof Iterable<?>) && !(right instanceof List<?>) && !(right instanceof String)) return null; right=new PySet(right); }
+        return new Object[]{left,right};
     }
     static Object setAlgebra(Object left,Object right,String operation){
         PySet a=new PySet(left),b=new PySet(right),result=new PySet();
@@ -1501,6 +1521,7 @@ public final class PyRuntime {
         else if (value instanceof List<?> xs) n = xs.size();
         else if (value instanceof Map<?, ?> xs) n = xs.size();
         else if (value instanceof Set<?> xs) n = xs.size();
+        else if (value instanceof PyDictView view) n = view.map.size();
         else if (value instanceof PyTuple t) n = t.items.size();
         else if (value instanceof PyRange r) return compact(r.length());
         else if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__len__");if(m==null)throw typeError("object has no len()",value);Object out=invoke(instance,m,new Object[0]);BigInteger bi=bigInt(out);if(bi.signum()<0)throw new PyException("ValueError","__len__() should return >= 0");return compact(bi);}
@@ -1683,6 +1704,12 @@ public final class PyRuntime {
         return values;
     }
     public static Object reversed(Object value) {
+        if(value instanceof Map<?,?> || value instanceof PyDictView) {
+            ArrayList<Object> items=new ArrayList<>();
+            for(Object item:iterable(value)) items.add(item);
+            Collections.reverse(items);
+            return items;
+        }
         if(value instanceof PyInstance instance) {
             PyMethod method=instance.cls.lookupMethod("__reversed__");
             if(method!=null)return invoke(instance,method,new Object[0]);
@@ -2418,7 +2445,10 @@ public final class PyRuntime {
         if(callable instanceof PyMethodDescriptor method && method.kind.equals("static"))return callFunction(method.function,args,kwargs);
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
         if (callable instanceof BuiltinBoundMethod method) {
-            if(!kwargs.isEmpty())throw new PyException("TypeError","method takes no keyword arguments");
+            if(!kwargs.isEmpty()) {
+                if(method.self instanceof Map<?,?> && method.name.equals("update")) return callMethodDynamic(method.self,method.name,args,kwargs);
+                throw new PyException("TypeError","method takes no keyword arguments");
+            }
             return callMethod(method.self,method.name,args.toArray());
         }
         if (callable instanceof PyBuiltinType type) {
@@ -2453,6 +2483,13 @@ public final class PyRuntime {
             if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(Set.of("map","zip","enumerate","filter").contains(type.name)) return callBuiltin(type.name,args,kwargs);
+            if(type.name.equals("dict")) {
+                if(args.size()>1) throw new PyException("TypeError","dict expected at most 1 argument, got "+args.size());
+                Object out=dict0();
+                if(args.size()==1) dictUpdate(out,args.get(0));
+                for(Map.Entry<Object,Object> e:kwargs.entrySet()) ((Map<Object,Object>)out).put(e.getKey(),e.getValue());
+                return out;
+            }
             if(type.name.equals("slice")) {
                 if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3) throw new PyException("TypeError","slice() requires 1 to 3 positional arguments");
                 return new PySlice(args.size()==1?null:args.get(0),args.size()==1?args.get(0):args.get(1),args.size()<3?null:args.get(2));
@@ -3109,6 +3146,11 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         String name=(String)nameObj;
         if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
+        if(obj instanceof Map<?,?> && name.equals("update")) {
+            callMethod(obj,name,args.toArray());
+            for(Map.Entry<Object,Object> e:kwargs.entrySet()) ((Map<Object,Object>)obj).put(e.getKey(),e.getValue());
+            return null;
+        }
         if(obj instanceof PyInstance || obj instanceof PyClass || obj instanceof PySuper) {
             Object callable=getattr(obj,name);
             return callFunction(callable,args,kwargs);
@@ -3197,6 +3239,12 @@ public final class PyRuntime {
         if(builtin.name.equals("type") && name.equals("__call__")) {
             if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__() requires a class");
             return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
+        }
+        if(builtin.name.equals("dict") && name.equals("fromkeys")) {
+            if(args.length<1||args.length>2) throw new PyException("TypeError","fromkeys expected 1 or 2 arguments");
+            PyDict out=new PyDict();
+            for(Object key:iterable(args[0])) out.put(key,args.length==2?args[1]:null);
+            return out;
         }
         if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
             requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
@@ -3383,6 +3431,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof Set<?> && setMethodKnown(name,obj instanceof PyFrozenSet))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof Map<?,?> && DICT_METHODS.contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
