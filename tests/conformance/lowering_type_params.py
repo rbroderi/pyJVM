@@ -1,3 +1,5 @@
+# pyjvm: requires-python >= 3.14
+# TODO(P1-12): type parameters are not bound yet, so eager annotations (3.13) hit NameError on T.
 def identity[T](x: T) -> T:
     return x
 
