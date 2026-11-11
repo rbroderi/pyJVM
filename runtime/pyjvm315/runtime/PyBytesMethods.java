@@ -25,6 +25,7 @@ import java.util.Set;
 final class PyBytesMethods {
     static Object call(Object obj, String name, Object[] args) {
         PyBytes bytes=(PyBytes)obj;
+        if(!name.equals("join")) args=NativeSubclass.unwrapArgs(args);
         return switch(name) {
             case "decode" -> {
                 if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");

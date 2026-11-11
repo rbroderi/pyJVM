@@ -23,6 +23,8 @@ final class TypeSlots {
 
     static {
         add(PyComplex.class, PyComplexMethods::call);
+        add(Double.class, NativeSubclassMethods::callFloatSlot);
+        add(PyTuple.class, NativeSubclassMethods::callTupleSlot);
         add(PySuper.class, PySuperMethods::call);
         add(PyBuiltinType.class, PyBuiltinTypeMethods::call);
         add(PyClass.class, PyClassMethods::call);

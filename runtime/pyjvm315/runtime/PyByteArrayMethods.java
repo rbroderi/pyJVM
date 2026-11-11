@@ -25,6 +25,7 @@ import java.util.Set;
 final class PyByteArrayMethods {
     static Object call(Object obj, String name, Object[] args) {
         PyByteArray bytes=(PyByteArray)obj;
+        if(!name.equals("join") && !name.equals("extend")) args=NativeSubclass.unwrapArgs(args);
         return switch(name) {
             case "append" -> { requireArgs(name,args,1); bytes.appendUnsigned(byteValue(args[0])); yield null; }
             case "extend" -> { requireArgs(name,args,1); for(Object x:iterable(args[0])) bytes.appendUnsigned(byteValue(x)); yield null; }
