@@ -3755,6 +3755,7 @@ public final class PyRuntime {
                 return new UnboundMethod(cls,name);
             }
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
+            if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {

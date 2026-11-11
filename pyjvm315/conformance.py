@@ -17,7 +17,7 @@ from .compiler import CompileError
 from .driver import compile_file
 from .cli import build_runtime
 from .classfile import DEFAULT_TARGET, JAVA_TARGETS
-from .hostver import python_below, reference_version, required_python
+from .hostver import python_below, reference_stdlib, reference_version, required_python
 
 
 @dataclass
@@ -95,6 +95,8 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
             return Result(source.name, "ERROR", f"build failed: {exc}")
         # exec()/eval()/compile() compile through the host-Python backend (until the compiler is self-hosted)
         backend_env = {"PYJVM_LANG_VERSION": "%d.%d" % reference_version(python_exe)}
+        # run-time imports read importlib and the stdlib from the reference interpreter's own library (PYJVM_STDLIB overrides)
+        backend_env["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(python_exe)
         classpath = str(out)
         if selfhosted is not None:
             # the compiler runs in-process from its own class files: the JVM is given no host Python at all
@@ -133,7 +135,9 @@ def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
         # A directory with main.py is a multi-file conformance case; helper
         # modules and package __init__.py files are dependencies, not separate
         # executable cases.
-        files = [f for f in candidates if f.name != "__init__.py" and not (f.name != "main.py" and (f.parent / "main.py").exists())]
+        def inside_case(f: Path) -> bool:
+            return any((d / "main.py").exists() for d in f.parents if d != path and path in d.parents)
+        files = [f for f in candidates if f.name != "__init__.py" and not (f.name != "main.py" and inside_case(f))]
     # javac startup dominated the old runner because the tiny support runtime was
     # rebuilt for every file. Build it once per suite and copy the class package
     # into each isolated test output directory.

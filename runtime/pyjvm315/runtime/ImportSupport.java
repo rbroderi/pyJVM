@@ -186,7 +186,7 @@ public final class ImportSupport {
             } else v[i] = kwargs.get(names[i]);
         }
         if (v[0] == null && args.isEmpty() && !kwargs.containsKey("name")) throw new PyException("TypeError", "__import__() missing required argument 'name' (pos 1)");
-        if (!(v[0] instanceof String name)) throw new PyException("TypeError", "__import__() argument 1 must be str, not " + PyRuntime.typeName(v[0]));
+        if (!(v[0] instanceof String name)) throw new PyException("TypeError", "module name must be a string");
         long level = v[4] == null ? 0 : v[4] instanceof Number n ? n.longValue() : -1;
         if (v[4] != null && !(v[4] instanceof Number)) throw new PyException("TypeError", "'" + PyRuntime.typeName(v[4]) + "' object cannot be interpreted as an integer");
         if (level < 0) throw new PyException("ValueError", "level must be >= 0");

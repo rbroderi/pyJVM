@@ -21,6 +21,14 @@ def reference_version(python_exe: str) -> Version:
     return parse_version(out)
 
 
+def reference_stdlib(python_exe: str) -> str:
+    """The reference interpreter's own standard-library directory: where the JVM run-time import system reads
+    importlib's sources and pure-Python modules from (PYJVM_STDLIB), so both sides of a differential run
+    execute the same library. Nothing is copied into the repository."""
+    return subprocess.run([python_exe, "-c", "import sysconfig;print(sysconfig.get_path('stdlib'))"],
+                          text=True, capture_output=True, check=True).stdout.strip()
+
+
 _GATE = re.compile(r"^#\s*pyjvm:\s*requires-python\s*>=\s*(\d+\.\d+)\s*$", re.M)
 _GATE_BELOW = re.compile(r"^#\s*pyjvm:\s*requires-python\s*<\s*(\d+\.\d+)\s*$", re.M)
 

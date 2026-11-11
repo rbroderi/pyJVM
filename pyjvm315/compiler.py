@@ -326,6 +326,8 @@ class Compiler:
                     if alias.name == '*':
                         exports=self.import_exports.get(resolved or "")
                         if exports is None:
+                            if self.dynamic or self.import_map.get(resolved or "") is None:
+                                continue   # resolved when the statement runs (a static module reports this later)
                             raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
                         names.update(exports)
                     else:

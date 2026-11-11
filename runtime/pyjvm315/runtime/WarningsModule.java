@@ -112,9 +112,9 @@ public final class WarningsModule {
             PyTuple t = (PyTuple) f;
             Object msgRe = t.items.get(1), cat = t.items.get(2), modRe = t.items.get(3);
             long ln = ((Number) t.items.get(4)).longValue();
-            boolean msgOk = msgRe == null || PyRuntime.truth(PyRuntime.callMethod(msgRe, "match", new Object[]{text}));
+            boolean msgOk = matched(msgRe, text);
             boolean catOk = PyRuntime.truth(PyRuntime.isSubclass(category, cat));
-            boolean modOk = modRe == null || PyRuntime.truth(PyRuntime.callMethod(modRe, "match", new Object[]{module}));
+            boolean modOk = matched(modRe, module);
             if (msgOk && catOk && modOk && (ln == 0 || lineno == ln)) { action = (String) t.items.get(0); break; }
         }
         if (action == null) action = defaultAction;
@@ -139,6 +139,13 @@ public final class WarningsModule {
         }
         show(filename, lineno, category, text);
         return null;
+    }
+
+    /** CPython's check_matched: None matches everything, a str must be equal, anything else is a compiled pattern. */
+    private static boolean matched(Object pattern, Object text) {
+        if (pattern == null) return true;
+        if (pattern instanceof String p) return p.equals(text);
+        return PyRuntime.truth(PyRuntime.callMethod(pattern, "match", new Object[]{text}));
     }
 
     private static void show(String filename, long lineno, Object category, String text) {
