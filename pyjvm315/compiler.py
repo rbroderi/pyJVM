@@ -54,7 +54,7 @@ EXCEPTION_TYPES = {
     "FileExistsError", "BrokenPipeError", "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError",
 }
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
-NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_string", "_codecs", "_locale", "gc", "atexit", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select"}
+NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_string", "_codecs", "_locale", "gc", "atexit", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",

@@ -132,7 +132,20 @@ final class PyFrameSupport {
             case "co_name", "co_qualname" -> code.coName;
             case "co_filename" -> code.coFilename;
             case "co_firstlineno" -> code.coFirstlineno;
+            case "co_code" -> throw noBytecode();
             default -> throw new PyException("AttributeError", "code has no attribute '" + name + "'");
         };
+    }
+
+    /** The one documented error for everything that needs CPython bytecode: dis of functions and code objects. */
+    static PyException noBytecode() {
+        return new PyException("NotImplementedError",
+            "pyJVM compiles Python to JVM bytecode and has no CPython bytecode: dis.dis(), dis.get_instructions(), dis.Bytecode and code_info() of functions and code objects are unsupported");
+    }
+
+    /** A method call on a code object: the bytecode-dependent ones (co_lines, co_positions, replace...) are unsupported. */
+    static PyException codeMethod(String name) {
+        if (name.startsWith("co_") || name.equals("replace") || name.startsWith("_varname")) return noBytecode();
+        return new PyException("AttributeError", "'code' object has no attribute '" + name + "'");
     }
 }

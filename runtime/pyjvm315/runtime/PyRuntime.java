@@ -3697,6 +3697,7 @@ public final class PyRuntime {
         if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable || obj instanceof NativeFunction)
             return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         TypeSlots.CallMethod slot = TypeSlots.callMethodSlot(obj);
+        if (slot == null && obj instanceof PyCode) throw PyFrameSupport.codeMethod(name);
         if (slot == null) throw typeError("method call on non-instance", obj);
         return slot.call(obj, name, args);
     }
