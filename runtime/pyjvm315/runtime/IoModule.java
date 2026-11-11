@@ -81,10 +81,6 @@ public final class IoModule {
     }
 
     static Object openFile(Object file, Object modeObj, Object bufObj, Object encoding, Object errors, Object newline, Object closefd, Object opener) {
-        Object f = NativeSubclass.unwrap(file);
-        if (!(f instanceof String || f instanceof PyBytes || f instanceof Long || f instanceof Boolean || f instanceof java.math.BigInteger
-              || (f instanceof PyInstance fi && fi.cls.lookupMethod("__fspath__") != null)))
-            throw new PyException("TypeError", "invalid file: " + PyRuntime.pyRepr(file));
         Object mo = NativeSubclass.unwrap(modeObj);
         if (!(mo instanceof String mode)) throw new PyException("TypeError", "open() argument 'mode' must be str, not " + PyRuntime.typeName(mo));
         Object bo = NativeSubclass.unwrap(bufObj);

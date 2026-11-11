@@ -20,6 +20,15 @@ final class IoUtil {
         return b.longValue();
     }
 
+    static final Object END = new Object();
+
+    /** The next item of an iterator (Java iterator or a Python object with __next__), or END. */
+    static Object step(Object it) {
+        if (it instanceof java.util.Iterator<?> j) return j.hasNext() ? j.next() : END;
+        try { return PyRuntime.callMethod(it, "__next__", new Object[0]); }
+        catch (PyException e) { if (e.typeName.equals("StopIteration")) return END; throw e; }
+    }
+
     static int asInt(Object o) { return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, asLong(o))); }
 
     /** An optional size argument: None means -1. */
@@ -39,13 +48,13 @@ final class IoUtil {
         target = NativeSubclass.unwrap(target);
         if (target instanceof PyByteArray a) { for (int i = 0; i < n; i++) a.data.set(i, src[off + i]); return; }
         if (target instanceof PyMemoryView m && !m.readonly()) { for (int i = 0; i < n; i++) m.setUnsigned(i, src[off + i] & 0xFF); return; }
-        throw new PyException("TypeError", "readinto() argument must be read-write bytes-like object, not " + PyRuntime.typeName(target));
+        throw new PyException("TypeError", "readinto() argument 1 must be read-write bytes-like object, not " + PyRuntime.typeName(target));
     }
 
     static int bufferSize(Object target) {
         target = NativeSubclass.unwrap(target);
         if (target instanceof PyByteSequence s) return s.byteSize();
-        throw new PyException("TypeError", "readinto() argument must be read-write bytes-like object, not " + PyRuntime.typeName(target));
+        throw new PyException("TypeError", "readinto() argument 1 must be read-write bytes-like object, not " + PyRuntime.typeName(target));
     }
 
     // ---- writers with unflushed data ---------------------------------------------------------------

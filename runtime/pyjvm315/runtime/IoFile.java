@@ -50,7 +50,7 @@ final class IoFile {
 
     static St open(Object self) {
         St s = st(self);
-        if (s.fd < 0) throw IoUtil.closed();
+        if (s.fd < 0) throw new PyException("ValueError", "I/O operation on closed file");
         return s;
     }
 
@@ -62,7 +62,6 @@ final class IoFile {
         if (s.fd >= 0 && s.closefd) { try { IoFd.close(s.fd); } catch (PyException ignored) { } }
         s.fd = -1;
         file = NativeSubclass.unwrap(file);
-        if (file instanceof Double) throw new PyException("TypeError", "integer argument expected, got float");
         long fd = -1;
         String path = null;
         boolean isFd = file instanceof Long || file instanceof java.math.BigInteger || (file instanceof Boolean);

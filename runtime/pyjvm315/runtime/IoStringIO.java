@@ -51,7 +51,7 @@ final class IoStringIO {
     static St open(Object self) {
         St s = st(self);
         if (!s.inited) throw IoUtil.uninitialized();
-        if (s.closed) throw IoUtil.closed();
+        if (s.closed) throw new PyException("ValueError", "I/O operation on closed file");
         return s;
     }
 
@@ -156,7 +156,7 @@ final class IoStringIO {
         if (w < 0 || w > 2) throw new PyException("ValueError", "Invalid whence (" + w + ", should be 0, 1 or 2)");
         if (w == 0 && off < 0) throw new PyException("ValueError", "Negative seek position " + off);
         if (w == 1 && off != 0) throw new PyException("OSError", "Can't do nonzero cur-relative seeks");
-        if (w == 2 && off != 0) throw new PyException("OSError", "Can't do nonzero end-relative seeks");
+        if (w == 2 && off != 0) throw new PyException("OSError", "Can't do nonzero cur-relative seeks");
         s.pos = (int) (w == 0 ? Math.min(off, Integer.MAX_VALUE) : w == 1 ? s.pos : s.len);
         return (long) s.pos;
     }
@@ -166,7 +166,7 @@ final class IoStringIO {
     public static Object truncate(Object self, Object pos) {
         St s = open(self);
         long n = pos == null ? s.pos : IoUtil.asLong(pos);
-        if (n < 0) throw new PyException("ValueError", "Negative size value " + n);
+        if (n < 0) throw new PyException("ValueError", "negative pos value " + n);
         if (n < s.len) s.len = (int) n;
         return n;
     }

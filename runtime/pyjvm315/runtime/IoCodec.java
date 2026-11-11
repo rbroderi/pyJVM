@@ -149,8 +149,8 @@ final class IoCodec {
             for (int i = 0; i < n; i++) {
                 char c = output.charAt(i);
                 if (c == '\r') {
-                    if (i + 1 < n && output.charAt(i + 1) == '\n') { seen |= SEEN_CRLF; if (translate) sb.append('\n'); else sb.append("\r\n"); i++; }
-                    else { seen |= SEEN_CR; if (translate) sb.append('\n'); else sb.append('\r'); }
+                    if (i + 1 < n && output.charAt(i + 1) == '\n') { seen |= SEEN_CRLF; if (translate) sb.append('\n'); i++; }
+                    else { seen |= SEEN_CR; if (translate) sb.append('\n'); }
                 } else {
                     if (c == '\n') seen |= SEEN_LF;
                     if (sb != null) sb.append(c);

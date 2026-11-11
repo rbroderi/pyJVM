@@ -130,9 +130,8 @@ final class IoBase {
         Object it = PyRuntime.iter(self);
         long total = 0;
         while (true) {
-            Object line;
-            try { line = PyRuntime.callMethod(it, "__next__", new Object[0]); }
-            catch (PyException e) { if (e.typeName.equals("StopIteration")) break; throw e; }
+            Object line = IoUtil.step(it);
+            if (line == IoUtil.END) break;
             out.add(line);
             if (h > 0) { total += ((Number) PyRuntime.len(line)).longValue(); if (total >= h) break; }
         }
@@ -143,9 +142,8 @@ final class IoBase {
         checkClosed(self);
         Object it = PyRuntime.iter(lines);
         while (true) {
-            Object line;
-            try { line = PyRuntime.callMethod(it, "__next__", new Object[0]); }
-            catch (PyException e) { if (e.typeName.equals("StopIteration")) break; throw e; }
+            Object line = IoUtil.step(it);
+            if (line == IoUtil.END) break;
             PyRuntime.callMethod(self, "write", new Object[]{line});
         }
         return null;

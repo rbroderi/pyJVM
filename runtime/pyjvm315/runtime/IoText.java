@@ -102,7 +102,7 @@ final class IoText {
         if (nl != null && !(nl instanceof String)) throw new PyException("TypeError", "TextIOWrapper() argument 'newline' must be str or None, not " + PyRuntime.typeName(nl));
         String newl = (String) nl;
         if (newl != null && !(newl.isEmpty() || newl.equals("\n") || newl.equals("\r") || newl.equals("\r\n")))
-            throw new PyException("ValueError", "illegal newline value: " + PyRuntime.pyRepr(newl));
+            throw new PyException("ValueError", "illegal newline value: " + newl);
         String enc = optStr(encoding, "encoding"), err = optStr(errors, "errors");
         if (enc != null && enc.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
         if (err != null && err.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
@@ -119,10 +119,11 @@ final class IoText {
         t.writeTranslate = newl == null || !newl.isEmpty();
         t.writenl = newl == null || newl.isEmpty() || newl.equals("\n") ? null : newl;
         t.decoded = ""; t.used = 0; t.hasSnap = false; t.plen = 0;
+        boolean canRead = PyRuntime.truth(PyRuntime.callMethod(buffer, "readable", new Object[0]));
         t.hasRead1 = PyRuntime.truth(PyRuntime.hasattr(buffer, "read1"));
         t.seekable = t.telling = PyRuntime.truth(PyRuntime.callMethod(buffer, "seekable", new Object[0]));
         t.decoder = null; t.nldec = null; t.encoder = null;
-        if (PyRuntime.truth(PyRuntime.callMethod(buffer, "readable", new Object[0]))) setupDecoder(t);
+        if (canRead) setupDecoder(t);
         if (PyRuntime.truth(PyRuntime.callMethod(buffer, "writable", new Object[0]))) {
             t.encoder = IoCodec.encoder(enc, err);
             if (t.seekable && t.encoder instanceof IoCodec.ObjEnc e) {
@@ -459,8 +460,7 @@ final class IoText {
     public static Object truncate(Object self, Object pos) {
         T t = open(self);
         flush(self);
-        Object p = pos == null ? tell(self) : pos;
-        return PyRuntime.callMethod(t.buffer, "truncate", new Object[]{p});
+        return PyRuntime.callMethod(t.buffer, "truncate", new Object[]{pos});
     }
 
     public static Object bufferGet(Object self) { return live(self).buffer; }
@@ -485,7 +485,7 @@ final class IoText {
         T t = st(self);
         StringBuilder sb = new StringBuilder("<").append(IoFile.typeRepr(self));
         for (String attr : new String[]{"name", "mode"}) {
-            try { sb.append(' ').append(attr).append('=').append(PyRuntime.pyRepr(PyRuntime.getattr(self, attr))); }
+            try { Object v = PyRuntime.getattr(self, attr); sb.append(' ').append(attr).append('=').append(PyRuntime.pyRepr(v)); }
             catch (PyException e) { if (!PyRuntime.exceptionIsSubclass(e.typeName, "AttributeError")) throw e; }
         }
         sb.append(" encoding=").append(PyRuntime.pyRepr(t.encoding)).append('>');
@@ -511,7 +511,7 @@ final class IoText {
         if (nl != PyRuntime.ELLIPSIS) {
             Object n = NativeSubclass.unwrap(nl);
             if (n != null && !(n instanceof String s && (s.isEmpty() || s.equals("\n") || s.equals("\r") || s.equals("\r\n"))))
-                throw new PyException("ValueError", "illegal newline value: " + PyRuntime.pyRepr(n));
+                throw new PyException("ValueError", "illegal newline value: " + n);
             String newl = (String) n;
             t.readUniversal = newl == null || newl.isEmpty(); t.readTranslate = newl == null; t.readnl = newl;
             t.writeTranslate = newl == null || !newl.isEmpty();

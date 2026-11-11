@@ -1820,8 +1820,21 @@ public final class PyRuntime {
     public static Object iter(Object value) {
         if(value instanceof Iterator<?>) return value;
         {Object meta=metaSpecial(value,"__iter__");if(meta!=MISSING)return meta;}
-        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__iter__");if(m!=null)return invoke(instance,m,new Object[0]);}
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__iter__");if(m!=null){Object r=invoke(instance,m,new Object[0]);return r instanceof Iterator<?> ? r : protocolIterator(r);}}
         return iterable(value).iterator();
+    }
+    /** A Java iterator over an object that follows the __next__ protocol (what __iter__ returned). */
+    static Object protocolIterator(Object it) {
+        return new Iterator<Object>() {
+            Object buffered = null; boolean hasBuffered = false, done = false;
+            public boolean hasNext() {
+                if (done) return false;
+                if (hasBuffered) return true;
+                try { buffered = next_(it); hasBuffered = true; return true; }
+                catch (PyException e) { if (e.typeName.equals("StopIteration")) { done = true; return false; } throw e; }
+            }
+            public Object next() { if (!hasNext()) throw new NoSuchElementException(); Object out = buffered; buffered = null; hasBuffered = false; return out; }
+        };
     }
     public static boolean iterHasNext(Object iterator) { return ((Iterator<?>) iterator).hasNext(); }
     public static Object iterNext(Object iterator) { return ((Iterator<?>) iterator).next(); }
