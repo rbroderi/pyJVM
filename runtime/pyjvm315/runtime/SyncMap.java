@@ -40,10 +40,33 @@ final class SyncMap<K,V> extends LinkedHashMap<K,V> {
     @Override public Collection<V> values() { if (!SyncSupport.MT) return super.values(); synchronized (this) { return new ArrayList<>(super.values()); } }
     @Override public Set<Map.Entry<K,V>> entrySet() {
         if (!SyncSupport.MT) return super.entrySet();
+        ArrayList<Map.Entry<K,V>> snap;
         synchronized (this) {
-            LinkedHashSet<Map.Entry<K,V>> out = new LinkedHashSet<>();
-            for (Map.Entry<K,V> e : super.entrySet()) out.add(new java.util.AbstractMap.SimpleEntry<>(e.getKey(), e.getValue()));
-            return out;
+            snap = new ArrayList<>(super.size());
+            for (Map.Entry<K,V> e : super.entrySet()) snap.add(new LiveEntry(e.getKey(), e.getValue()));
         }
+        return new java.util.AbstractSet<Map.Entry<K,V>>() {
+            @Override public int size() { return snap.size(); }
+            @Override public java.util.Iterator<Map.Entry<K,V>> iterator() {
+                java.util.Iterator<Map.Entry<K,V>> it = snap.iterator();
+                return new java.util.Iterator<>() {
+                    Map.Entry<K,V> last;
+                    @Override public boolean hasNext() { return it.hasNext(); }
+                    @Override public Map.Entry<K,V> next() { return last = it.next(); }
+                    @Override public void remove() { SyncMap.this.remove(last.getKey()); }
+                };
+            }
+        };
+    }
+
+    /** A snapshot entry; setValue writes through to the map. Entries are never hashed (values may be unhashable). */
+    private final class LiveEntry implements Map.Entry<K,V> {
+        final K key; V value;
+        LiveEntry(K key, V value) { this.key = key; this.value = value; }
+        @Override public K getKey() { return key; }
+        @Override public V getValue() { return value; }
+        @Override public V setValue(V v) { V old = value; value = v; SyncMap.this.put(key, v); return old; }
+        @Override public int hashCode() { return System.identityHashCode(this); }
+        @Override public boolean equals(Object o) { return o == this; }
     }
 }

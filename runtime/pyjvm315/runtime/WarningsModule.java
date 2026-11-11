@@ -19,6 +19,7 @@ public final class WarningsModule {
     private WarningsModule() {}
 
     static final ArrayList<Object> FILTERS = new ArrayList<>();
+    private static ArrayList<Object> filtersSnapshot() { synchronized (FILTERS) { return new ArrayList<>(FILTERS); } }
     static final PyDict ONCE_REGISTRY = new PyDict();
     static String defaultAction = "default";
 
@@ -108,7 +109,7 @@ public final class WarningsModule {
         Map<Object,Object> reg = registry instanceof Map<?,?> ? (Map<Object,Object>) registry : null;
         if (reg != null && PyRuntime.truth(reg.get(key))) return null;
         String action = null;
-        for (Object f : new ArrayList<>(FILTERS)) {
+        for (Object f : filtersSnapshot()) {
             PyTuple t = (PyTuple) f;
             Object msgRe = t.items.get(1), cat = t.items.get(2), modRe = t.items.get(3);
             long ln = ((Number) t.items.get(4)).longValue();

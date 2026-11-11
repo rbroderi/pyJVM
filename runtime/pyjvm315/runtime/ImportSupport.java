@@ -242,12 +242,30 @@ public final class ImportSupport {
     /** {@code import a.b.c} with the whole chain already in sys.modules: the top-level package. */
     private static Object fastLookup(String name) {
         int dot = name.indexOf('.');
+        Object found;
         synchronized (MODULES) {
             Object m = MODULES.get(name);
             if (!(m instanceof PyModule)) return null;
-            if (dot < 0) return m;
-            Object top = MODULES.get(name.substring(0, dot));
-            return top instanceof PyModule ? top : null;
+            if (dot < 0) found = m;
+            else {
+                Object top = MODULES.get(name.substring(0, dot));
+                if (!(top instanceof PyModule)) return null;
+                found = top;
+            }
+            if (!SyncSupport.MT) return found;
+        }
+        // threads: a module another thread is still executing must go through importlib, which waits on its module lock
+        return initializing(MODULES.get(name)) || (dot > 0 && initializing(found)) ? null : found;
+    }
+
+    private static boolean initializing(Object module) {
+        if (!(module instanceof PyModule)) return false;
+        try {
+            Object spec = PyRuntime.getattr(module, "__spec__");
+            return spec != null && PyRuntime.truth(PyRuntime.getattr(spec, "_initializing"));
+        } catch (PyException e) {
+            if (e.typeName.equals("AttributeError")) return false;
+            throw e;
         }
     }
 

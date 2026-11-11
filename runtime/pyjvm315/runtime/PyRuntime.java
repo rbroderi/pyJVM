@@ -122,11 +122,22 @@ public final class PyRuntime {
         return new PyModuleSpec((String)nameObj,(String)originObj,(String)parentObj,(Boolean)packageObj,loaderObj);
     }
 
-    static final LinkedHashMap<String,PyModule> MODULE_CACHE = new LinkedHashMap<>();
+    static final SyncMap<String,PyModule> MODULE_CACHE = new SyncMap<>();
+    /** Modules whose body is running right now, so a second thread importing the same name waits for completion. */
+    private static final java.util.concurrent.ConcurrentHashMap<String,Object[]> LOADING = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Object NATIVE_LOCK = new Object();
+    private static void awaitLoading(String name) {
+        Object[] st = LOADING.get(name);
+        if (st == null || st[0] == Thread.currentThread()) return;
+        try { ((java.util.concurrent.CountDownLatch) st[1]).await(); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new PyException("KeyboardInterrupt", null); }
+    }
     /** `import ast` / `import _ast`: modules implemented in Java rather than compiled from Python. */
     public static Object importNative(Object nameObj) {
         String name=(String)nameObj;
         PyModule cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
+        synchronized (NATIVE_LOCK) {
+        cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
         PyModule module = switch(name){
             case "ast" -> AstModule.module();
             case "_ast" -> AstModule.privateModule();
@@ -138,10 +149,23 @@ public final class PyRuntime {
         };
         MODULE_CACHE.put(name,module); ImportSupport.register(name,module);
         return module;
+        }
     }
     public static Object importModule(Object nameObj,Object classObj) {
         String name=(String)nameObj, className=(String)classObj;
-        PyModule cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
+        PyModule cached=ImportSupport.cachedModule(name);
+        if(cached!=null){ if(SyncSupport.MT){ awaitLoading(name); PyModule again=ImportSupport.cachedModule(name); if(again!=null) return again; } else return cached; }
+        Object[] loading=null;
+        if(SyncSupport.MT){
+            Object[] mine={Thread.currentThread(),new java.util.concurrent.CountDownLatch(1)};
+            Object[] prior=LOADING.putIfAbsent(name,mine);
+            if(prior!=null){ awaitLoading(name); PyModule again=ImportSupport.cachedModule(name); if(again!=null) return again; }
+            else loading=mine;
+        }
+        try { return importModule0(name,className); }
+        finally { if(loading!=null){ LOADING.remove(name,loading); ((java.util.concurrent.CountDownLatch)loading[1]).countDown(); } }
+    }
+    private static Object importModule0(String name,String className) {
         PyModule module=new PyModule(name,className); MODULE_CACHE.put(name,module); ImportSupport.register(name,module);
         int dot=name.lastIndexOf('.');
         if(dot>0){ PyModule parent=MODULE_CACHE.get(name.substring(0,dot)); if(parent!=null) parent.attrs.put(name.substring(dot+1),module); }
