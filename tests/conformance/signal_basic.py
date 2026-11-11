@@ -88,3 +88,8 @@ t(signal.siginterrupt, 0, False)
 t(os.kill, os.getpid(), 0)
 t(os.kill, os.getpid(), 65)
 print(sorted(n for n in dir(signal) if n.startswith(('pthread', 'sig', 'set', 'get', 'raise', 'alarm', 'pause', 'valid', 'strsig')) and n not in ('sigtimedwait', 'sigwaitinfo')))
+
+try:
+    signal.signal(signal.SIGUSR1, None)
+except TypeError as e:
+    print("TypeError", e)

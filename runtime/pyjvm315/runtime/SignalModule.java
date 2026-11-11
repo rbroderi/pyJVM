@@ -128,7 +128,7 @@ final class SignalModule {
         Object[] p = NativeArgs.parse("signal", a, k, new String[]{"signalnum", "handler"}, 2, 2);
         int s = signum(p[0]);
         Object h = p[1];
-        boolean ok = h instanceof Long l && (l == SIG_DFL || l == SIG_IGN) || PyRuntime.truth(PyRuntime.callBuiltin("callable", new ArrayList<Object>(List.of(h)), new LinkedHashMap<Object, Object>()));
+        boolean ok = h instanceof Long l && (l == SIG_DFL || l == SIG_IGN) || Boolean.TRUE.equals(PyRuntime.callable_(h));
         if (!ok) throw new PyException("TypeError", "signal handler must be signal.SIG_IGN, signal.SIG_DFL, or a callable object");
         if (!isMain()) throw new PyException("ValueError", "signal only works in main thread of the main interpreter");
         if (s == 9 || s == 19) throw osErr("OSError", 22, "Invalid argument");
