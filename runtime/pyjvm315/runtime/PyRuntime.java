@@ -133,6 +133,7 @@ public final class PyRuntime {
             case "sys" -> NativeModules.sys();
             case "builtins" -> Namespaces.builtinsModule();
             case "jvm_io" -> NativeModules.jvmIo();
+            case "_string" -> NativeModules.stringHelpers();
             default -> ImportSupport.createNative(name);
         };
         MODULE_CACHE.put(name,module); ImportSupport.register(name,module);
@@ -258,7 +259,10 @@ public final class PyRuntime {
         if(name.equals("dir") && n<=1)return n==0?dirLocals():dirValue(args.get(0));
         if(name.equals("vars") && n<=1)return n==0?varsLocals():varsValue(args.get(0));
         if((name.equals("globals") || name.equals("locals")) && n==0)return name.equals("globals")?Namespaces.globalsCall():Namespaces.localsCall();
-        if(name.equals("format") && (n==1 || n==2))return formatValue(args.get(0),n==1?"":args.get(1));
+        if(name.equals("format")){
+            if(n<1 || n>2)throw new PyException("TypeError",n<1?"format expected at least 1 argument, got 0":"format expected at most 2 arguments, got "+n);
+            return formatValue(args.get(0),n==1?"":args.get(1));
+        }
         if(name.equals("next") && (n==1 || n==2)) {
             try { return next_(args.get(0)); }
             catch(PyException e) { if(n==2 && exceptionIsSubclass(e.typeName,"StopIteration")) return args.get(1); throw e; }
@@ -512,6 +516,10 @@ public final class PyRuntime {
             PyMethod m=instance.cls.lookupMethod("__str__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
             if(instance.payload!=null && (instance.cls.nativeKind.equals("str") || instance.cls.nativeKind.equals("bytes"))) return pyStr(instance.payload);
+            if(ExceptionGroupSupport.isGroup(instance)) {
+                int n=ExceptionGroupSupport.groupExceptions(instance).items.size();
+                return pyStr(ExceptionGroupSupport.groupMessage(instance))+" ("+n+" sub-exception"+(n==1?"":"s")+")";
+            }
             m=instance.cls.lookupMethod("__repr__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}
             if(instance.cls.exceptionBase!=null && instance.fields.get("args") instanceof PyTuple a) {
@@ -1060,45 +1068,23 @@ public final class PyRuntime {
 
     public static Object ascii_(Object value){return asciiRepr(value);}
     public static Object formatValue(Object value,Object specObj){
-        if(!(specObj instanceof String spec))throw new PyException("TypeError","format() argument 2 must be str, not "+typeName(specObj));
+        if(!(specObj instanceof String spec))throw new PyException("TypeError","format() argument 2 must be str, not "+(specObj==null?"None":typeName(specObj)));
         PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
         if(owner!=null){
             Object method=owner.lookupAttr("__format__");
             if(method!=MISSING){
                 Object result=callFunction(descriptorGet(method,value,owner),new ArrayList<>(List.of(spec)),new LinkedHashMap<>());
-                if(!(result instanceof String))throw new PyException("TypeError","__format__ must return a str, not "+typeName(result));
+                if(!(result instanceof String))throw new PyException("TypeError",owner.qualname+".__format__() must return a str, not "+typeName(result));
                 return result;
             }
         }
-        if(value instanceof PyInstance w && w.payload!=null && (w.payload instanceof String || isIntLike(w.payload) || w.payload instanceof Double))
-            return spec.isEmpty()?pyStr(value):new FormatSpec(spec).apply(w.payload);
-        if(value instanceof String || isIntLike(value) || value instanceof Double)return new FormatSpec(spec).apply(value);
-        return objectFormat(value,spec);
+        String text=FormatSpec.formatNative(value,spec);
+        return text!=null?text:objectFormat(value,spec);
     }
     static Object objectFormat(Object value,Object specObj){
         if(!(specObj instanceof String spec))throw new PyException("TypeError","__format__() argument must be str");
         if(!spec.isEmpty())throw new PyException("TypeError","unsupported format string passed to "+typeName(value)+".__format__");
         return pyStr(value);
-    }
-    static String shortestFloat(double value){
-        if(Double.isNaN(value))return "nan";
-        if(Double.isInfinite(value))return value<0?"-inf":"inf";
-        boolean negative=Double.doubleToRawLongBits(value)<0;
-        if(value==0)return negative?"-0.0":"0.0";
-        double absolute=Math.abs(value);
-        java.math.BigDecimal exact=new java.math.BigDecimal(absolute),rounded=exact;
-        for(int digits=1;digits<=17;digits++){
-            rounded=exact.round(new java.math.MathContext(digits,java.math.RoundingMode.HALF_EVEN));
-            if(Double.doubleToLongBits(rounded.doubleValue())==Double.doubleToLongBits(absolute))break;
-        }
-        rounded=rounded.stripTrailingZeros();int exponent=rounded.precision()-rounded.scale()-1;
-        String body;
-        if(exponent>=-4 && exponent<16){body=rounded.toPlainString();if(body.indexOf('.')<0)body+=".0";}
-        else body=rounded.movePointLeft(exponent).toPlainString()+"e"+(exponent<0?"-":"+")+(Math.abs(exponent)<10?"0":"")+Math.abs(exponent);
-        return (negative?"-":"")+body;
-    }
-    static String groupDigits(String digits,int size,char separator){
-        StringBuilder out=new StringBuilder();for(int i=0;i<digits.length();i++){if(i>0 && (digits.length()-i)%size==0)out.append(separator);out.append(digits.charAt(i));}return out.toString();
     }
 
     // Percent formatting is kept off the shared method dispatcher/JIT hot paths.
@@ -1151,44 +1137,12 @@ public final class PyRuntime {
         if(value instanceof BigInteger && !Double.isFinite(result))throw new PyException("OverflowError","int too large to convert to float");
         return result;
     }
-    static String floatDigits(double number,char conversion,int precision,boolean alternate){
-        // CPython reserves headroom for binary64 digits and exponent in int-sized buffers.
-        if(precision>Integer.MAX_VALUE-1024)throw new PyException("ValueError","precision too big");
-        if(Double.isNaN(number))return Character.isUpperCase(conversion)?"NAN":"nan";
-        if(Double.isInfinite(number))return Character.isUpperCase(conversion)?"INF":"inf";
-        int digits=precision<0?6:precision;
-        char kind=Character.toLowerCase(conversion);
-        java.math.BigDecimal exact=new java.math.BigDecimal(number),rounded;
-        String body;
-        if(kind=='f'){
-            body=exact.setScale(digits,java.math.RoundingMode.HALF_EVEN).toPlainString();
-            if(digits==0 && alternate)body+=".";
-        }else{
-            int significant=kind=='e'?Math.addExact(digits,1):Math.max(1,digits);
-            rounded=exact.round(new java.math.MathContext(significant,java.math.RoundingMode.HALF_EVEN));
-            int exponent=rounded.signum()==0?0:rounded.precision()-rounded.scale()-1;
-            if(kind=='e' || exponent<-4 || exponent>=significant){
-                body=rounded.movePointLeft(exponent).setScale(significant-1,java.math.RoundingMode.HALF_EVEN).toPlainString();
-                if(kind=='g' && !alternate)body=trimFraction(body);
-                if(alternate && body.indexOf('.')<0)body+=".";
-                body+=(Character.isUpperCase(conversion)?"E":"e")+(exponent<0?"-":"+")+(Math.abs(exponent)<10?"0":"")+Math.abs(exponent);
-            }else{
-                body=rounded.setScale(Math.max(0,significant-exponent-1),java.math.RoundingMode.HALF_EVEN).toPlainString();
-                if(!alternate)body=trimFraction(body);
-                else if(body.indexOf('.')<0)body+=".";
-            }
-        }
-        return body;
-    }
-    static String trimFraction(String text){
-        if(text.indexOf('.')<0)return text;
-        int end=text.length();while(end>0 && text.charAt(end-1)=='0')end--;
-        if(end>0 && text.charAt(end-1)=='.')end--;
-        return text.substring(0,end);
-    }
+    static String floatDigits(double number,char conversion,int precision,boolean alternate){return FormatFloat.digits(number,conversion,precision,alternate,false);}
+    static String shortestFloat(double value){return FormatFloat.repr(value);}
 
     public static Object mod(Object a, Object b) {
-        if(a instanceof String format)return new PercentFormatter(format,b).run();
+        if(a instanceof String format)return PercentFormat.formatString(format,b);
+        if(a instanceof PyByteSequence)return PercentFormat.formatBytes(a,b);
         if (isIntLike(a) && isIntLike(b)) {
             BigInteger x = bigInt(a), y = bigInt(b);
             if (y.signum() == 0) throw new ArithmeticException("integer division or modulo by zero");
@@ -1368,7 +1322,13 @@ public final class PyRuntime {
         }
         if((isIntLike(a)||a instanceof Double) && (isIntLike(b)||b instanceof Double)
             && (a instanceof Double x && Double.isNaN(x) || b instanceof Double y && Double.isNaN(y)))return false;
-        int c=cmp(a,b); return switch(fallback){case -2->c<0;case -1->c<=0;case 1->c>=0;default->c>0;};
+        int c;
+        try{c=cmp(a,b);}catch(IllegalArgumentException e){
+            if(e.getMessage()!=null && e.getMessage().startsWith("comparison not supported"))
+                throw new PyException("TypeError","'"+switch(fallback){case -2->"<";case -1->"<=";case 1->">=";default->">";}+"' not supported between instances of '"+typeName(a)+"' and '"+typeName(b)+"'");
+            throw e;
+        }
+        return switch(fallback){case -2->c<0;case -1->c<=0;case 1->c>=0;default->c>0;};
     }
     public static Object lt(Object a, Object b) { return richCompare(a,b,"__lt__","__gt__",-2); }
     public static Object le(Object a, Object b) { return richCompare(a,b,"__le__","__ge__",-1); }
@@ -1659,6 +1619,7 @@ public final class PyRuntime {
             if (!m.containsKey(key)) throw new PyException("KeyError",key);
             return m.get(key);
         }
+        if(key instanceof String || key instanceof Double || key==null || !(value instanceof List || value instanceof PyTuple || value instanceof PyRange || value instanceof String))throw indexTypeError(value,key);
         int i = asIndex(key);
         if (value instanceof List<?> xs) return xs.get(normalizeIndex(i, xs.size()));
         if (value instanceof PyTuple t) return t.items.get(normalizeIndex(i, t.items.size()));
@@ -1674,7 +1635,13 @@ public final class PyRuntime {
             int end = s.offsetByCodePoints(start, 1);
             return s.substring(start, end);
         }
-        throw typeError("object is not subscriptable", value);
+        throw indexTypeError(value,key);
+    }
+    static PyException indexTypeError(Object value,Object key){
+        String kind=typeName(value),given=typeName(key);
+        if(value instanceof List || value instanceof PyTuple || value instanceof PyRange)return new PyException("TypeError",kind+" indices must be integers or slices, not "+given);
+        if(value instanceof String)return new PyException("TypeError","string indices must be integers, not '"+given+"'");
+        return new PyException("TypeError","'"+kind+"' object is not subscriptable");
     }
 
     @SuppressWarnings("unchecked")
@@ -1799,30 +1766,9 @@ public final class PyRuntime {
 
     public static Object sorted(Object value) { return sortedCall(Collections.singletonList(value),Collections.emptyMap()); }
     static Object sortedCall(List<Object> args,Map<Object,Object> kwargs) {
-        if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 positional argument");
+        if(args.size()!=1)throw new PyException("TypeError","sorted expected 1 argument, got "+args.size());
         ArrayList<Object> values=new ArrayList<>();for(Object value:iterable(args.get(0)))values.add(value);
-        for(Object keyword:kwargs.keySet()) if(!keyword.equals("key") && !keyword.equals("reverse"))
-            throw new PyException("TypeError","invalid keyword argument for sorted()");
-        boolean reverse=truth(kwargs.get("reverse"));
-        Object key=kwargs.get("key");
-        ArrayList<SortItem> items=new ArrayList<>();
-        for(Object value:values)items.add(new SortItem(value,key==null?value:unaryCall(key,value)));
-        // Stable merge sort asks only <, like Python, and does not impose Java's
-        // comparator contract on user-defined partial/inconsistent orderings.
-        ArrayList<SortItem> scratch=new ArrayList<>(items);
-        int size=items.size();
-        for(long width=1;width<size;width*=2) {
-            for(long start=0;start<size;start+=2*width) {
-                int left=(int)start,middle=(int)Math.min(start+width,size),right=middle,end=(int)Math.min(start+2*width,size);
-                for(int output=(int)start;output<end;output++) {
-                    boolean takeRight=left>=middle || right<end && truth(reverse?
-                        lt(items.get(left).key,items.get(right).key):lt(items.get(right).key,items.get(left).key));
-                    scratch.set(output,takeRight?items.get(right++):items.get(left++));
-                }
-            }
-            ArrayList<SortItem> old=items;items=scratch;scratch=old;
-        }
-        values.clear();for(SortItem item:items)values.add(item.value);
+        ListMethods.sortInPlace(values,kwargs);
         return values;
     }
     public static Object reversed(Object value) {
@@ -2022,10 +1968,13 @@ public final class PyRuntime {
         return out.toString();
     }
     static String bytesRepr(byte[] raw){
-        StringBuilder out=new StringBuilder("b'");
+        boolean hasSingle=false,hasDouble=false;
+        for(byte bb:raw){if(bb=='\'')hasSingle=true;else if(bb=='"')hasDouble=true;}
+        char quote=hasSingle && !hasDouble?'"':'\'';
+        StringBuilder out=new StringBuilder("b").append(quote);
         for(byte bb:raw){
             int v=bb&0xff;
-            if(v=='\\' || v=='\'') out.append('\\').append((char)v);
+            if(v=='\\' || v==quote) out.append('\\').append((char)v);
             else if(v>=32 && v<127) out.append((char)v);
             else switch(v){
                 case 9 -> out.append("\\t");
@@ -2034,7 +1983,7 @@ public final class PyRuntime {
                 default -> out.append(String.format("\\x%02x",v));
             }
         }
-        return out.append('\'').toString();
+        return out.append(quote).toString();
     }
     static byte[] requireBytesLike(Object value){
         if(value instanceof PyInstance w && w.payload instanceof PyByteSequence seq) return seq.toByteArray();
@@ -2645,7 +2594,9 @@ public final class PyRuntime {
                     return NativeSubclassMethods.callInitNew(nativeType.name,method.name,args,kwargs);
                 if(method.self instanceof Map<?,?> && method.name.equals("update")) return callMethodDynamic(method.self,method.name,args,kwargs);
                 if(method.self instanceof List<?> && method.name.equals("sort")) return callMethodDynamic(method.self,method.name,args,kwargs);
-                if(method.self instanceof String fmt && method.name.equals("format")) return StrFormat.format(fmt,args,kwargs);
+                if(method.self instanceof PyBuiltinType listType && listType.name.equals("list") && method.name.equals("sort") && !args.isEmpty() && args.get(0) instanceof List<?>)
+                    return callMethodDynamic(args.get(0),method.name,new ArrayList<>(args.subList(1,args.size())),kwargs);
+                if(method.self instanceof String fmt && method.name.equals("format")) return FormatTemplate.format(fmt,args,kwargs);
                 List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : null;
                 if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
                 Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
@@ -2750,7 +2701,7 @@ public final class PyRuntime {
             PyMethod method=instance.cls.lookupMethod("__call__");
             if(method!=null)return invokeKw(instance,method,args,kwargs);
         }
-        throw new PyException("TypeError", "object is not callable");
+        throw new PyException("TypeError", "'"+typeName(callable)+"' object is not callable");
     }
 
 
@@ -2840,19 +2791,20 @@ public final class PyRuntime {
 
     // ---------- Exceptions ----------
     public static Object makeException(Object typeObj, Object value) {
+        if (value == null && BuiltinsExtra.isGroupType((String)typeObj)) return BuiltinsExtra.newException((String)typeObj, new ArrayList<Object>());
         return new PyExceptionValue((String)typeObj, value);
     }
 
     /** A PyException for a user-defined exception class or instance, or null when {@code value} is neither. */
     static PyException userException(Object value) {
         if(value instanceof PyClass cls && cls.exceptionBase!=null) value=instantiate(cls,new Object[0]);
-        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return new PyException(inst.cls.name,inst);
+        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return ExceptionGroupSupport.throwableFor(inst);
         return null;
     }
     public static void raiseObject(Object value) {
         PyException user=userException(value);
         if(user!=null) throw user;
-        if (value instanceof PyExceptionValue e) { PyException again = new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback); again.syntax = e.syntax; throw again; }
+        if (value instanceof PyExceptionValue e) throw ExceptionGroupSupport.throwableFor(e);
         if (value instanceof PyException e) throw e;
         if (value instanceof PyBuiltinType t && exceptionIsSubclass(t.name,"BaseException")) throw new PyException(t.name,null);
         throw new PyException("TypeError", "exceptions must derive from BaseException");
@@ -2863,30 +2815,45 @@ public final class PyRuntime {
         if (value instanceof Throwable t) throw new RuntimeException(t);
         throw new PyException("RuntimeError", "no active exception to reraise");
     }
-    public static void raiseObjectWithContext(Object value, Object contextObj) {
+    public static void raiseObjectWithContext(Object value, Object contextObj) { throw preparedWithContext(value, contextObj); }
+    static PyException preparedWithContext(Object value, Object contextObj) {
+        if(value instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) value=new PyExceptionValue(bt.name,null);
         PyException raised=userException(value);
         if (raised!=null) {}
-        else if (value instanceof PyExceptionValue e) { raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback); raised.syntax=e.syntax; }
+        else if (value instanceof PyExceptionValue e) raised=ExceptionGroupSupport.throwableFor(e);
         else if (value instanceof PyException e) raised=e;
         else throw new PyException("TypeError", "exceptions must derive from BaseException");
         if(!raised.suppressContext && contextObj instanceof Throwable t) {
-            raised.context=exceptionInstance(t);
+            Object handled=exceptionInstance(t);
+            if(handled!=raised.instance && handled!=raised.value) {
+                raised.context=handled;
+                if(raised.instance!=null) ExceptionGroupSupport.setContext(raised.instance,handled);
+            }
         }
-        throw raised;
+        return raised;
+    }
+    public static void raiseObjectFromWithContext(Object value, Object causeObj, Object contextObj) {
+        PyException raised=preparedWithContext(value, contextObj);
+        raiseObjectFrom(raised, causeObj);
     }
     public static void raiseObjectFrom(Object value, Object causeObj) {
+        if(value instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) value=new PyExceptionValue(bt.name,null);
         PyException raised=userException(value);
         if(raised!=null) {}
-        else if(value instanceof PyExceptionValue e) { raised=new PyException(e.typeName,e.value); raised.syntax=e.syntax; }
+        else if(value instanceof PyExceptionValue e) raised=ExceptionGroupSupport.throwableFor(e);
         else if(value instanceof PyException e) raised=e;
         else throw new PyException("TypeError","exceptions must derive from BaseException");
-        if(causeObj == null) { raised.cause=null; raised.suppressContext=true; throw raised; }
-        if(causeObj instanceof PyExceptionValue e) raised.cause=e;
-        else if(causeObj instanceof PyException e) raised.cause=exceptionInstance(e);
-        else if(causeObj instanceof PyInstance ci && ci.cls.exceptionBase!=null) raised.cause=ci;
+        Object cause;
+        if(causeObj == null) cause=null;
+        else if(causeObj instanceof PyExceptionValue e) cause=e;
+        else if(causeObj instanceof PyException e) cause=exceptionInstance(e);
+        else if(causeObj instanceof PyInstance ci && ci.cls.exceptionBase!=null) cause=ci;
+        else if(causeObj instanceof PyClass cc && cc.exceptionBase!=null) cause=instantiate(cc,new Object[0]);
+        else if(causeObj instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) cause=new PyExceptionValue(bt.name,null);
         else throw new PyException("TypeError","exception causes must derive from BaseException");
-        raised.suppressContext=true;
-        if(raised.value instanceof PyInstance user) user.fields.put("__cause__",raised.cause);
+        raised.cause=cause; raised.suppressContext=true;
+        Object target=raised.value instanceof PyInstance ? raised.value : raised.instance;
+        if(target!=null){ ExceptionGroupSupport.setCause(target,cause); ExceptionGroupSupport.setSuppress(target,true); }
         throw raised;
     }
 
@@ -2939,13 +2906,13 @@ public final class PyRuntime {
         Throwable t = (Throwable)throwableObj;
         if (t instanceof PyException p) return p.value;
         String msg = t.getMessage();
+        if (t instanceof StackOverflowError) return "maximum recursion depth exceeded";
         return msg == null ? "" : msg;
     }
     public static Object exceptionInstance(Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        if (t instanceof PyException p && p.value instanceof PyInstance user && user.cls.exceptionBase!=null) return user;
-        if (t instanceof PyException p) { PyExceptionValue v = new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext,p.traceback); v.syntax = p.syntax; return v; }
-        return new PyExceptionValue(pythonExceptionType(t), exceptionValue(t));
+        if (t instanceof PyException p) return ExceptionGroupSupport.instanceFor(p);
+        return ExceptionGroupSupport.instanceForForeign(t);
     }
 
     static String pythonExceptionType(Throwable t) {
@@ -2954,6 +2921,7 @@ public final class PyRuntime {
         if (t instanceof IndexOutOfBoundsException) return "IndexError";
         if (t instanceof NoSuchElementException) return "KeyError";
         if (t instanceof IllegalArgumentException || t instanceof ClassCastException) return "TypeError";
+        if (t instanceof StackOverflowError) return "RecursionError";
         if (t instanceof AssertionError) return "AssertionError";
         if (t instanceof NoSuchElementException) return "KeyError";
         return "RuntimeError";
@@ -2977,6 +2945,7 @@ public final class PyRuntime {
         if(base instanceof PyBuiltinType sealed && sealed.name.equals("sentinel")) throw new PyException("TypeError","type 'sentinel' is not an acceptable base type");
         if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
+            else if(target.exceptionBase.equals("BaseExceptionGroup") && exceptionIsSubclass(exc.name,"Exception")){ target.exceptionBase="ExceptionGroup"; target.builtinBaseName="ExceptionGroup"; EXCEPTION_PARENTS.put(target.name,"ExceptionGroup"); }
             return;
         }
         if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super") || DESCRIPTOR_TYPES.contains(builtin.name) || builtin.name.equals("GenericAlias"))) {
@@ -3361,7 +3330,7 @@ public final class PyRuntime {
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
         if(name.equals("__reduce_ex__") || name.equals("__reduce__"))return true;
-        if(exceptionIsSubclass(type,"BaseException") && name.equals("__init__"))return true;
+        if(exceptionIsSubclass(type,"BaseException") && (name.equals("__init__") || name.equals("__new__")))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
             case "str" -> name.equals("__mod__") || name.equals("maketrans");
@@ -3380,6 +3349,11 @@ public final class PyRuntime {
             Object base=mro.get(i);
             if(base instanceof PyClass cls && cls.attrs.containsKey(name))
                 return descriptorGet(cls.attrs.get(name),sup.self==sup.owner?null:sup.self,sup.owner);
+            if(base instanceof PyBuiltinType group && group.name.endsWith("ExceptionGroup") && sup.self!=sup.owner
+                && (name.equals("split") || name.equals("subgroup") || name.equals("derive"))) {
+                Object bound=ExceptionGroupSupport.getattr(sup.self,name);
+                if(bound!=MISSING) return bound;
+            }
             if(base instanceof PyBuiltinType builtin && builtinHasMethod(builtin.name,name)) {
                 Object callable=new BuiltinBoundMethod(base,name);
                 return name.equals("__new__") || name.equals("__init_subclass__") || sup.self==sup.owner?callable:new BoundCallable(callable,sup.self);
@@ -3417,6 +3391,7 @@ public final class PyRuntime {
             if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
+        if(newMethod!=null && cls.exceptionBase!=null && created instanceof PyInstance made && made.cls.exceptionBase!=null && cls.lookupMethod("__init__")==null) ExceptionGroupSupport.setArgsField(made,args);
         // __init__ is called only when __new__ produced an instance of cls or a
         // subclass, matching Python's constructor protocol.
         if(created instanceof PyInstance instance && instance.cls.mro.contains(cls)) {
@@ -3442,7 +3417,7 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         String name=(String)nameObj;
         if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
-        if(obj instanceof String fmt && name.equals("format")) return StrFormat.format(fmt,args,kwargs);
+        if(obj instanceof String fmt && name.equals("format")) return FormatTemplate.format(fmt,args,kwargs);
         if(obj instanceof List<?> && name.equals("sort") && args.isEmpty()) { ListMethods.sortInPlace((List<Object>)obj,kwargs); return null; }
         if(obj instanceof Map<?,?> && name.equals("update")) {
             callMethod(obj,name,args.toArray());
@@ -3506,12 +3481,14 @@ public final class PyRuntime {
             requireArgs(name,args,2);
             if(builtin.name.equals("object"))return objectFormat(args[0],args[1]);
             if(!truth(isInstance(args[0],builtin)))throw new PyException("TypeError","format descriptor requires a "+builtin.name+" object");
-            return formatValue(args[0],args[1]);
+            if(!(args[1] instanceof String sp))throw new PyException("TypeError","__format__() argument must be str, not "+typeName(args[1]));
+            String text=FormatSpec.formatNative(args[0],sp);
+            return text!=null?text:objectFormat(args[0],args[1]);
         }
         if(builtin.name.equals("str") && name.equals("__mod__")){
             requireArgs(name,args,2);
             if(!(args[0] instanceof String str))throw new PyException("TypeError","str.__mod__ requires a str object");
-            return new PercentFormatter(str,args[1]).run();
+            return PercentFormat.formatString(str,args[1]);
         }
         if(builtin.name.equals("super") && name.equals("__get__")){
             if(args.length<2 || args.length>3 || !(args[0] instanceof PySuper sup))throw new PyException("TypeError","super.__get__ requires a super object and instance");
@@ -3578,6 +3555,7 @@ public final class PyRuntime {
             return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
         }
         if(builtin.name.equals("int") && name.equals("from_bytes")) return IntMethods.fromBytes(args);
+        if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__new__")) return ExceptionGroupSupport.exceptionNew(builtin,args);
         if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__init__")) {   // BaseException.__init__(self, *args)
             if(args.length<1 || !(args[0] instanceof PyInstance self)) throw new PyException("TypeError","descriptor '__init__' requires an exception instance");
             PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args).subList(1,args.length)); self.fields.put("args",t);
@@ -3862,10 +3840,8 @@ public final class PyRuntime {
             if (name.equals("args")) return BuiltinsExtra.exceptionArgs(exc.value);
             Object groupAttr=BuiltinsExtra.groupAttribute(exc,name); if(groupAttr!=MISSING) return groupAttr;
             if (name.equals("value") && exc.typeName.equals("StopIteration")) return exc.value;
-            if (name.equals("__cause__")) return exc.cause;
-            if (name.equals("__context__")) return exc.context;
-            if (name.equals("__suppress_context__")) return exc.suppressContext;
-            if (name.equals("__traceback__")) return exc.traceback;
+            if (name.equals("code") && exc.typeName.equals("SystemExit")) { PyTuple a=(PyTuple)BuiltinsExtra.exceptionArgs(exc.value); return a.items.isEmpty()?null:a.items.size()==1?a.items.get(0):a; }
+            Object special=ExceptionGroupSupport.getattr(exc,name); if(special!=MISSING) return special;
             Object importAttr=ImportSupport.exceptionAttr(exc,name); if(importAttr!=MISSING) return importAttr;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
         }
@@ -3973,6 +3949,7 @@ public final class PyRuntime {
             PyMethod method=instance.cls.lookupMethod(name);
             if (method != null) return new BoundMethod(instance, name);
             if(instance.payload!=null){Object nativeValue=NativeSubclassMethods.instanceAttribute(instance,name);if(nativeValue!=MISSING)return nativeValue;}
+            if(instance.cls.exceptionBase!=null){Object special=ExceptionGroupSupport.getattr(instance,name);if(special!=MISSING)return special;}
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
@@ -4013,6 +3990,8 @@ public final class PyRuntime {
         }
         if(obj instanceof PyManagedProperty)throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
+        if(obj instanceof PyExceptionValue || obj instanceof PyInstance excInstance && excInstance.cls.exceptionBase!=null && excInstance.cls.lookupAttr(name)==MISSING && excInstance.cls.lookupProperty(name)==null)
+            if(ExceptionGroupSupport.setattr(obj,name,value)) return;
         if (obj instanceof PyInstance instance) {
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) {
@@ -4044,6 +4023,8 @@ public final class PyRuntime {
     }
     public static void delattr(Object obj,Object nameObj) {
         if(obj instanceof TypeParamsObject tp){tp.delattr((String)nameObj);return;}
+        if(nameObj instanceof String excName && (obj instanceof PyExceptionValue || obj instanceof PyInstance excInst && excInst.cls.exceptionBase!=null && excName.startsWith("__"))
+            && ExceptionGroupSupport.delattr(obj,excName)) return;
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyCell cell && nameObj.equals("cell_contents")){cell.set(UNBOUND);return;}

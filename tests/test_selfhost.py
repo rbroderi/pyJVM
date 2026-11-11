@@ -22,4 +22,4 @@ def test_stage2_is_byte_identical_to_stage1(tmp_path):
         proc = subprocess.run([sys.executable, str(ROOT / "tools/selfhost.py"), stage, str(tmp_path)],
                               text=True, capture_output=True, env=env)
         assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "identical 10, different 0, unmatched 0" in proc.stdout, proc.stdout
+    assert "identical 12, different 0, unmatched 0" in proc.stdout, proc.stdout

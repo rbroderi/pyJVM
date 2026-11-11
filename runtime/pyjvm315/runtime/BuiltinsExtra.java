@@ -222,6 +222,7 @@ public final class BuiltinsExtra {
         m.attrs.put("__stdout__", STDOUT); m.attrs.put("__stderr__", STDERR); m.attrs.put("__stdin__", STDIN);
         NativeFunction hook = new NativeFunction("breakpointhook", (a, k) -> defaultBreakpointHook());
         m.attrs.put("breakpointhook", hook); m.attrs.put("__breakpointhook__", hook);
+        ExceptionGroupSupport.installSys(m);
     }
 
     /** The live ``sys.<name>`` when ``sys`` has been loaded, otherwise the process stream. */
@@ -290,6 +291,7 @@ public final class BuiltinsExtra {
 
     static Object newExceptionCall(String type, List<Object> args, Map<Object,Object> kwargs) {
         if (!kwargs.isEmpty()) {
+            if (isGroupType(type) && args.size() != 2) return newGroup(type, args);
             if (ImportSupport.isImportErrorType(type)) return ImportSupport.newImportError(type, args, kwargs);
             if (Set.of("SyntaxError", "IndentationError", "TabError", "OSError", "StopIteration").contains(type))
                 throw new PyException("TypeError", type + "() keyword arguments are not supported by this runtime");
@@ -318,8 +320,8 @@ public final class BuiltinsExtra {
         boolean sequence = excs instanceof List<?> || excs instanceof PyTuple || excs instanceof String || excs instanceof PyRange
             || excs instanceof PyBytes || excs instanceof PyByteArray || excs instanceof PyInstance i && i.cls.lookupMethod("__getitem__") != null;
         if (!sequence) throw new PyException("TypeError", "second argument (exceptions) must be a sequence");
-        PyTuple items = new PyTuple();
-        for (Object item : iterable(excs)) items.items.add(item);
+        PyTuple items = excs instanceof PyTuple given ? given : new PyTuple();
+        if (items != excs) for (Object item : iterable(excs)) items.items.add(item);
         if (items.items.isEmpty()) throw new PyException("ValueError", "second argument (exceptions) must be a non-empty sequence");
         for (int i = 0; i < items.items.size(); i++)
             if (!isExceptionObject(items.items.get(i)))
@@ -345,7 +347,7 @@ public final class BuiltinsExtra {
         if (!(args[0] instanceof String)) throw new PyException("TypeError", "BaseExceptionGroup.__new__() argument 1 must be str, not " + typeName(args[0]));
         PyTuple items = validatedGroupItems(args[1]);
         if (instance.cls.exceptionBase.equals("ExceptionGroup"))
-            for (Object item : items.items) if (!isPlainException(item)) throw new PyException("TypeError", "Cannot nest BaseExceptions in an ExceptionGroup");
+            for (Object item : items.items) if (!isPlainException(item)) throw new PyException("TypeError", "Cannot nest BaseExceptions in '" + instance.cls.name + "'");
         instance.fields.put("message", args[0]);
         instance.fields.put("exceptions", items);
     }
@@ -371,7 +373,7 @@ public final class BuiltinsExtra {
         List<Object> shown = new ArrayList<>();
         if (value instanceof PyExcArgs a) {
             shown.addAll(a.args.items);
-            if (a.group != null && !(shown.get(1) instanceof List<?>)) shown.set(1, new ArrayList<Object>(a.group.items));
+            if (a.group != null && shown.get(1) instanceof List<?>) shown.set(1, new ArrayList<Object>(a.group.items));
         } else if (value != null) {
             shown.add(value);
         }
@@ -408,23 +410,72 @@ public final class BuiltinsExtra {
     // ---------- Handled exception stack (bare raise outside the handler's own function) ----------
     static final ThreadLocal<ArrayList<Object>> HANDLED = ThreadLocal.withInitial(ArrayList::new);
 
+    private static ArrayList<Object> handledStack() {
+        ActiveFrame frame = currentLogicalFrame();
+        if (frame == null) return HANDLED.get();
+        if (frame.handled == null) frame.handled = new ArrayList<>();
+        return frame.handled;
+    }
+
+    public static void registerCarets(Object filename, Object table) { TracebackFormat.registerCarets((String) filename, (String) table); }
+
     public static Object excEnter(Object throwable) {
-        ArrayList<Object> stack = HANDLED.get();
+        ArrayList<Object> stack = handledStack();
         long depth = stack.size();
         stack.add(throwable);
         return depth;
     }
 
+    /** except* bodies run with the matched group as the handled exception (sys.exception()). */
+    public static void excPush(Object value) { PyException view = ExceptionGroupSupport.throwableFor(value); view.handledView = true; handledStack().add(view); }
+
+    public static void excPopIf(Object value) {
+        ArrayList<Object> stack = handledStack();
+        if (!stack.isEmpty() && exceptionInstance(stack.get(stack.size() - 1)) == value) stack.remove(stack.size() - 1);
+    }
+
+    /** Host arithmetic / index failures become Python exceptions where an except clause can observe them. */
+    public static Throwable liftForeign(Throwable t) {
+        if (t instanceof ArithmeticException || t instanceof IndexOutOfBoundsException)
+            return new PyException(pythonExceptionType(t), exceptionValue(t));
+        return t;
+    }
+
+    public static Object excDepth() { return (long) handledStack().size(); }
+
+    /** An exception raised while this frame handles another one gets that one as its __context__ (set once, innermost first). */
+    public static void attachContext(Object throwable) { attachContext(throwable, currentLogicalFrame()); }
+
+    static void attachContext(Object throwable, ActiveFrame frame) {
+        if (!(throwable instanceof PyException p) || frame == null || frame.handled == null || frame.handled.isEmpty()) return;
+        if (p.context != null || p.suppressContext || p.reraised) return;
+        Object top = frame.handled.get(frame.handled.size() - 1);
+        if (top == p) return;
+        Object handled = exceptionInstance(top);
+        Object own = p.value instanceof PyInstance user && user.cls.exceptionBase != null ? user : p.instance;
+        if (handled == own || (own != null && (ExceptionGroupSupport.context(own) != null || ExceptionGroupSupport.suppress(own)))) return;
+        p.context = handled;
+        if (own != null) ExceptionGroupSupport.setContext(own, handled);
+    }
+
     public static void excLeave(Object depth) {
-        ArrayList<Object> stack = HANDLED.get();
+        ArrayList<Object> stack = handledStack();
         int keep = (int) (long) (Long) depth;
         while (stack.size() > keep) stack.remove(stack.size() - 1);
     }
 
-    public static void reraiseCurrent() {
+    /** The exception being handled by the innermost running except clause (any frame), or null. */
+    static Object currentHandled() {
+        for (ActiveFrame frame : LOGICAL_FRAMES.get())
+            if (frame.handled != null && !frame.handled.isEmpty()) return frame.handled.get(frame.handled.size() - 1);
         ArrayList<Object> stack = HANDLED.get();
-        if (stack.isEmpty()) throw new PyException("RuntimeError", "No active exception to reraise");
-        rethrowThrowable(stack.get(stack.size() - 1));
+        return stack.isEmpty() ? null : stack.get(stack.size() - 1);
+    }
+
+    public static void reraiseCurrent() {
+        Object current = currentHandled();
+        if (current == null) throw new PyException("RuntimeError", "No active exception to reraise");
+        rethrowThrowable(current);
     }
 
     // ---------- class statements ----------

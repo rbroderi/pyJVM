@@ -28,7 +28,7 @@ public final class ImportSupport {
 
     static final PyDict MODULES = new PyDict();
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
-    static final Set<String> NATIVE_NAMES = Set.of("ast", "_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
+    static final Set<String> NATIVE_NAMES = Set.of("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
         "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars");
     private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal"};
 

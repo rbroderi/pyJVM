@@ -29,8 +29,7 @@ final class ListMethods {
     @SuppressWarnings("unchecked")
     static void sortInPlace(List<Object> list, Map<Object,Object> kwargs) {
         for(Object k:kwargs.keySet()) if(!k.equals("key") && !k.equals("reverse")) throw new PyException("TypeError","sort() got an unexpected keyword argument '"+k+"'");
-        List<Object> ordered=(List<Object>)sortedCall(new ArrayList<Object>(List.of(new ArrayList<Object>(list))),kwargs);
-        list.clear(); list.addAll(ordered);
+        Timsort.sortList(list,kwargs.get("key"),truth(kwargs.get("reverse")));
     }
 
     static Object call(Object obj, String name, Object[] args) {
@@ -61,7 +60,7 @@ final class ListMethods {
                 throw new PyException("ValueError","list.remove(x): x not in list");
             }
             case "reverse" -> { requireArgs(name,args,0); Collections.reverse(list); yield null; }
-            case "sort" -> { requireArgs(name,args,0); sortInPlace(list,new LinkedHashMap<Object,Object>()); yield null; }
+            case "sort" -> { if(args.length!=0) throw new PyException("TypeError","sort() takes no positional arguments"); sortInPlace(list,new LinkedHashMap<Object,Object>()); yield null; }
             default -> throw new PyException("AttributeError","'list' object has no attribute '"+name+"'");
         };
     }
