@@ -192,6 +192,7 @@ public final class PyRuntime {
     static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
     public static Object builtinFunction(Object name) { return BUILTIN_FUNCTIONS.computeIfAbsent((String)name,PyBuiltinFunction::new); }
     static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
+        if(AnnotationSupport.isHelper(name))return AnnotationSupport.callHelper(name,args);
         if(name.equals("print")) {
             for(Object key:kwargs.keySet()) if(!key.equals("sep") && !key.equals("end"))
                 throw new PyException("TypeError","unsupported print keyword");
@@ -2339,6 +2340,7 @@ public final class PyRuntime {
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
+        if(AnnotationSupport.isHelper(name))return builtinFunction(name);
         if(Set.of("exec","eval","compile","aiter","anext","ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
@@ -2538,7 +2540,6 @@ public final class PyRuntime {
     }
     public static void setFunctionClassCell(Object function,Object present){((PyFunction)function).hasClassCell=truth(present);}
     public static void setFunctionFreeNames(Object function,Object names){((PyFunction)function).freeNames=splitNames((String)names);}
-    public static void setFunctionAnnotated(Object function){((PyFunction)function).hasAnnotations=true;}
     public static void setFunctionAsync(Object functionObj) { ((PyFunction)functionObj).asyncMode=true; }
     public static void setFunctionAsyncGenerator(Object functionObj) { ((PyFunction)functionObj).asyncGeneratorMode=true; }
 
@@ -3561,10 +3562,7 @@ public final class PyRuntime {
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))return function.freeNames.isEmpty()?null:functionClosure(function);
             if(name.equals("__dict__"))return function.attrs;
-            if(function.hasAnnotations && (name.equals("__annotations__") || name.equals("__annotate__")) && !function.metadata.containsKey(name))
-                throw new PyException("NotImplementedError","deferred function annotations are not implemented");
-            if(name.equals("__annotations__"))return function.metadata.computeIfAbsent(name,key->new LinkedHashMap<>());
-            if(name.equals("__annotate__"))return function.metadata.get(name);
+            if(AnnotationSupport.isAnnotationName(name))return AnnotationSupport.functionGet(function,name);
             if(name.equals("__get__"))return new BuiltinBoundMethod(obj,name);
             if(function.metadata.containsKey(name))return function.metadata.get(name);
             if(function.attrs.containsKey(name))return function.attrs.get(name);
@@ -3670,6 +3668,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'super' object has no attribute '"+name+"'");
         }
         if (obj instanceof PyClass cls) {
+            if(cls.metaclass==null && AnnotationSupport.deferred() && AnnotationSupport.isAnnotationName(name))return AnnotationSupport.classGet(cls,name);
             Object metaAttr=cls.metaclass==null?MISSING:cls.metaclass.lookupAttr(name);
             if(metaAttr!=MISSING && isDataDescriptor(metaAttr))return descriptorGet(metaAttr,cls,cls.metaclass);
             if(name.equals("__class__")) return cls.metaclass != null ? cls.metaclass : builtinType("type");
@@ -3748,7 +3747,8 @@ public final class PyRuntime {
         if(obj instanceof PyCell cell && name.equals("cell_contents")){cell.set(value);return;}
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
-            if(Set.of("__module__","__qualname__","__name__","__doc__","__annotations__","__annotate__").contains(name))function.metadata.put(name,value);
+            if(AnnotationSupport.isAnnotationName(name))AnnotationSupport.functionSet(function,name,value);
+            else if(Set.of("__module__","__qualname__","__name__","__doc__").contains(name))function.metadata.put(name,value);
             else function.attrs.put(name,value);return;
         }
         if(obj instanceof PyMethodDescriptor method){
@@ -3781,7 +3781,11 @@ public final class PyRuntime {
                 throw new PyException("AttributeError","'"+instance.cls.name+"' object has no attribute '"+name+"'");
             instance.fields.put(name, value); return;
         }
-        if(obj instanceof PyClass cls){classAddAttr(cls,name,value);return;}
+        if(obj instanceof PyClass cls){
+            if(cls.metaclass==null && AnnotationSupport.deferred() && AnnotationSupport.isAnnotationName(name))AnnotationSupport.classSet(cls,name,value);
+            else classAddAttr(cls,name,value);
+            return;
+        }
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
@@ -3790,6 +3794,7 @@ public final class PyRuntime {
         if(obj instanceof PyCell cell && nameObj.equals("cell_contents")){cell.set(UNBOUND);return;}
         if(obj instanceof PyFunction function){
             if(nameObj.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
+            if(AnnotationSupport.isAnnotationName((String)nameObj)){AnnotationSupport.functionDelete(function,(String)nameObj);return;}
             if(function.metadata.containsKey(nameObj)){function.metadata.remove(nameObj);return;}
             if(!function.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");function.attrs.remove(nameObj);return;
         }
@@ -3815,7 +3820,9 @@ public final class PyRuntime {
                 throw new PyException("AttributeError","attribute not found");
             instance.fields.remove(name); return;
         }
-        if(obj instanceof PyClass cls){String name=(String)nameObj;if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);cls.methods.remove(name);cls.properties.remove(name);return;}
+        if(obj instanceof PyClass cls){String name=(String)nameObj;
+            if(cls.metaclass==null && AnnotationSupport.deferred() && AnnotationSupport.isAnnotationName(name)){AnnotationSupport.classDelete(cls,name);return;}
+            if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);cls.methods.remove(name);cls.properties.remove(name);return;}
         throw typeError("attribute deletion on unsupported object",obj);
     }
 

@@ -5,9 +5,9 @@ import ast
 from .astutil import deepcopy_ast
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
-from .versions import feature_version
+from .versions import feature_version, deferred_annotations
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
-from .annot import lower_annotations
+from .annot import lower_annotations, ANNOTATION_MARKERS, CLASSDICT_INTRINSIC
 
 
 def _preserve_codegen_state(compile_method):
@@ -52,6 +52,8 @@ BUILTIN_FUNCTIONS = {
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
     "aiter", "anext", "exec", "eval", "compile",
+    "__pyjvm_annotate__", "__pyjvm_annotations__", "__pyjvm_class_annotate__", "__pyjvm_cond_add__", "__pyjvm_not_implemented__",
+    "__pyjvm_global__",
 }
 
 
@@ -213,7 +215,7 @@ class Compiler:
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
-        tree = lower_annotations(tree)
+        tree = lower_annotations(tree, deferred_annotations(), self.dynamic)
         # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
         self.declared_global = {n for node in ast.walk(tree) if isinstance(node, ast.Global) for n in node.names}
         if not self.dynamic:
@@ -1719,12 +1721,18 @@ class Compiler:
     def _emit_int(self, value: int, b: CodeBuilder) -> None:
         b.ldc_string(str(value)); b.invokestatic(RUNTIME, "pyInt", "(Ljava/lang/String;)Ljava/lang/Object;")
 
+    @staticmethod
+    def _is_annotation_marker(node: ast.expr) -> bool:
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ANNOTATION_MARKERS
+
     def _emit_function_definition(self, node: ast.FunctionDef | ast.AsyncFunctionDef, b: CodeBuilder, scope: Scope) -> None:
         info = self.function_infos[id(node)]
         # Python evaluates decorator expressions in source order in the enclosing
         # scope, then applies them from the bottom upward to the function object.
         decorator_slots: list[int] = []
-        for decorator in node.decorator_list:
+        decorators = list(node.decorator_list)
+        marker = decorators.pop() if decorators and self._is_annotation_marker(decorators[-1]) else None
+        for decorator in decorators:
             self._expr(decorator, b, scope)
             slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
 
@@ -1759,13 +1767,20 @@ class Compiler:
         b.invokestatic(RUNTIME, "setFunctionClassCell", f"({OBJ * 2})V")
         b.dup(); b.ldc_string(",".join(sorted(info.free_names)))
         b.invokestatic(RUNTIME, "setFunctionFreeNames", f"({OBJ * 2})V")
-        if node.returns is not None or any(arg.annotation is not None for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs, *([node.args.vararg] if node.args.vararg else []), *([node.args.kwarg] if node.args.kwarg else [])]):
-            b.dup(); b.invokestatic(RUNTIME, "setFunctionAnnotated", f"({OBJ})V")
+        if marker is not None:
+            # annotation lowering (annot.py): the last "decorator" attaches the annotations / __annotate__ to the new function
+            marked_slot = scope.temp(); b.astore(marked_slot)
+            self._expr(marker, b, scope)
+            b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+            b.dup(); b.aload(marked_slot); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+            b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+            b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+            b.pop(); b.aload(marked_slot)
         if info.is_async_generator:
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAsyncGenerator", f"({OBJ})V")
         elif info.is_async:
             b.dup(); b.invokestatic(RUNTIME, "setFunctionAsync", f"({OBJ})V")
-        if scope.namespace_slot is not None and not node.decorator_list and node.name in {"__new__", "__init_subclass__", "__class_getitem__"}:
+        if scope.namespace_slot is not None and not decorators and node.name in {"__new__", "__init_subclass__", "__class_getitem__"}:
             b.ldc_string("static" if node.name == "__new__" else "class")
             b.invokestatic(RUNTIME, "methodDescriptor", f"({OBJ}{OBJ}){OBJ}")
 
@@ -2608,6 +2623,10 @@ class Compiler:
                 and node.func.id in ("exec", "eval") and len(node.args) == 1 and not node.func.id in self.global_names
                 and not scope.has(node.func.id) and node.func.id not in scope.local_names and node.func.id not in scope.free_names):
             self._emit_implicit_namespace_call(node, b, scope)
+            return
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == CLASSDICT_INTRINSIC
+                and scope.namespace_slot is not None):
+            b.aload(scope.namespace_slot)   # the namespace of the class body being executed (annot.py)
             return
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id

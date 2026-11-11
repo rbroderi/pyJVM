@@ -10,6 +10,7 @@ build_selfhosted() to get the compiler's class files.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -114,7 +115,9 @@ def stage2(work: Path) -> int:
     # the program itself (selfhost_main) and every module it imports
     write_jobs(plan, out2, work / "jobs.txt")
     proc = subprocess.run(["java", "-Xss128m", "-cp", f"{work / 'runtime'}:{work / 'stage1'}", "pyjvm315.runtime.Launcher",
-                           "SelfHost", str(work / "jobs.txt")], text=True, capture_output=True)
+                           "SelfHost", str(work / "jobs.txt")], text=True, capture_output=True,
+                          # the JVM-run compiler must make the same version-dependent choices (deferred annotations) as the host
+                          env=dict(os.environ, PYJVM_LANG_VERSION="%d.%d" % sys.version_info[:2]))
     if proc.returncode != 0:
         print(proc.stderr[-2000:])
         return 1
