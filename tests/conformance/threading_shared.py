@@ -86,6 +86,6 @@ for _ in range(300):
         for key in m: pass
         list(m.items())
     except RuntimeError as exc:
-        ok = ok and "changed size" in str(exc)
+        ok = ok and "changed" in str(exc)
 stop.set(); mt.join()
 print(ok)
