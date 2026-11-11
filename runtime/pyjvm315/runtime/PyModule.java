@@ -23,7 +23,7 @@ import java.util.Set;
 
 final class PyModule {
     final String name, className;
-    final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
+    final LinkedHashMap<String,Object> attrs = new SyncMap<>();
     /** The live {@code __dict__} of a module created at run time (types.ModuleType(name), import system); null for compiled/native modules. */
     PyDict dict;
     /** Run once before the first read of one of these attribute names (lazily installed state such as sys.meta_path); null for most modules. */

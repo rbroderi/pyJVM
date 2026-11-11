@@ -14,6 +14,8 @@ public final class NativeModules {
     private NativeModules() {}
 
     /** Program arguments, set by {@link Launcher}; sys.argv[0] is the program name. */
+    /** sys.setswitchinterval: recorded for compatibility; there is no GIL to switch (threads are real JVM threads). */
+    private static volatile double switchInterval = 0.005;
     static volatile String[] argv = new String[]{"pyjvm"};
 
     private static void fn(PyModule m, String name, NativeFunction.Body body) { m.attrs.put(name, new NativeFunction(name, body)); }
@@ -36,9 +38,18 @@ public final class NativeModules {
         ImportSupport.installSys(m);
         fn(m, "_getframe", (a, k) -> PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)));
         fn(m, "settrace", (a, k) -> Tracing.settrace(a.get(0)));
-        fn(m, "gettrace", (a, k) -> Tracing.traceFn);
+        fn(m, "gettrace", (a, k) -> Tracing.traceFn());
         fn(m, "setprofile", (a, k) -> Tracing.setprofile(a.get(0)));
-        fn(m, "getprofile", (a, k) -> Tracing.profileFn);
+        fn(m, "getprofile", (a, k) -> Tracing.profileFn());
+        fn(m, "setswitchinterval", (a, k) -> {
+            if (a.size() != 1 || !(a.get(0) instanceof Number n)) throw new PyException("TypeError", "setswitchinterval() argument must be float");
+            if (!(n.doubleValue() > 0)) throw new PyException("ValueError", "switch interval must be strictly positive");
+            switchInterval = n.doubleValue();
+            return null;
+        });
+        fn(m, "getswitchinterval", (a, k) -> switchInterval);
+        fn(m, "_is_gil_enabled", (a, k) -> false);
+        fn(m, "_current_frames", (a, k) -> PyFrameSupport.currentFrames());
         PyModule monitoring = new PyModule("sys.monitoring", "pyjvm315.runtime.Monitoring");
         Monitoring.install(monitoring);
         m.attrs.put("monitoring", monitoring);

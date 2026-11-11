@@ -12,15 +12,35 @@ import java.util.LinkedHashMap;
 final class Tracing {
     private Tracing() {}
 
-    static boolean enabled;
-    static Object traceFn, profileFn;
-    /** True while a hook runs: events are not generated for the hook itself. */
-    private static boolean busy;
+    /** The global fast-path gate: some thread has a trace/profile function, or monitoring is active. */
+    static volatile boolean enabled;
+    /** sys.settrace / sys.setprofile are per thread (threading.settrace installs the hook in each new thread). */
+    private static final class TS { Object traceFn, profileFn; boolean busy; }
+    private static final ThreadLocal<TS> STATE = ThreadLocal.withInitial(TS::new);
+    private static final java.util.concurrent.atomic.AtomicInteger HOOKED = new java.util.concurrent.atomic.AtomicInteger();
 
-    static void refresh() { enabled = traceFn != null || profileFn != null || Monitoring.active(); }
+    static Object traceFn() { return STATE.get().traceFn; }
+    static Object profileFn() { return STATE.get().profileFn; }
 
-    static Object settrace(Object fn) { traceFn = fn; refresh(); return null; }
-    static Object setprofile(Object fn) { profileFn = fn; refresh(); return null; }
+    static void refresh() { enabled = HOOKED.get() > 0 || Monitoring.active(); }
+
+    private static void setHooks(TS s, Object trace, Object profile) {
+        boolean was = s.traceFn != null || s.profileFn != null;
+        s.traceFn = trace; s.profileFn = profile;
+        boolean now = trace != null || profile != null;
+        if (was != now) HOOKED.addAndGet(now ? 1 : -1);
+        refresh();
+    }
+
+    static Object settrace(Object fn) { TS s = STATE.get(); setHooks(s, fn, s.profileFn); return null; }
+    static Object setprofile(Object fn) { TS s = STATE.get(); setHooks(s, s.traceFn, fn); return null; }
+
+    /** A thread ends: its hooks no longer count towards the global gate. */
+    static void threadFinished() {
+        TS s = STATE.get();
+        if (s.traceFn != null || s.profileFn != null) setHooks(s, null, null);
+        STATE.remove();
+    }
 
     private static Object invoke(Object fn, PyFrame frame, String event, Object arg) {
         ArrayList<Object> args = new ArrayList<>();
@@ -31,22 +51,23 @@ final class Tracing {
     private static Object runHook(Object fn, ActiveFrame a, String event, Object arg, boolean isTrace) {
         PyFrame frame = PyFrameSupport.frameFor(a);
         PyFrameSupport.captureChain();
-        busy = true;
+        TS s = STATE.get();
+        s.busy = true;
         try { return invoke(fn, frame, event, arg); }
         catch (RuntimeException e) {
-            if (isTrace) traceFn = null; else profileFn = null;
-            refresh();
+            if (isTrace) setHooks(s, null, s.profileFn); else setHooks(s, s.traceFn, null);
             throw e;
         }
-        finally { busy = false; }
+        finally { s.busy = false; }
     }
 
     /** A Python frame was entered (function call or generator resume). */
     static void call(ActiveFrame a) {
-        if (busy) return;
-        if (profileFn != null) runHook(profileFn, a, "call", null, false);
-        if (traceFn != null) {
-            Object local = runHook(traceFn, a, "call", null, true);
+        TS s = STATE.get();
+        if (s.busy) return;
+        if (s.profileFn != null) runHook(s.profileFn, a, "call", null, false);
+        if (s.traceFn != null) {
+            Object local = runHook(s.traceFn, a, "call", null, true);
             a.localTrace = local;
             if (a.pyFrame != null) a.pyFrame.trace = local;
         }
@@ -54,7 +75,7 @@ final class Tracing {
     }
 
     static void localEvent(ActiveFrame a, String event, Object arg) {
-        if (busy || a.localTrace == null) return;
+        if (STATE.get().busy || a.localTrace == null) return;
         Object local = runHook(a.localTrace, a, event, arg, true);
         if (local == null) return;   // a None result keeps the current local trace function
         a.localTrace = local;
@@ -63,24 +84,26 @@ final class Tracing {
 
     /** The frame is leaving normally (return) or by yielding. */
     static void ret(ActiveFrame a, Object value, boolean yielded) {
-        if (busy) return;
+        TS s = STATE.get();
+        if (s.busy) return;
         localEvent(a, "return", value);
-        if (profileFn != null) runHook(profileFn, a, "return", value, false);
+        if (s.profileFn != null) runHook(s.profileFn, a, "return", value, false);
         Monitoring.ret(a, value, yielded);
     }
 
     /** An exception is leaving the frame: exception event (if not yet reported here), then return with None. */
     static void unwind(ActiveFrame a, PyException e) {
-        if (busy) return;
+        TS s = STATE.get();
+        if (s.busy) return;
         reportException(a, e);
         localEvent(a, "return", null);
-        if (profileFn != null) runHook(profileFn, a, "return", null, false);
+        if (s.profileFn != null) runHook(s.profileFn, a, "return", null, false);
         Monitoring.unwind(a, e);
     }
 
     /** Exception event, once per (exception, frame). */
     static void reportException(ActiveFrame a, PyException e) {
-        if (busy || e.tracedFrame == a) return;
+        if (STATE.get().busy || e.tracedFrame == a) return;
         e.tracedFrame = a;
         if (a.localTrace != null) {
             PyTuple info = new PyTuple();
@@ -96,7 +119,7 @@ final class Tracing {
         ActiveFrame a = currentLogicalFrame();
         if (a == null) return;
         a.line = ((Number) lineObj).longValue();
-        if (!enabled || busy) return;
+        if (!enabled || STATE.get().busy) return;
         localEvent(a, "line", null);
         Monitoring.line(a);
     }

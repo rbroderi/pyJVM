@@ -118,21 +118,34 @@ final class PyDict extends AbstractMap<Object,Object> {
     @Override public int size() { return live; }
     @Override public boolean isEmpty() { return live == 0; }
 
-    @Override public boolean containsKey(Object key) { return find(key, hashOf(key)) >= 0; }
+    // Free-threaded model: once a second thread exists every operation runs under this dict's monitor, which keeps
+    // each operation atomic (CPython 3.13t semantics). The hash is computed outside the lock where possible.
+    @Override public boolean containsKey(Object key) {
+        int h = hashOf(key);
+        if (!SyncSupport.MT) return find(key, h) >= 0;
+        synchronized (this) { return find(key, h) >= 0; }
+    }
 
     @Override public Object get(Object key) {
-        int idx = find(key, hashOf(key));
-        return idx < 0 ? null : vals[idx];
+        int h = hashOf(key);
+        if (!SyncSupport.MT) { int idx = find(key, h); return idx < 0 ? null : vals[idx]; }
+        synchronized (this) { int idx = find(key, h); return idx < 0 ? null : vals[idx]; }
     }
 
     @Override public Object getOrDefault(Object key, Object fallback) {
-        int idx = find(key, hashOf(key));
-        return idx < 0 ? fallback : vals[idx];
+        int h = hashOf(key);
+        if (!SyncSupport.MT) { int idx = find(key, h); return idx < 0 ? fallback : vals[idx]; }
+        synchronized (this) { int idx = find(key, h); return idx < 0 ? fallback : vals[idx]; }
     }
 
     @Override public Object put(Object key, Object value) {
         mutable("assignment");
         int hash = hashOf(key);
+        if (!SyncSupport.MT) return put0(key, hash, value);
+        synchronized (this) { return put0(key, hash, value); }
+    }
+
+    private Object put0(Object key, int hash, Object value) {
         int idx = find(key, hash);
         if (idx >= 0) { Object old = vals[idx]; vals[idx] = value; return old; }
         insertNew(key, hash, value);
@@ -142,6 +155,11 @@ final class PyDict extends AbstractMap<Object,Object> {
     @Override public Object remove(Object key) {
         mutable("deletion");
         int hash = hashOf(key);
+        if (!SyncSupport.MT) return remove0(key, hash);
+        synchronized (this) { return remove0(key, hash); }
+    }
+
+    private Object remove0(Object key, int hash) {
         int idx = find(key, hash);
         if (idx < 0) return null;
         // locate the table slot that points at idx
@@ -157,6 +175,11 @@ final class PyDict extends AbstractMap<Object,Object> {
 
     @Override public void clear() {
         mutable("deletion");
+        if (!SyncSupport.MT) { clear0(); return; }
+        synchronized (this) { clear0(); }
+    }
+
+    private void clear0() {
         Arrays.fill(table, EMPTY);
         Arrays.fill(keys, 0, used, null); Arrays.fill(vals, 0, used, null);
         if (live != 0) version++;
@@ -165,10 +188,15 @@ final class PyDict extends AbstractMap<Object,Object> {
 
     /** The most recently inserted live entry removed and returned (dict.popitem), or null if empty. */
     Map.Entry<Object,Object> popLast() {
+        if (!SyncSupport.MT) return popLast0();
+        synchronized (this) { return popLast0(); }
+    }
+
+    private Map.Entry<Object,Object> popLast0() {
         for (int n = used - 1; n >= 0; n--) {
             if (keys[n] == DELETED) continue;
             Object k = keys[n], v = vals[n];
-            remove(k);
+            remove0(k, hashes[n]);
             return new SimpleEntry<>(k, v);
         }
         return null;
@@ -189,12 +217,20 @@ final class PyDict extends AbstractMap<Object,Object> {
                         if (version != startVersion) throw new PyException("RuntimeError", "dictionary keys changed during iteration");
                     }
                     @Override public boolean hasNext() {
+                        if (SyncSupport.MT) synchronized (PyDict.this) { return hasNext0(); }
+                        return hasNext0();
+                    }
+                    private boolean hasNext0() {
                         while (next < used && keys[next] == DELETED) next++;
                         return next < used;
                     }
                     @Override public Map.Entry<Object,Object> next() {
+                        if (SyncSupport.MT) synchronized (PyDict.this) { return next0(); }
+                        return next0();
+                    }
+                    private Map.Entry<Object,Object> next0() {
                         check();
-                        if (!hasNext()) throw new NoSuchElementException();
+                        if (!hasNext0()) throw new NoSuchElementException();
                         last = next++;
                         return new SimpleEntry<>(keys[last], vals[last]) {
                             @Override public Object setValue(Object value) { PyDict.this.put(getKey(), value); return super.setValue(value); }
@@ -212,6 +248,11 @@ final class PyDict extends AbstractMap<Object,Object> {
     /** Dict equality uses Python == on values and key lookup by Python hash/eq. */
     @Override public boolean equals(Object other) {
         if (other == this) return true;
+        if (SyncSupport.MT) synchronized (this) { return equals0(other); }
+        return equals0(other);
+    }
+
+    private boolean equals0(Object other) {
         if (!(other instanceof Map<?,?> m) || m.size() != live) return false;
         for (int n = 0; n < used; n++) {
             if (keys[n] == DELETED) continue;
@@ -222,6 +263,11 @@ final class PyDict extends AbstractMap<Object,Object> {
     }
 
     @Override public int hashCode() {
+        if (SyncSupport.MT) synchronized (this) { return hashCode0(); }
+        return hashCode0();
+    }
+
+    private int hashCode0() {
         if (!frozen) throw new PyException("TypeError", "unhashable type: 'dict'");
         long h = 0x345678L;
         for (int n = 0; n < used; n++) {

@@ -328,7 +328,7 @@ public final class ExceptionGroupSupport {
         tracebackAddCurrentFrame(p);
         Object value = exceptionInstance(p);
         System.out.flush();
-        if (excTypeName(value).equals("SystemExit")) { System.exit(systemExitStatus(value)); return; }
+        if (excTypeName(value).equals("SystemExit")) { int status = systemExitStatus(value); ThreadModule.mainExit(); System.exit(status); return; }
         try {
             PyModule sys = (PyModule) importNative("sys");
             Object hook = sys.attrs.get("excepthook");
@@ -341,6 +341,7 @@ public final class ExceptionGroupSupport {
             defaultExcepthook(typeOf(value), value, null);
         }
         System.err.flush();
+        ThreadModule.mainExit();
         System.exit(1);
     }
 

@@ -26,9 +26,9 @@ final class PyClass {
     final String name;
     String qualname;
     final ArrayList<PyClass> bases = new ArrayList<>();
-    final LinkedHashMap<String,PyMethod> methods = new LinkedHashMap<>();
-    final LinkedHashMap<String,PyProperty> properties = new LinkedHashMap<>();
-    final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
+    final LinkedHashMap<String,PyMethod> methods = new SyncMap<>();
+    final LinkedHashMap<String,PyProperty> properties = new SyncMap<>();
+    final LinkedHashMap<String,Object> attrs = new SyncMap<>();
     List<PyClass> mro = List.of(this);
     PyClass metaclass = null;
     String builtinBaseName = null;
@@ -42,6 +42,17 @@ final class PyClass {
     boolean slotsDeclared = false;
     boolean instanceDictAllowed = true;
     boolean finalized = false;
+    /** 0 unknown, 1 no, 2 yes: instances keep a separate __dict__ per thread (derives from _thread._local). */
+    private byte localKind;
+    boolean threadLocalKind() {
+        byte k = localKind;
+        if (k == 0) {
+            k = 1;
+            for (PyClass c : mro) if (c == ThreadModule.localClass()) { k = 2; break; }
+            if (finalized) localKind = k;
+        }
+        return k == 2;
+    }
     PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; }
 
     PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;if(c.attrs.containsKey(name))return null;} return null; }

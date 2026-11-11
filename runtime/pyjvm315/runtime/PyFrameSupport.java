@@ -11,7 +11,7 @@ import java.util.LinkedHashMap;
 final class PyFrameSupport {
     private PyFrameSupport() {}
 
-    private static final java.util.HashMap<String, PyCode> CODES = new java.util.HashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, PyCode> CODES = new java.util.concurrent.ConcurrentHashMap<>();
     static PyCode codeOf(ActiveFrame a) {
         return CODES.computeIfAbsent(a.name + "\0" + a.filename + "\0" + a.firstlineno, k -> new PyCode(a.name, a.filename, a.firstlineno));
     }
@@ -38,6 +38,27 @@ final class PyFrameSupport {
         }
         if (previous != null) previous.back = null;
         return inner;
+    }
+
+    /** sys._current_frames(): {thread id: innermost frame} for every thread that is running Python code. */
+    static Object currentFrames() {
+        PyDict out = new PyDict();
+        Thread me = Thread.currentThread();
+        for (java.util.Map.Entry<Thread, ArrayDeque<ActiveFrame>> e : FRAME_STACKS.entrySet()) {
+            ArrayDeque<ActiveFrame> stack = e.getKey() == me ? LOGICAL_FRAMES.get() : e.getValue();
+            ActiveFrame[] frames;
+            try { frames = stack.toArray(new ActiveFrame[0]); } catch (RuntimeException racing) { continue; }
+            PyFrame inner = null, previous = null;
+            for (ActiveFrame a : frames) {
+                if (a == null) continue;
+                PyFrame f = frameFor(a);
+                if (previous != null) previous.back = f; else inner = f;
+                previous = f;
+            }
+            if (previous != null) previous.back = null;
+            if (inner != null) out.put(e.getKey().threadId(), inner);
+        }
+        return out;
     }
 
     static Object getFrame(Object depthObj) {

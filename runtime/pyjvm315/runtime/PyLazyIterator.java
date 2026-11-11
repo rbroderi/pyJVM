@@ -28,6 +28,10 @@ abstract class PyLazyIterator implements Iterator<Object>, Iterable<Object> {
     abstract String pyTypeName();
     public Iterator<Object> iterator(){return this;}
     public boolean hasNext() {
+        if(SyncSupport.MT) synchronized(this) { return hasNext0(); }
+        return hasNext0();
+    }
+    private boolean hasNext0() {
         if(hasBuffered) return true;
         if(done) return false;
         try { buffered=compute(); hasBuffered=true; return true; }
@@ -35,6 +39,10 @@ abstract class PyLazyIterator implements Iterator<Object>, Iterable<Object> {
         catch(PyException end){if(end.typeName.equals("StopIteration")){done=true;return false;}throw end;}
     }
     public Object next() {
+        if(SyncSupport.MT) synchronized(this) { return next0(); }
+        return next0();
+    }
+    private Object next0() {
         if(hasBuffered){Object out=buffered;buffered=null;hasBuffered=false;return out;}
         if(done) throw new NoSuchElementException();
         try { return compute(); }

@@ -2749,7 +2749,11 @@ public final class PyRuntime {
     }
 
     // ---------- Python-visible code/frame/traceback objects ----------
-    static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(ArrayDeque::new);
+    /** Logical frame stacks of the threads that have run Python code (sys._current_frames reads other threads' stacks). */
+    static final java.util.concurrent.ConcurrentHashMap<Thread,ArrayDeque<ActiveFrame>> FRAME_STACKS=new java.util.concurrent.ConcurrentHashMap<>();
+    static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(() -> { ArrayDeque<ActiveFrame> d=new ArrayDeque<>(); FRAME_STACKS.put(Thread.currentThread(),d); return d; });
+    /** A Python thread is ending: drop its per-thread runtime state. */
+    static void threadFinished(){ FRAME_STACKS.remove(Thread.currentThread()); LOGICAL_FRAMES.remove(); BuiltinsExtra.HANDLED.remove(); }
     public static void pushLogicalFrame(Object nameObj,Object filenameObj,Object firstlineObj){
         LOGICAL_FRAMES.get().push(new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()));
     }
@@ -3388,6 +3392,7 @@ public final class PyRuntime {
             created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
         } else {
             created=cls.nativeKind!=null?NativeSubclass.allocate(cls,cls.nativeKind,args,kwargs):typeMro(cls).contains(builtinType("super"))?new PySuper(cls):new PyInstance(cls);
+            if(created instanceof PyInstance li && li.fields instanceof ThreadModule.LocalFields lf) lf.recordInit(args,kwargs);
             if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
@@ -3599,6 +3604,10 @@ public final class PyRuntime {
     }
 
     static Object callMethod(Object obj, String name, Object[] args) {
+        if(obj instanceof PyLazyIterator lazy && (name.equals("__iter__") || name.equals("__next__"))){
+            requireArgs(name,args,0);
+            return name.equals("__iter__")?lazy:next_(lazy);
+        }
         if(obj instanceof PySetIterator iterator && Set.of("__iter__","__next__","__length_hint__").contains(name)){
             requireArgs(name,args,0);
             return name.equals("__iter__")?iterator:name.equals("__next__")?next_(iterator):iterator.lengthHint();
@@ -3792,6 +3801,7 @@ public final class PyRuntime {
         if(obj instanceof List<?> && ListMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if((obj instanceof Long || obj instanceof BigInteger || obj instanceof Boolean) && IntMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof PyLazyIterator && (name.equals("__iter__") || name.equals("__next__")))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof NativeFunction nf){
             if(nf.attrs.containsKey(name))return nf.attrs.get(name);
             if(name.equals("__name__") || name.equals("__qualname__"))return nf.name;

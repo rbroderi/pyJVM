@@ -26,7 +26,7 @@ final class Monitoring {
     @SuppressWarnings("unchecked")
     private static final LinkedHashMap<Integer, Object>[] callbacks = new LinkedHashMap[TOOLS];
     static { for (int i = 0; i < TOOLS; i++) callbacks[i] = new LinkedHashMap<>(); }
-    private static boolean busy;
+    private static final ThreadLocal<boolean[]> BUSY = ThreadLocal.withInitial(() -> new boolean[1]);
 
     static boolean active() { for (int e : toolEvents) if (e != 0) return true; return false; }
 
@@ -84,7 +84,7 @@ final class Monitoring {
     private static void clear(int t) { toolEvents[t] = 0; callbacks[t].clear(); }
 
     private static void fire(int bit, ActiveFrame a, Object... extra) {
-        if (busy) return;
+        if (BUSY.get()[0]) return;
         PyCode code = PyFrameSupport.frameFor(a).code;
         for (int t = 0; t < TOOLS; t++) {
             if ((toolEvents[t] & bit) == 0) continue;
@@ -94,9 +94,9 @@ final class Monitoring {
             args.add(code);
             if (bit != LINE) args.add(0L);
             for (Object e : extra) args.add(e);
-            busy = true;
+            BUSY.get()[0] = true;
             try { callFunction(cb, args, new LinkedHashMap<Object, Object>()); }
-            finally { busy = false; }
+            finally { BUSY.get()[0] = false; }
         }
     }
 

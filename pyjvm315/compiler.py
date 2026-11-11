@@ -986,6 +986,9 @@ class Compiler:
         scope = self._emit_module_body(body, b, scope)
         b.mark(guard_end)
         b.invokestatic(RUNTIME,"popLogicalFrame",f"()V")
+        if self.module_name == "__main__":
+            # interpreter shutdown: threading._shutdown() and joining non-daemon threads
+            b.invokestatic("pyjvm315/runtime/ThreadModule", "mainExit", "()V")
         b.return_()
         if self.module_name == "__main__":
             # an exception leaving the program is reported like CPython does (sys.excepthook) and sets the exit status

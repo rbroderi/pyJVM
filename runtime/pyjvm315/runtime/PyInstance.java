@@ -23,12 +23,12 @@ import java.util.Set;
 
 class PyInstance {
     final PyClass cls;
-    final LinkedHashMap<String,Object> fields = new LinkedHashMap<>();
-    final LinkedHashMap<String,Object> slotValues = new LinkedHashMap<>();
+    final LinkedHashMap<String,Object> fields;
+    final LinkedHashMap<String,Object> slotValues = new SyncMap<>();
     /** Native value of a builtin-backed instance (class derives from int/str/list/dict/...): BigInteger/Long, String, ArrayList, PyDict, ...; null for plain instances. */
     Object payload;
     /** __cause__/__context__/__traceback__ of an exception instance; null for every other object. */
     ExcState exc;
-    PyInstance(PyClass cls) { this.cls = cls; }
+    PyInstance(PyClass cls) { this.cls = cls; this.fields = cls.threadLocalKind() ? new ThreadModule.LocalFields(this) : new SyncMap<>(); }
     @Override public String toString() { return "<" + cls.name + " object>"; }
 }
