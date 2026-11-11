@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import ast
-from .astutil import deepcopy_ast
+from .astutil import deepcopy_ast, shallow_copy_ast
 
 from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
 from .versions import feature_version
@@ -1515,14 +1515,14 @@ class Compiler:
             # Copy the node and list its operand slots in evaluation order.  Operands up
             # to the last suspending one are evaluated first and persisted, then the
             # operation itself runs through the ordinary expression compiler.
-            node=copy.copy(expr); slots=[]
+            node=shallow_copy_ast(expr); slots=[]
             if isinstance(node,ast.UnaryOp): slots=[(node,"operand")]
             elif isinstance(node,ast.Attribute): slots=[(node,"value")]
             elif isinstance(node,ast.NamedExpr): slots=[(node,"value")]
             elif isinstance(node,ast.Subscript):
                 slots=[(node,"value")]
                 if isinstance(node.slice,ast.Slice):
-                    node.slice=copy.copy(node.slice)
+                    node.slice=shallow_copy_ast(node.slice)
                     slots.extend((node.slice,key) for key in ("lower","upper","step") if getattr(node.slice,key) is not None)
                 else:
                     slots.append((node,"slice"))
@@ -1533,12 +1533,12 @@ class Compiler:
                 node.values=list(node.values)
                 for index,value in enumerate(node.values):
                     if isinstance(value,ast.FormattedValue):
-                        value=copy.copy(value); node.values[index]=value
+                        value=shallow_copy_ast(value); node.values[index]=value
                         slots.append((value,"value"))
                         if value.format_spec is not None: slots.append((value,"format_spec"))
             elif isinstance(node,(ast.ListComp,ast.SetComp,ast.DictComp,ast.GeneratorExp)):
                 node.generators=list(node.generators)
-                node.generators[0]=copy.copy(node.generators[0])
+                node.generators[0]=shallow_copy_ast(node.generators[0])
                 slots=[(node.generators[0],"iter")]
             else:
                 return None
