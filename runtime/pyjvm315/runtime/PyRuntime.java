@@ -3574,7 +3574,7 @@ public final class PyRuntime {
             if(name.equals("__set__")){requireArgs(name,args,2);if(property.setter==null)throw new PyException("AttributeError","property has no setter");return callFunction(property.setter,new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());}
             if(name.equals("__delete__")){requireArgs(name,args,1);if(property.deleter==null)throw new PyException("AttributeError","property has no deleter");return callFunction(property.deleter,new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());}
         }
-        if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable)
+        if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable || obj instanceof NativeFunction)
             return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         TypeSlots.CallMethod slot = TypeSlots.callMethodSlot(obj);
         if (slot == null) throw typeError("method call on non-instance", obj);
@@ -3723,6 +3723,10 @@ public final class PyRuntime {
         if(obj instanceof List<?> && ListMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if((obj instanceof Long || obj instanceof BigInteger || obj instanceof Boolean) && IntMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof NativeFunction nf){
+            if(nf.attrs.containsKey(name))return nf.attrs.get(name);
+            if(name.equals("__name__") || name.equals("__qualname__"))return nf.name;
+        }
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(obj instanceof PyBuiltinType type && type.name.equals("function") && Set.of("__code__","__globals__","__closure__","__defaults__","__kwdefaults__").contains(name))return new BuiltinBoundMethod(type,name);
         if(obj instanceof PyBuiltinType type && name.equals("__dict__")){   // read-only view of the type's own attributes (CPython: mappingproxy)

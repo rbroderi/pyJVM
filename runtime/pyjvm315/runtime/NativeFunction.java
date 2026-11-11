@@ -8,6 +8,8 @@ import java.util.Map;
 final class NativeFunction {
     interface Body { Object call(List<Object> args, Map<Object,Object> kwargs); }
     final String name; final Body body;
+    /** Attributes of the function object (for example itertools.chain.from_iterable). */
+    final Map<String,Object> attrs = new java.util.LinkedHashMap<>();
     NativeFunction(String name, Body body) { this.name = name; this.body = body; }
     @Override public String toString() { return "<built-in function " + name + ">"; }
 }
