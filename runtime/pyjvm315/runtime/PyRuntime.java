@@ -4110,7 +4110,7 @@ public final class PyRuntime {
                 callMethod(descriptor,"__delete__",new Object[]{instance}); return;
             }
             if(!instance.cls.instanceDictAllowed || !instance.fields.containsKey(name))
-                throw new PyException("AttributeError","attribute not found");
+                throw new PyException("AttributeError","'"+typeName(instance)+"' object has no attribute '"+name+"'");
             instance.fields.remove(name); return;
         }
         if(obj instanceof PyClass cls){String name=(String)nameObj;
