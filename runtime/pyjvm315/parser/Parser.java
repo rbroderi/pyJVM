@@ -244,7 +244,7 @@ public final class Parser {
                 case "import": return parseImport(t, false);
                 case "from": return parseFrom(t, false);
                 case "lazy":
-                    if (featureMinor >= 15 && pyjvm315.runtime.LangVersion.atLeast(3, 15) && peek(1).type == Token.NAME && (peek(1).string.equals("import") || peek(1).string.equals("from"))) {
+                    if (featureMinor >= 15 && peek(1).type == Token.NAME && (peek(1).string.equals("import") || peek(1).string.equals("from"))) {
                         next();
                         return atKw("import") ? parseImport(t, true) : parseFrom(t, true);
                     }

@@ -275,7 +275,7 @@ public final class AstModule {
 
     /** Source text to a Python-level AST, with CPython's SyntaxError attributes on failure. */
     static Object parseSource(String text, String filename, String mode, int featureMinor) {
-        try { return toPython(Parser.parse(text, mode, featureMinor)); }
+        try { return toPython(Parser.parse(text, mode, LangVersion.atLeast(3, 15) ? featureMinor : Math.min(featureMinor, 14))); }
         catch (PySyntaxError e) { throw SyntaxInfo.error(e.kind, e.getMessage(), filename, text, e.line, e.column); }
     }
 
