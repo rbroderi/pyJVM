@@ -38,6 +38,7 @@ public final class SreModule {
         PyDict groupindex;
         Object indexgroup;
         boolean isbytes;
+        SreEngine spare;          // an idle engine to reuse (taken under the pattern's lock)
     }
 
     static final class Mat {
@@ -67,6 +68,7 @@ public final class SreModule {
         String cn = c.getName();
 
         patClass = define("re", "Pattern", null);
+        staticMethodVar(patClass, c, "__new__", "noNewPattern", "cls", "args");
         method(patClass, c, "match", "patMatch", "self,string,pos,endpos", defaults("pos", 0L, "endpos", Long.MAX_VALUE));
         method(patClass, c, "fullmatch", "patFullmatch", "self,string,pos,endpos", defaults("pos", 0L, "endpos", Long.MAX_VALUE));
         method(patClass, c, "search", "patSearch", "self,string,pos,endpos", defaults("pos", 0L, "endpos", Long.MAX_VALUE));
@@ -92,6 +94,7 @@ public final class SreModule {
         finish(patClass);
 
         matClass = define("re", "Match", null);
+        staticMethodVar(matClass, c, "__new__", "noNewMatch", "cls", "args");
         methodVar(matClass, c, "group", "matGroup", "self", "args");
         method(matClass, c, "groups", "matGroups", "self,default", defaults("default", null));
         method(matClass, c, "groupdict", "matGroupdict", "self,default", defaults("default", null));
@@ -166,6 +169,9 @@ public final class SreModule {
         return false;
     }
 
+    public static Object noNewPattern(Object cls, Object args) { throw new PyException("TypeError", "cannot create 're.Pattern' instances"); }
+    public static Object noNewMatch(Object cls, Object args) { throw new PyException("TypeError", "cannot create 're.Match' instances"); }
+
     public static Object selfReturn(Object self) { return self; }
     public static Object selfReturn1(Object self, Object memo) { return self; }
 
@@ -183,9 +189,18 @@ public final class SreModule {
         if (s.isBytes != p.isbytes)
             throw new PyException("TypeError", p.isbytes ? "cannot use a bytes pattern on a string-like object" : "cannot use a string pattern on a bytes-like object");
         int n = s.length();
-        SreEngine e = new SreEngine(p.code, p.groups);
+        SreEngine e;
+        synchronized (p) { e = p.spare; p.spare = null; }
+        if (e == null) e = new SreEngine(p.code, p.groups);
         e.init(s.cp, n, clamp(pos, 0, n), clamp(end, 0, n));
         return e;
+    }
+
+    /** Hands an engine that is no longer referenced by any result back for the next call. */
+    private static void release(Pat p, SreEngine e) {
+        if (e.st.length > 8192) return;
+        e.str = null;
+        synchronized (p) { p.spare = e; }
     }
 
     private static Object newMatch(Pat p, SreSubject s, SreEngine e) {
@@ -317,7 +332,9 @@ public final class SreModule {
             e.sptr = e.start;
             r = e.matchTop();
         }
-        return r > 0 ? newMatch(p, s, e) : null;
+        Object result = r > 0 ? newMatch(p, s, e) : null;
+        release(p, e);
+        return result;
     }
 
     public static Object patMatch(Object self, Object string, Object pos, Object endpos) { return doMatch(self, string, pos, endpos, 0); }
@@ -348,6 +365,7 @@ public final class SreModule {
             e.mustAdvance = e.sptr == e.start;
             e.start = e.sptr;
         }
+        release(p, e);
         return out;
     }
 
@@ -491,6 +509,7 @@ public final class SreModule {
             e.start = e.sptr;
         }
         out.slice(s, i, e.endpos);
+        release(p, e);
         Object joined = out.result();
         if (subn) return tuple(joined, n);
         return joined;
@@ -519,6 +538,7 @@ public final class SreModule {
             e.start = e.sptr;
         }
         out.add(s.slice(last, e.endpos));
+        release(p, e);
         return out;
     }
 
