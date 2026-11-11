@@ -5,6 +5,16 @@ original 358-body probe retained for historical comparison. Both are compile tri
 not full CPython execution-suite compatibility.
 
 
+## Status after exec/eval/compile (P1-08)
+
+Probe on a 3.15 host: **2,706 of 3,000** compile, 294 unsupported, 0 errors, no regressions
+(the 165 `exec`/`eval`/`compile` bodies were the largest group). The strict execution lane runs
+**27 more unchanged bodies** that use these builtins (342 total). The rest of the 160 candidate
+bodies cannot run in that lane because the CPython reference itself fails on fixture gaps
+(`subTest`, `assertRaisesRegex`, `assertWarns`); they need real `unittest` on the JVM (P3-05).
+Compilation of dynamic code uses the interim host-Python backend described in the README, so the
+lane needs `PYJVM_HOME`/`PYJVM_PYTHON` (the conformance runner sets them).
+
 ## Status after pattern-matching lowering (P1-01..P1-03)
 
 Measured on a CPython 3.15.0b4 host against the pinned corpus: **2,531 of 3,000** bodies
