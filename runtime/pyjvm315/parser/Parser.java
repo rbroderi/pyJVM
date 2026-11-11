@@ -25,6 +25,15 @@ public final class Parser {
     private final IdentityHashMap<AstNode, Boolean> parenthesized = new IdentityHashMap<>();
     private static final AstNode LOAD = new AstNode("Load"), STORE = new AstNode("Store"), DEL = new AstNode("Del");
 
+    private int featureMinor = Integer.MAX_VALUE;
+
+    /** CPython's CHECK_VERSION: syntax introduced in 3.{@code since} fails under an older feature_version. */
+    private void gate(int since, String what) {
+        if (featureMinor >= since) return;
+        Token at = prevReal != null ? prevReal : peek();
+        throw new PySyntaxError("SyntaxError", what + " in Python 3." + since + " and greater", at.startLine, at.startCol + 1);
+    }
+
     private Parser(String src) {
         this.src = src;
         List<Token> all = Tokenizer.tokenize(src), kept = new ArrayList<>();
@@ -53,8 +62,15 @@ public final class Parser {
     private static boolean isAscii(String s) { for (int k = 0; k < s.length(); k++) if (s.charAt(k) > 127) return false; return true; }
 
     /** @param mode "exec" or "eval" ("single" parses like exec but yields Interactive). */
-    public static AstNode parse(String source, String mode) {
+    public static AstNode parse(String source, String mode) { return parse(source, mode, Integer.MAX_VALUE); }
+
+    /**
+     * @param featureMinor the 3.x grammar level ast.parse(feature_version=(3, x)) asks for: syntax newer than that
+     *                     is rejected with CPython's wording. Integer.MAX_VALUE accepts everything.
+     */
+    public static AstNode parse(String source, String mode, int featureMinor) {
         Parser parser = new Parser(source);
+        parser.featureMinor = featureMinor;
         return switch (mode) {
             case "eval" -> parser.parseEval();
             case "single" -> new AstNode("Interactive", parser.parseModuleBody());
@@ -282,6 +298,7 @@ public final class Parser {
 
     private AstNode parseTypeAlias() {
         Token t = next();
+        gate(12, "Type statement is only supported");
         Token nameTok = expectName();
         AstNode name = mk("Name", nameTok, nameTok, nameTok.string, STORE);
         List<Object> tp = atOp("[") ? parseTypeParams() : list();
@@ -298,20 +315,21 @@ public final class Parser {
             Token s = peek();
             if (acceptOp("*")) {
                 Token n = expectName(); AstNode def = null;
-                if (acceptOp("=")) { def = parseStarExpression(); }
+                if (acceptOp("=")) { gate(13, "Type parameter defaults are only supported"); def = parseStarExpression(); }
                 out.add(mk("TypeVarTuple", s, prevReal, n.string, def));
             } else if (acceptOp("**")) {
                 Token n = expectName(); AstNode def = null;
-                if (acceptOp("=")) def = parseExpression();
+                if (acceptOp("=")) { gate(13, "Type parameter defaults are only supported"); def = parseExpression(); }
                 out.add(mk("ParamSpec", s, prevReal, n.string, def));
             } else {
                 Token n = expectName(); AstNode bound = null, def = null;
                 if (acceptOp(":")) bound = parseExpression();
-                if (acceptOp("=")) def = parseExpression();
+                if (acceptOp("=")) { gate(13, "Type parameter defaults are only supported"); def = parseExpression(); }
                 out.add(mk("TypeVar", s, prevReal, n.string, bound, def));
             }
         } while (acceptOp(","));
         expectOp("]");
+        gate(12, "Type parameter lists are only supported");
         return out;
     }
 
@@ -423,12 +441,14 @@ public final class Parser {
         while (atKw("except")) {
             Token et = next();
             boolean isStar = acceptOp("*");
+            if (isStar) gate(11, "Exception groups are only supported");
             if (handlers.isEmpty()) star = isStar; else if (star != isStar) throw unexpected(et, "cannot have both 'except' and 'except*' on the same 'try'");
             AstNode type = null; String name = null;
             if (!atOp(":")) {
                 Token ts = peek();
                 type = parseExpression();
                 if (atOp(",")) { // PEP 758: except A, B:
+                    gate(14, "except expressions without parentheses are only supported");
                     List<Object> elts = list(); elts.add(type);
                     while (acceptOp(",")) { if (atOp(":") || atKw("as")) break; elts.add(parseExpression()); }
                     type = mk("Tuple", ts, prevReal, elts, LOAD);
@@ -518,6 +538,7 @@ public final class Parser {
         while (!atOp(end)) {
             if (atOp("/")) {
                 Token t = next();
+                gate(8, "Positional-only parameters are only supported");
                 if (star || !posonly.isEmpty() || args.isEmpty()) throw unexpected(t, "at least one argument must precede /");
                 posonly.addAll(args); args.clear();
             } else if (atOp("*")) {
@@ -582,6 +603,7 @@ public final class Parser {
                 cases.add(new AstNode("match_case", pattern, guard, body));
             }
             if (peek().type == Token.DEDENT) next(); else if (peek().type != Token.ENDMARKER) throw invalid();
+            gate(10, "Pattern matching is only supported");
             return one(mk("Match", s, prevReal, subject, cases));
         } catch (PySyntaxError e) {
             p = save; prevReal = savePrev;
@@ -792,6 +814,7 @@ public final class Parser {
         Token t = peek();
         if (isIdentifier(t) && peek(1).type == Token.OP && peek(1).string.equals(":=")) {
             next(); next();
+            gate(8, "Assignment expressions are only supported");
             AstNode target = mk("Name", t, t, t.string, STORE);
             AstNode value = parseExpression();
             return mk("NamedExpr", t, prevReal, target, value);
@@ -1194,6 +1217,7 @@ public final class Parser {
         }
         if (acc != null) values.add(literal(acc, pending));
         values.removeIf(v -> v == SKIP);
+        if (anyT) gate(14, "t-strings are only supported");
         return mk(anyT ? "TemplateStr" : "JoinedStr", first, last, values);
     }
     private Object literal(StringBuilder text, Piece p) {

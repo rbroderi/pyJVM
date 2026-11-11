@@ -128,6 +128,7 @@ public final class PyRuntime {
             case "ast" -> AstModule.module();
             case "_ast" -> AstModule.privateModule();
             case "sys" -> NativeModules.sys();
+            case "builtins" -> Namespaces.builtinsModule();
             case "jvm_io" -> NativeModules.jvmIo();
             default -> throw new PyException("ImportError","No module named '"+name+"'");
         };
@@ -159,6 +160,7 @@ public final class PyRuntime {
         }
     }
     static Object moduleDict(PyModule module) {
+        if(module.name.equals("builtins") && module.className.equals("pyjvm315.runtime.Namespaces"))return Namespaces.builtinsDict();
         LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
         out.putAll(module.attrs);
         try {
@@ -187,6 +189,19 @@ public final class PyRuntime {
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
     }
 
+    /** module.name = value: a statically compiled module's own field when it has one, else the module's attribute table. */
+    static void moduleSetattr(PyModule module,String name,Object value) {
+        if(!module.attrs.containsKey(name) && !module.className.startsWith("pyjvm315.runtime.")) {
+            try {
+                Class<?> cls=Class.forName(module.className);
+                for(String prefix:new String[]{"__py_global_","__py_function_","__py_class_"}) {
+                    try { java.lang.reflect.Field f=cls.getField(prefix+name);if(f.get(null)!=UNBOUND){f.set(null,value);return;} } catch(NoSuchFieldException ignored) {}
+                }
+            } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
+        }
+        module.attrs.put(name,value);
+    }
+
     // ---------- Builtin type objects / introspection ----------
     public static Object methodDescriptor(Object function,Object kind){return new PyMethodDescriptor(function,(String)kind);}
     static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
@@ -205,18 +220,7 @@ public final class PyRuntime {
             Object result=ExecSupport.run(name,args.get(0),globals,locals,name);
             return name.equals("exec")?null:result;
         }
-        if(name.equals("compile")) {
-            for(Object key:kwargs.keySet()) if(!Set.of("source","filename","mode","flags","dont_inherit","optimize").contains(key))
-                throw new PyException("TypeError","compile() got an unexpected keyword argument '"+key+"'");
-            Object source=args.size()>0?args.get(0):kwargs.get("source"), file=args.size()>1?args.get(1):kwargs.get("filename"), mode=args.size()>2?args.get(2):kwargs.get("mode");
-            if(source==null || file==null || mode==null) throw new PyException("TypeError","compile() missing required argument");
-            Object flags=args.size()>3?args.get(3):kwargs.get("flags");
-            if(flags instanceof Long f && (f & 1024L)!=0) { // PyCF_ONLY_AST
-                if(AstModule.isNode(source)) return source;
-                return AstModule.compileToAst(source,(String)mode);
-            }
-            return ExecSupport.compileCode(source,file,mode);
-        }
+        if(name.equals("compile")) return ExecSupport.compileBuiltin(args,kwargs);
         if(name.equals("zip")) {
             for(Object key:kwargs.keySet()) if(!key.equals("strict")) throw new PyException("TypeError","zip() got an unexpected keyword argument '"+key+"'");
             return new PyZip(args,truth(kwargs.getOrDefault("strict",false)));
@@ -246,6 +250,7 @@ public final class PyRuntime {
         int n=args.size();
         if(name.equals("dir") && n<=1)return n==0?dirLocals():dirValue(args.get(0));
         if(name.equals("vars") && n<=1)return n==0?varsLocals():varsValue(args.get(0));
+        if((name.equals("globals") || name.equals("locals")) && n==0)return name.equals("globals")?Namespaces.globalsCall():Namespaces.localsCall();
         if(name.equals("format") && (n==1 || n==2))return formatValue(args.get(0),n==1?"":args.get(1));
         if(name.equals("next") && (n==1 || n==2)) {
             try { return next_(args.get(0)); }
@@ -488,7 +493,7 @@ public final class PyRuntime {
         if (value instanceof PyTuple t) return t.pyRepr();
         if (value instanceof PyDictView v) return v.pyRepr();
         if (value instanceof PyExcArgs a) return a.str();
-        if (value instanceof PyExceptionValue e) return e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):pyStr(e.value);
+        if (value instanceof PyExceptionValue e) return e.syntax!=null?e.syntax.describe(pyStr(e.value)):e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):pyStr(e.value);
         if (value instanceof PyException e) return e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):e.getMessage() == null ? "" : e.getMessage();
         if (value instanceof Throwable t) return t.getMessage() == null ? "" : t.getMessage();
         if (value instanceof PyInstance instance) {
@@ -939,12 +944,7 @@ public final class PyRuntime {
 
     // Keep namespace inspection out of shared arithmetic/collection dispatch paths.
     static Object varsLocals(){
-        ActiveFrame frame=currentLogicalFrame();
-        if(frame==null || frame.name.equals("<module>") || !frame.inspectSupported)throw new PyException("NotImplementedError","module and suspended-frame namespace inspection is not implemented");
-        if(frame.namespace!=null)return frame.namespace;
-        LinkedHashMap<Object,Object> result=frameLocalSnapshot(frame);
-        result.values().removeIf(value->value==UNBOUND);
-        return result;
+        return Namespaces.localsCall();
     }
     static LinkedHashMap<Object,Object> frameLocalSnapshot(ActiveFrame frame){
         LinkedHashMap<Object,Object> result=new LinkedHashMap<>(frame.locals);
@@ -958,12 +958,19 @@ public final class PyRuntime {
     }
     static Object dirLocals(){
         ActiveFrame frame=currentLogicalFrame();
-        if(frame!=null && (frame.name.equals("<module>") || !frame.inspectSupported))throw new PyException("NotImplementedError","module and suspended-frame namespace inspection is not implemented");
+        if(frame!=null && frame.namespace==null && (frame.name.equals("<module>") || !frame.inspectSupported))Namespaces.localsCall();
         Object names=frame==null?List.of():frame.namespace!=null?frame.namespace.keySet():frameLocalSnapshot(frame).keySet();
         return sorted(names);
     }
     static Object varsValue(Object value){
-        if(value instanceof PyModule || value instanceof PyClass)throw new PyException("NotImplementedError","live module/class dictionary views are not implemented");
+        if(value instanceof PyModule module)return moduleDict(module);
+        if(value instanceof PyClass cls){ // a snapshot of the class namespace: writes to it do not reach the class
+            LinkedHashMap<Object,Object> view=new LinkedHashMap<>();
+            for(Map.Entry<String,Object> e:cls.attrs.entrySet())view.put(e.getKey(),e.getValue());
+            for(Map.Entry<String,PyMethod> e:cls.methods.entrySet())view.putIfAbsent(e.getKey(),e.getValue());
+            for(Map.Entry<String,PyProperty> e:cls.properties.entrySet())view.putIfAbsent(e.getKey(),e.getValue());
+            return new PyDict(view);
+        }
         if(value instanceof PyInstance instance){
             Object access=instance.cls.lookupAttr("__getattribute__");
             if(access!=MISSING){
@@ -2309,7 +2316,7 @@ public final class PyRuntime {
         Object value=UNBOUND;
         if(l!=g && l.containsKey(nameObj)) value=l.get(nameObj);
         else if(g.containsKey(nameObj)) value=g.get(nameObj);
-        return globalGet(value,nameObj);
+        return value!=UNBOUND?value:Namespaces.builtinOrError(globals,nameObj);
     }
     @SuppressWarnings("unchecked")
     public static void nsStore(Object value,Object namespace,Object name) { ((Map<Object,Object>)namespace).put(name,value); }
@@ -2344,7 +2351,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(AnnotationSupport.isHelper(name))return builtinFunction(name);
-        if(Set.of("exec","eval","compile","aiter","anext","ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
+        if(Set.of("exec","eval","compile","aiter","anext","ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round","globals","locals").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
@@ -2761,7 +2768,7 @@ public final class PyRuntime {
     public static void raiseObject(Object value) {
         PyException user=userException(value);
         if(user!=null) throw user;
-        if (value instanceof PyExceptionValue e) throw new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback);
+        if (value instanceof PyExceptionValue e) { PyException again = new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback); again.syntax = e.syntax; throw again; }
         if (value instanceof PyException e) throw e;
         if (value instanceof PyBuiltinType t && exceptionIsSubclass(t.name,"BaseException")) throw new PyException(t.name,null);
         throw new PyException("TypeError", "exceptions must derive from BaseException");
@@ -2775,7 +2782,7 @@ public final class PyRuntime {
     public static void raiseObjectWithContext(Object value, Object contextObj) {
         PyException raised=userException(value);
         if (raised!=null) {}
-        else if (value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback);
+        else if (value instanceof PyExceptionValue e) { raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback); raised.syntax=e.syntax; }
         else if (value instanceof PyException e) raised=e;
         else throw new PyException("TypeError", "exceptions must derive from BaseException");
         if(!raised.suppressContext && contextObj instanceof Throwable t) {
@@ -2786,7 +2793,7 @@ public final class PyRuntime {
     public static void raiseObjectFrom(Object value, Object causeObj) {
         PyException raised=userException(value);
         if(raised!=null) {}
-        else if(value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value);
+        else if(value instanceof PyExceptionValue e) { raised=new PyException(e.typeName,e.value); raised.syntax=e.syntax; }
         else if(value instanceof PyException e) raised=e;
         else throw new PyException("TypeError","exceptions must derive from BaseException");
         if(causeObj == null) { raised.cause=null; raised.suppressContext=true; throw raised; }
@@ -2853,7 +2860,7 @@ public final class PyRuntime {
     public static Object exceptionInstance(Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
         if (t instanceof PyException p && p.value instanceof PyInstance user && user.cls.exceptionBase!=null) return user;
-        if (t instanceof PyException p) return new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext,p.traceback);
+        if (t instanceof PyException p) { PyExceptionValue v = new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext,p.traceback); v.syntax = p.syntax; return v; }
         return new PyExceptionValue(pythonExceptionType(t), exceptionValue(t));
     }
 
@@ -3628,6 +3635,15 @@ public final class PyRuntime {
         if (obj instanceof PyModule) return moduleGetattr(obj,nameObj);
         if (obj instanceof PyRange range && Set.of("start","stop","step").contains(name)) return compact(name.equals("start")?range.start:name.equals("stop")?range.stop:range.step);
         if (obj instanceof PyExceptionValue exc) {
+            if (exc.syntax!=null) {
+                if (name.equals("args")) {
+                    PyTuple where=new PyTuple(); SyntaxInfo si=exc.syntax;
+                    where.items.addAll(java.util.Arrays.asList(si.filename, si.lineno, si.offset, si.text, si.endLineno, si.endOffset));
+                    PyTuple t=new PyTuple(); t.items.add(exc.value); t.items.add(where); return t;
+                }
+                Object found=exc.syntax.attribute(name, exc.value);
+                if (found!=SyntaxInfo.NONE) return found;
+            }
             if (name.equals("args")) return BuiltinsExtra.exceptionArgs(exc.value);
             Object groupAttr=BuiltinsExtra.groupAttribute(exc,name); if(groupAttr!=MISSING) return groupAttr;
             if (name.equals("value") && exc.typeName.equals("StopIteration")) return exc.value;
@@ -3799,7 +3815,7 @@ public final class PyRuntime {
             else classAddAttr(cls,name,value);
             return;
         }
-        if(obj instanceof PyModule module){module.attrs.put(name,value);return;}
+        if(obj instanceof PyModule module){moduleSetattr(module,name,value);return;}
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {

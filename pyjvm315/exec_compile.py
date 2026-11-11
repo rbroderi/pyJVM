@@ -18,26 +18,29 @@ from .stackmap import FrameError
 CLASS_NAME = "pyjvm315.runtime.PyExec"
 
 
-def compile_for_exec(source: str, filename: str, mode: str) -> bytes:
-    if mode not in ("exec", "eval"):
+def compile_for_exec(source: str, filename: str, mode: str, optimize: int = 0, feature_minor: int = -1) -> bytes:
+    if mode not in ("exec", "eval", "single"):
         raise CompileError(f"compile() mode {mode!r} is not implemented")
+    level = None if feature_minor < 0 else (3, feature_minor)
     return compile_source(source, class_name=CLASS_NAME, filename=filename, dynamic=True, mode=mode,
-                          target=DEFAULT_TARGET)
+                          target=DEFAULT_TARGET, optimize=optimize, feature_version_override=level)
 
 
 def main(argv: list[str]) -> int:
     mode, filename = argv[0], argv[1]
+    optimize = int(argv[2]) if len(argv) > 2 else 0
+    feature_minor = int(argv[3]) if len(argv) > 3 else -1
     source = sys.stdin.buffer.read().decode("utf-8")
     try:
-        data = compile_for_exec(source, filename, mode)
+        data = compile_for_exec(source, filename, mode, optimize, feature_minor)
     except CompileError as exc:   # a SyntaxError subclass: valid Python the compiler does not support yet
         report = {"kind": "Unsupported", "message": str(exc)}
     except SyntaxError as exc:
-        report = {"kind": "SyntaxError", "message": exc.msg or str(exc), "lineno": exc.lineno, "offset": exc.offset}
+        report = {"kind": "SyntaxError", "type": type(exc).__name__, "message": exc.msg or str(exc), "lineno": exc.lineno, "offset": exc.offset}
     except FrameError as exc:
         too_big = "1..65535 bytes" in str(exc)
         report = {"kind": "Unsupported" if too_big else "Error",
-                  "message": "compiled code exceeds the JVM 64KB method limit (method splitting is not implemented)"
+                  "message": "compiled code exceeds the JVM 64KB method limit (a function, class or single module-level statement is too large)"
                   if too_big else f"FrameError: {exc}"}
     except RecursionError as exc:
         report = {"kind": "Unsupported", "message": "source is too deeply nested for the compiler"}

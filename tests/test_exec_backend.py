@@ -61,3 +61,44 @@ def test_unsupported_source_reports_the_compiler_reason(runtime_dir):
 def test_dynamic_compile_matches_static_for_simple_module():
     dyn = compile_source("x = 1\ndef f():\n    return x\n", class_name="pyjvm315.runtime.PyExec", dynamic=True)
     assert dyn[:4] == b"\xca\xfe\xba\xbe"
+
+
+def test_static_module_over_the_jvm_method_limit_is_split(runtime_dir):
+    lines = ["total = 0"]
+    for i in range(7000):
+        lines.append(f"total = total + {i}")
+    lines.append("print(total)")
+    src = "\n".join(lines) + "\n"
+    r = run_jvm(runtime_dir, src, backend=False)
+    assert r.stdout.split() == [str(sum(range(7000)))], r.stderr
+
+
+def test_single_statement_over_the_limit_is_a_clear_compile_error():
+    from pyjvm315.compiler import CompileError
+    huge = "x = [" + ", ".join(str(i) for i in range(20000)) + "]\n"
+    with pytest.raises(CompileError, match="64KB method limit"):
+        compile_source(huge, class_name="Main")
+
+
+def test_host_backend_honours_optimize_single_and_feature_version(runtime_dir):
+    src = (
+        "exec(compile('assert 0, \"boom\"\\nprint(__debug__)', '<s>', 'exec', optimize=1), {})\n"
+        "exec(compile('1 + 2', '<s>', 'single'), {})\n"
+        "try:\n"
+        "    compile('match x:\\n    case 1: pass\\n', '<s>', 'exec', 0x400, _feature_version=9)\n"
+        "except SyntaxError as e:\n"
+        "    print('gated', e.msg)\n"
+        "try:\n"
+        "    exec('__debug__ = 1', {})\n"
+        "except SyntaxError as e:\n"
+        "    print(e.msg)\n"
+    )
+    r = run_jvm(runtime_dir, src, backend=True)
+    assert r.stdout.splitlines() == [
+        "False", "3", "gated Pattern matching is only supported in Python 3.10 and greater", "cannot assign to __debug__"], r.stderr
+
+
+def test_host_backend_rejects_ast_input_explicitly(runtime_dir):
+    src = "import ast\ntry:\n    compile(ast.parse('x = 1'), '<s>', 'exec')\nexcept NotImplementedError:\n    print('NIE')\n"
+    r = run_jvm(runtime_dir, src, backend=True)
+    assert r.stdout.strip() == "NIE", r.stderr

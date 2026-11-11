@@ -40,6 +40,9 @@ public final class NativeModules {
         PyModule monitoring = new PyModule("sys.monitoring", "pyjvm315.runtime.Monitoring");
         Monitoring.install(monitoring);
         m.attrs.put("monitoring", monitoring);
+        NativeFunction hook = new NativeFunction("displayhook", Namespaces::defaultDisplayhook);
+        m.attrs.put("displayhook", hook);
+        m.attrs.put("__displayhook__", hook);
         return m;
     }
 

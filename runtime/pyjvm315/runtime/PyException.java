@@ -22,7 +22,7 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyException extends RuntimeException {
-    final String typeName; final Object value; Object tracedFrame; Object cause; Object context; boolean suppressContext; PyTraceback traceback;
+    final String typeName; final Object value; Object tracedFrame; SyntaxInfo syntax; Object cause; Object context; boolean suppressContext; PyTraceback traceback;
     PyException(String typeName, Object value) { this(typeName,value,null,null,false,null); }
     PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
     PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { super(value == null ? null : pyStr(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
