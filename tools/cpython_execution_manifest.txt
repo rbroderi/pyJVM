@@ -403,3 +403,221 @@ Lib/test/test_type_annotations.py::TypeAnnotationTests.test_annotations_getset_r
 Lib/test/test_type_annotations.py::TypeAnnotationTests.test_del_annotations_and_annotate objects
 Lib/test/test_type_annotations.py::TypeAnnotationTests.test_explicitly_set_annotations objects
 Lib/test/test_type_annotations.py::TypeAnnotationTests.test_setting_annotations objects
+# Builtin-subclass bodies (P2-04); unchanged CPython bodies.
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_python_lists objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_diamond_inheritance objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_ex5_from_c3_switch objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_monotonicity objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_consistency_with_epg objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_object_class objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_slots_after_items objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_errors objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_classmethod_staticmethod_annotations objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_classic objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_newslots objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_dict_constructors objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_basic_inheritance objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_str_subclass_as_dict_key objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_doc_descriptor objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_repr_with_module_str_subclass objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_hash_inheritance objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_str_operations objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_imul_bug objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_rmul objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_ipow objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_ipow_returns_not_implemented objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_no_ipow objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_evil_type_name objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_subclass_right_op objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_carloverre objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_init objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_assign_slice objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_abstractmethods objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_slot_shadows_class_variable objects
+Lib/test/test_descr.py::ClassPropertiesAndMethods.test_attr_raise_through_property objects
+Lib/test/test_class.py::ClassTests.testBadTypeReturned objects
+Lib/test/test_class.py::ClassTests.testHashStuff objects
+Lib/test/test_class.py::ClassTests.testSetattrNonStringName objects
+Lib/test/test_class.py::ClassTests.testTypeAttributeAccessErrorMessages objects
+Lib/test/test_class.py::ClassTests.testObjectAttributeAccessErrorMessages objects
+Lib/test/test_class.py::ClassTests.testMetaclassCallOptimization objects
+Lib/test/test_class.py::ClassTests.test_specialization_class_call_doesnt_crash objects
+Lib/test/test_dict.py::DictTest.test_invalid_keyword_arguments objects
+Lib/test/test_dict.py::DictTest.test_constructor objects
+Lib/test/test_dict.py::DictTest.test_merge_operator objects
+Lib/test/test_dict.py::DictTest.test_bool objects
+Lib/test/test_dict.py::DictTest.test_keys objects
+Lib/test/test_dict.py::DictTest.test_values objects
+Lib/test/test_dict.py::DictTest.test_items objects
+Lib/test/test_dict.py::DictTest.test_contains objects
+Lib/test/test_dict.py::DictTest.test_len objects
+Lib/test/test_dict.py::DictTest.test_getitem objects
+Lib/test/test_dict.py::DictTest.test_clear objects
+Lib/test/test_dict.py::DictTest.test_update objects
+Lib/test/test_dict.py::DictTest.test_update_shared_keys objects
+Lib/test/test_dict.py::DictTest.test_copy objects
+Lib/test/test_dict.py::DictTest.test_copy_noncompact objects
+Lib/test/test_dict.py::DictTest.test_get objects
+Lib/test/test_dict.py::DictTest.test_setdefault objects
+Lib/test/test_dict.py::DictTest.test_setitem_atomic_at_resize objects
+Lib/test/test_dict.py::DictTest.test_popitem objects
+Lib/test/test_dict.py::DictTest.test_pop objects
+Lib/test/test_dict.py::DictTest.test_mutating_iteration objects
+Lib/test/test_dict.py::DictTest.test_mutating_iteration_delete objects
+Lib/test/test_dict.py::DictTest.test_mutating_iteration_delete_over_values objects
+Lib/test/test_dict.py::DictTest.test_mutating_iteration_delete_over_items objects
+Lib/test/test_dict.py::DictTest.test_mutating_lookup objects
+Lib/test/test_dict.py::DictTest.test_eq objects
+Lib/test/test_dict.py::DictTest.test_dictview_set_operations_on_keys objects
+Lib/test/test_dict.py::DictTest.test_dictview_set_operations_on_items objects
+Lib/test/test_dict.py::DictTest.test_dictview_mixed_set_operations objects
+Lib/test/test_dict.py::DictTest.test_missing objects
+Lib/test/test_dict.py::DictTest.test_tuple_keyerror objects
+Lib/test/test_dict.py::DictTest.test_resize1 objects
+Lib/test/test_dict.py::DictTest.test_resize2 objects
+Lib/test/test_dict.py::DictTest.test_empty_presized_dict_in_freelist objects
+Lib/test/test_dict.py::DictTest.test_object_set_item_single_instance_non_str_key objects
+Lib/test/test_dict.py::DictTest.test_equal_operator_modifying_operand objects
+Lib/test/test_dict.py::DictTest.test_fromkeys_operator_modifying_dict_operand objects
+Lib/test/test_dict.py::DictTest.test_fromkeys_operator_modifying_set_operand objects
+Lib/test/test_dict.py::DictTest.test_dictitems_contains_use_after_free objects
+Lib/test/test_dict.py::DictTest.test_dict_contain_use_after_free objects
+Lib/test/test_dict.py::DictTest.test_init_use_after_free objects
+Lib/test/test_dict.py::DictTest.test_reverse_iterator_for_empty_dict objects
+Lib/test/test_dict.py::DictTest.test_reverse_iterator_for_shared_shared_dicts objects
+Lib/test/test_dict.py::DictTest.test_clear_at_lookup objects
+Lib/test/test_dict.py::DictTest.test_split_table_insert_with_str_subclass objects
+Lib/test/test_dict.py::DictTest.test_clear_reentrant_embedded objects
+Lib/test/test_dict.py::DictTest.test_clear_reentrant_cycle objects
+Lib/test/test_dict.py::DictTest.test_clear_reentrant_force_combined objects
+Lib/test/test_dict.py::DictTest.test_clear_reentrant_delete objects
+Lib/test/test_long.py::LongTest.test_conversion objects
+Lib/test/test_long.py::LongTest.test__format__ objects
+Lib/test/test_long.py::LongTest.test_mod_division objects
+Lib/test/test_long.py::LongTest.test_floordiv objects
+Lib/test/test_long.py::LongTest.test_huge_rshift objects
+Lib/test/test_long.py::LongTest.test_small_rshift objects
+Lib/test/test_long.py::LongTest.test_big_rshift objects
+Lib/test/test_long.py::LongTest.test_small_lshift objects
+Lib/test/test_long.py::LongTest.test_medium_lshift objects
+Lib/test/test_long.py::LongTest.test_big_lshift objects
+Lib/test/test_long.py::LongTest.test_bit_count objects
+Lib/test/test_long.py::LongTest.test_is_integer objects
+Lib/test/test_long.py::LongTest.test_access_to_nonexistent_digit_0 objects
+Lib/test/test_long.py::LongTest.test_shift_bool objects
+Lib/test/test_long.py::LongTest.test_square objects
+Lib/test/test_exceptions.py::ExceptionTests.test_invalid_setattr objects
+Lib/test/test_exceptions.py::ExceptionTests.testKeywordArgs objects
+Lib/test/test_exceptions.py::ExceptionTests.test_str objects
+Lib/test/test_exceptions.py::ExceptionTests.test_oserror_reinit_leak objects
+Lib/test/test_exceptions.py::ExceptionTests.test_yield_in_nested_try_excepts objects
+Lib/test/test_exceptions.py::ExceptionTests.test_raise_in_generator objects
+Lib/test/test_float.py::GeneralFloatCases.test_noargs objects
+Lib/test/test_float.py::GeneralFloatCases.test_keyword_args objects
+Lib/test/test_float.py::GeneralFloatCases.test_is_integer objects
+Lib/test/test_float.py::GeneralFloatCases.test_float_floor objects
+Lib/test/test_float.py::GeneralFloatCases.test_float_ceil objects
+Lib/test/test_float.py::GeneralFloatCases.test_issue_gh143006 objects
+Lib/test/test_tuple.py::TupleTest.test_getitem_error objects
+Lib/test/test_tuple.py::TupleTest.test_keyword_args objects
+Lib/test/test_tuple.py::TupleTest.test_tupleresizebug objects
+Lib/test/test_tuple.py::TupleTest.test_repr_large objects
+Lib/test/test_tuple.py::TupleTest.test_no_comdat_folding objects
+Lib/test/test_set.py::TestSet.test_set_literal objects
+Lib/test/test_set.py::TestSet.test_set_literal_insertion_order objects
+Lib/test/test_set.py::TestSet.test_set_literal_evaluation_order objects
+Lib/test/test_set.py::TestSet.test_rich_compare objects
+Lib/test/test_set.py::TestSet.test_set_membership objects
+Lib/test/test_set.py::TestSetSubclass.test_keywords_in_subclass objects
+Lib/test/test_complex.py::ComplexTest.test_richcompare_boundaries objects
+Lib/test/test_complex.py::ComplexTest.test_divmod objects
+Lib/test/test_str.py::StrTest.test_iterators_invocation objects
+Lib/test/test_str.py::StrTest.test_iteration objects
+Lib/test/test_str.py::StrTest.test_exhausted_iterator objects
+Lib/test/test_str.py::StrTest.test_repeat_id_preserving objects
+Lib/test/test_str.py::StrTest.test_comparison objects
+Lib/test/test_str.py::StrTest.test_isidentifier objects
+Lib/test/test_str.py::StrTest.test_isprintable objects
+Lib/test/test_str.py::StrTest.test_issue18183 objects
+Lib/test/test_str.py::StrTest.test_format_auto_numbering objects
+Lib/test/test_str.py::StrTest.test_startswith_endswith_errors objects
+Lib/test/test_str.py::StrTest.test_constructor_keyword_args objects
+Lib/test/test_str.py::StrTest.test_utf8_decode_valid_sequences objects
+Lib/test/test_str.py::StrTest.test_concatenation objects
+Lib/test/test_str.py::StrTest.test_unicode_repr objects
+Lib/test/test_str.py::StrTest.test_printable_repr objects
+Lib/test/test_str.py::StrTest.test_format_subclass objects
+Lib/test/test_str.py::StrTest.test_subclass_add objects
+# Timsort bodies (P2-05).
+Lib/test/test_sort.py::TestDecorateSortUndecorate.test_baddecorator objects
+Lib/test/test_sort.py::TestDecorateSortUndecorate.test_key_with_exception objects
+Lib/test/test_sort.py::TestDecorateSortUndecorate.test_key_with_mutation objects
+Lib/test/test_sort.py::TestDecorateSortUndecorate.test_key_with_mutating_del_and_exception objects
+Lib/test/test_sort.py::TestOptimizedCompares.test_not_all_tuples objects
+Lib/test/test_sort.py::TestOptimizedCompares.test_none_in_tuples objects
+# Format-spec bodies (P2-07).
+Lib/test/test_bool.py::BoolTest.test_format
+Lib/test/test_bool.py::BoolTest.test_repr
+Lib/test/test_bool.py::BoolTest.test_str
+Lib/test/test_bool.py::BoolTest.test_string
+Lib/test/test_builtin.py::BuiltinTest.test_sentinel_repr
+Lib/test/test_bytes.py::BaseBytesTest.test_imod
+Lib/test/test_float.py::InfNanTest.test_inf_as_str
+Lib/test/test_float.py::InfNanTest.test_nan_as_str
+Lib/test/test_long.py::LongTest.test__format__
+Lib/test/test_str.py::StrTest.test_format_auto_numbering
+Lib/test/test_str.py::StrTest.test_format_map
+Lib/test/test_str.py::StrTest.test_format_subclass
+Lib/test/test_str.py::StrTest.test_printable_repr
+Lib/test/test_str.py::StrTest.test_unicode_repr
+Lib/test/test_types.py::TypesTests.test_float__format__
+Lib/test/test_types.py::TypesTests.test_float_to_string
+Lib/test/test_types.py::TypesTests.test_floats
+Lib/test/test_types.py::TypesTests.test_format_spec_errors
+Lib/test/test_types.py::TypesTests.test_int__format__
+@imports sys
+# except* bodies (P2-09); excgroup fixture adds the exception-group assertion helpers.
+Lib/test/test_except_star.py::TestBreakContinueReturnInExceptStarBlock.test_break_continue_in_except_star_block_valid excgroup
+Lib/test/test_except_star.py::TestBreakContinueReturnInExceptStarBlock.test_return_in_except_star_block_valid excgroup
+Lib/test/test_except_star.py::TestExceptStarCleanup.test_sys_exception_restored excgroup
+Lib/test/test_except_star.py::TestExceptStarExceptionGroupSubclass.test_except_star_EG_subclass excgroup
+Lib/test/test_except_star.py::TestExceptStarExceptionGroupSubclass.test_exception_group_subclass_with_bad_split_func excgroup
+Lib/test/test_except_star.py::TestExceptStarExceptionGroupSubclass.test_falsy_exception_group_subclass excgroup
+Lib/test/test_except_star.py::TestExceptStarRaise.test_raise_handle_all_raise_one_named excgroup
+Lib/test/test_except_star.py::TestExceptStarRaise.test_raise_handle_all_raise_one_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarRaise.test_raise_handle_all_raise_two_named excgroup
+Lib/test/test_except_star.py::TestExceptStarRaise.test_raise_handle_all_raise_two_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarRaise.test_raise_named excgroup
+Lib/test/test_except_star.py::TestExceptStarRaise.test_raise_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarRaiseFrom.test_raise_handle_all_raise_one_named excgroup
+Lib/test/test_except_star.py::TestExceptStarRaiseFrom.test_raise_handle_all_raise_one_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarRaiseFrom.test_raise_handle_all_raise_two_named excgroup
+Lib/test/test_except_star.py::TestExceptStarRaiseFrom.test_raise_handle_all_raise_two_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarRaiseFrom.test_raise_named excgroup
+Lib/test/test_except_star.py::TestExceptStarRaiseFrom.test_raise_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_all_named excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_all_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_partial_handle_all_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_partial_handle_some_named excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_partial_handle_some_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_plain_exception_named excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_plain_exception_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarReraise.test_reraise_some_handle_all_named excgroup
+Lib/test/test_except_star.py::TestExceptStarSplitSemantics.test_first_match_wins_named excgroup
+Lib/test/test_except_star.py::TestExceptStarSplitSemantics.test_first_match_wins_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarSplitSemantics.test_multiple_matches_named excgroup
+Lib/test/test_except_star.py::TestExceptStarSplitSemantics.test_multiple_matches_unnamed excgroup
+Lib/test/test_except_star.py::TestExceptStarSplitSemantics.test_nested_except_stars excgroup
+Lib/test/test_except_star.py::TestExceptStarSplitSemantics.test_nested_in_loop excgroup
+Lib/test/test_except_star.py::TestInvalidExceptStar.test_except_star_ExceptionGroup_is_runtime_error_single excgroup
+Lib/test/test_except_star.py::TestInvalidExceptStar.test_except_star_ExceptionGroup_is_runtime_error_tuple excgroup
+Lib/test/test_except_star.py::TestInvalidExceptStar.test_except_star_invalid_exception_type excgroup
+@imports copy
+# copy bodies run against the corpus Lib at run time (P3-01).
+Lib/test/test_copy.py::TestCopy.test_copy_basic objects
+Lib/test/test_copy.py::TestCopy.test_copy_list objects
+Lib/test/test_copy.py::TestCopy.test_copy_tuple objects
+Lib/test/test_copy.py::TestCopy.test_copy_dict objects
+Lib/test/test_copy.py::TestCopy.test_copy_frozendict objects
+Lib/test/test_copy.py::TestCopy.test_copy_set objects
+Lib/test/test_copy.py::TestCopy.test_copy_frozenset objects
