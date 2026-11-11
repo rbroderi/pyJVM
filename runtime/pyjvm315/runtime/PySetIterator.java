@@ -33,13 +33,23 @@ final class PySetIterator implements Iterator<Object> {
     }
     long lengthHint(){return source==null || invalid || source.size()!=expectedSize?0:Math.max(0,expectedSize-position);}
     public boolean hasNext(){
+        PySet src=source;
+        if(SyncSupport.MT && src!=null) synchronized(src){return hasNext0();}
+        return hasNext0();
+    }
+    private boolean hasNext0(){
         if(source==null)return false;
         checkSize();
         if(cursor.hasNext())return true;
         source=null;cursor=null;return false;
     }
     public Object next(){
-        if(!hasNext())throw new NoSuchElementException();
+        PySet src=source;
+        if(SyncSupport.MT && src!=null) synchronized(src){return next0();}
+        return next0();
+    }
+    private Object next0(){
+        if(!hasNext0())throw new NoSuchElementException();
         Object result;
         try{result=cursor.next();}
         catch(java.util.ConcurrentModificationException changed){

@@ -1621,7 +1621,10 @@ public final class PyRuntime {
         }
         if(key instanceof String || key instanceof Double || key==null || !(value instanceof List || value instanceof PyTuple || value instanceof PyRange || value instanceof String))throw indexTypeError(value,key);
         int i = asIndex(key);
-        if (value instanceof List<?> xs) return xs.get(normalizeIndex(i, xs.size()));
+        if (value instanceof List<?> xs) {
+            if (SyncSupport.MT) synchronized (xs) { return xs.get(normalizeIndex(i, xs.size())); }
+            return xs.get(normalizeIndex(i, xs.size()));
+        }
         if (value instanceof PyTuple t) return t.items.get(normalizeIndex(i, t.items.size()));
         if (value instanceof PyRange r) {
             BigInteger n = r.length();
@@ -1653,7 +1656,10 @@ public final class PyRuntime {
         int i = asIndex(key);
         if(value instanceof PyByteArray array){array.setUnsigned(normalizeIndex(i,array.byteSize()),byteValue(item));return;}
         if(value instanceof PyMemoryView view){view.setUnsigned(normalizeIndex(i,view.byteSize()),byteValue(item));return;}
-        if (value instanceof List<?> xs) { ((List<Object>)xs).set(normalizeIndex(i, xs.size()), item); return; }
+        if (value instanceof List<?> xs) {
+            if (SyncSupport.MT) synchronized (xs) { ((List<Object>)xs).set(normalizeIndex(i, xs.size()), item); return; }
+            ((List<Object>)xs).set(normalizeIndex(i, xs.size()), item); return;
+        }
         throw typeError("object does not support item assignment", value);
     }
     @SuppressWarnings("unchecked")
@@ -1669,10 +1675,13 @@ public final class PyRuntime {
             for(int i=start;step>0?i<stop:i>stop;i+=step)if(i>=0 && i<size)indexes.add(i);
             indexes.sort(Collections.reverseOrder());for(int i:indexes)list.remove(i);return;
         }
-        if(value instanceof PyByteArray array){int i=asIndex(key);array.data.remove(normalizeIndex(i,array.data.size()));return;}
+        if(value instanceof PyByteArray array){int i=asIndex(key);synchronized(array){array.data.remove(normalizeIndex(i,array.data.size()));}return;}
         if (value instanceof Map<?,?> m) { if(!m.containsKey(key)) throw new NoSuchElementException("key not found"); ((Map<Object,Object>)m).remove(key); return; }
         int i=asIndex(key);
-        if (value instanceof List<?> xs) { ((List<Object>)xs).remove(normalizeIndex(i,xs.size())); return; }
+        if (value instanceof List<?> xs) {
+            if (SyncSupport.MT) synchronized (xs) { ((List<Object>)xs).remove(normalizeIndex(i,xs.size())); return; }
+            ((List<Object>)xs).remove(normalizeIndex(i,xs.size())); return;
+        }
         throw typeError("object does not support item deletion",value);
     }
 
@@ -1693,7 +1702,7 @@ public final class PyRuntime {
         }
         if (container instanceof Map<?, ?> m) return m.containsKey(needle);
         if (container instanceof Set<?> s) return s.contains(needle);
-        if (container instanceof List<?> xs) return xs.contains(needle);
+        if (container instanceof List<?> xs) { if (SyncSupport.MT) synchronized (xs) { return xs.contains(needle); } return xs.contains(needle); }
         if (container instanceof PyTuple t) return t.items.contains(needle);
         for (Object value : iterable(container)) if ((Boolean)eq(value, needle)) return true;
         return false;
@@ -1873,6 +1882,7 @@ public final class PyRuntime {
             if(instance.cls.lookupAttr("__getitem__")!=MISSING || instance.cls.lookupMethod("__getitem__")!=null)
                 return () -> sequenceIterator(instance);
         }
+        if (value instanceof ArrayList<?> al) return () -> new PyListIterator(al);
         if (value instanceof Iterable<?> x) return x;
         if (value instanceof Iterator<?> iterator) return () -> new Iterator<Object>() {
             public boolean hasNext(){return iterator.hasNext();}

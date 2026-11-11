@@ -25,12 +25,14 @@ class PySet extends java.util.AbstractSet<Object> {
     final LinkedHashMap<SetKey,Object> entries=new LinkedHashMap<>();
     PySet(){}
     PySet(Object values){if(values instanceof PySet set)entries.putAll(set.entries);else for(Object value:iterable(values))entries.putIfAbsent(new SetKey(value),value);}
-    @Override public int size(){return entries.size();}
+    @Override public int size(){if(!SyncSupport.MT)return entries.size();synchronized(this){return entries.size();}}
     @Override public Iterator<Object> iterator(){return new PySetIterator(this);}
     SetKey lookupKey(Object value){return new SetKey(value instanceof Set<?> && !(value instanceof PyFrozenSet)?new PyFrozenSet(value):value);}
-    @Override public boolean contains(Object value){return entries.containsKey(lookupKey(value));}
-    @Override public boolean add(Object value){SetKey key=new SetKey(value);if(entries.containsKey(key))return false;entries.put(key,value);return true;}
-    @Override public boolean remove(Object value){SetKey key=lookupKey(value);if(!entries.containsKey(key))return false;entries.remove(key);return true;}
-    @Override public void clear(){entries.clear();}
+    @Override public boolean contains(Object value){SetKey key=lookupKey(value);if(!SyncSupport.MT)return entries.containsKey(key);synchronized(this){return entries.containsKey(key);}}
+    @Override public boolean add(Object value){SetKey key=new SetKey(value);if(!SyncSupport.MT)return add0(key,value);synchronized(this){return add0(key,value);}}
+    private boolean add0(SetKey key,Object value){if(entries.containsKey(key))return false;entries.put(key,value);return true;}
+    @Override public boolean remove(Object value){SetKey key=lookupKey(value);if(!SyncSupport.MT)return remove0(key);synchronized(this){return remove0(key);}}
+    private boolean remove0(SetKey key){if(!entries.containsKey(key))return false;entries.remove(key);return true;}
+    @Override public void clear(){if(!SyncSupport.MT){entries.clear();return;}synchronized(this){entries.clear();}}
     @Override public int hashCode(){throw new PyException("TypeError","unhashable type: 'set'");}
 }

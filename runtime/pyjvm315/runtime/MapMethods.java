@@ -25,6 +25,11 @@ import java.util.Set;
 final class MapMethods {
     static final java.util.Set<String> FROZEN_ALLOWED=PyRuntime.FROZENDICT_METHODS;
     static Object call(Object obj, String name, Object[] args) {
+        if (!SyncSupport.MT) return call0(obj, name, args);
+        synchronized (obj) { return call0(obj, name, args); }
+    }
+
+    private static Object call0(Object obj, String name, Object[] args) {
         Map<?,?> raw=(Map<?,?>)obj;
         @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)raw;
         if(map instanceof PyDict fd && fd.isFrozen()) {

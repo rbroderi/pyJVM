@@ -101,9 +101,12 @@ public final class CollectionsModule {
         if (!(self instanceof PyInstance i)) throw new PyException("TypeError", "descriptor requires a 'collections.deque' object but received '" + PyRuntime.typeName(self) + "'");
         Object s = i.slotValues.get(STATE);
         if (s instanceof Deque d) return d;
-        Deque d = new Deque();
-        i.slotValues.put(STATE, d);
-        return d;
+        synchronized (i) {
+            if (i.slotValues.get(STATE) instanceof Deque made) return made;
+            Deque d = new Deque();
+            i.slotValues.put(STATE, d);
+            return d;
+        }
     }
 
     private static Object it(Object iterable) { return PyRuntime.iter(iterable); }
@@ -123,7 +126,8 @@ public final class CollectionsModule {
         throw new PyException("TypeError", "'" + PyRuntime.typeName(o) + "' object cannot be interpreted as an integer");
     }
 
-    public static Object dqInit(Object self, Object iterable, Object maxlen) {
+    public static Object dqInit(Object self, Object iterable, Object maxlen) { if (!SyncSupport.MT) return dqInit0(self, iterable, maxlen); synchronized (dq(self)) { return dqInit0(self, iterable, maxlen); } }
+    private static Object dqInit0(Object self, Object iterable, Object maxlen) {
         Deque d = dq(self);
         if (maxlen != null) {
             long n = index(maxlen);
@@ -143,30 +147,36 @@ public final class CollectionsModule {
         d.mutations++;
     }
 
-    public static Object dqAppend(Object self, Object x) { push(dq(self), x, false); return null; }
-    public static Object dqAppendLeft(Object self, Object x) { push(dq(self), x, true); return null; }
+    public static Object dqAppend(Object self, Object x) { if (!SyncSupport.MT) return dqAppend0(self, x); synchronized (dq(self)) { return dqAppend0(self, x); } }
+    private static Object dqAppend0(Object self, Object x) { push(dq(self), x, false); return null; }
+    public static Object dqAppendLeft(Object self, Object x) { if (!SyncSupport.MT) return dqAppendLeft0(self, x); synchronized (dq(self)) { return dqAppendLeft0(self, x); } }
+    private static Object dqAppendLeft0(Object self, Object x) { push(dq(self), x, true); return null; }
 
-    public static Object dqPop(Object self) {
+    public static Object dqPop(Object self) { if (!SyncSupport.MT) return dqPop0(self); synchronized (dq(self)) { return dqPop0(self); } }
+    private static Object dqPop0(Object self) {
         Deque d = dq(self);
         if (d.items.isEmpty()) throw new PyException("IndexError", "pop from an empty deque");
         d.mutations++;
         return d.items.remove(d.items.size() - 1);
     }
 
-    public static Object dqPopLeft(Object self) {
+    public static Object dqPopLeft(Object self) { if (!SyncSupport.MT) return dqPopLeft0(self); synchronized (dq(self)) { return dqPopLeft0(self); } }
+    private static Object dqPopLeft0(Object self) {
         Deque d = dq(self);
         if (d.items.isEmpty()) throw new PyException("IndexError", "pop from an empty deque");
         d.mutations++;
         return d.items.remove(0);
     }
 
-    public static Object dqExtend(Object self, Object iterable) {
+    public static Object dqExtend(Object self, Object iterable) { if (!SyncSupport.MT) return dqExtend0(self, iterable); synchronized (dq(self)) { return dqExtend0(self, iterable); } }
+    private static Object dqExtend0(Object self, Object iterable) {
         Deque d = dq(self);
         for (Object x : drain(iterable == self ? dqCopyList(d) : iterable)) push(d, x, false);
         return null;
     }
 
-    public static Object dqExtendLeft(Object self, Object iterable) {
+    public static Object dqExtendLeft(Object self, Object iterable) { if (!SyncSupport.MT) return dqExtendLeft0(self, iterable); synchronized (dq(self)) { return dqExtendLeft0(self, iterable); } }
+    private static Object dqExtendLeft0(Object self, Object iterable) {
         Deque d = dq(self);
         for (Object x : drain(iterable == self ? dqCopyList(d) : iterable)) push(d, x, true);
         return null;
@@ -176,9 +186,11 @@ public final class CollectionsModule {
 
     private static ArrayList<Object> pyList(List<Object> items) { return new ArrayList<>(items); }
 
-    public static Object dqClear(Object self) { Deque d = dq(self); d.items.clear(); d.mutations++; return null; }
+    public static Object dqClear(Object self) { if (!SyncSupport.MT) return dqClear0(self); synchronized (dq(self)) { return dqClear0(self); } }
+    private static Object dqClear0(Object self) { Deque d = dq(self); d.items.clear(); d.mutations++; return null; }
 
-    public static Object dqRotate(Object self, Object nObj) {
+    public static Object dqRotate(Object self, Object nObj) { if (!SyncSupport.MT) return dqRotate0(self, nObj); synchronized (dq(self)) { return dqRotate0(self, nObj); } }
+    private static Object dqRotate0(Object self, Object nObj) {
         Deque d = dq(self);
         int size = d.items.size();
         if (size <= 1) return null;
@@ -190,7 +202,8 @@ public final class CollectionsModule {
         return null;
     }
 
-    public static Object dqCount(Object self, Object x) {
+    public static Object dqCount(Object self, Object x) { if (!SyncSupport.MT) return dqCount0(self, x); synchronized (dq(self)) { return dqCount0(self, x); } }
+    private static Object dqCount0(Object self, Object x) {
         Deque d = dq(self);
         long mutations = d.mutations;
         long n = 0;
@@ -201,7 +214,8 @@ public final class CollectionsModule {
         return n;
     }
 
-    public static Object dqIndex(Object self, Object x, Object startObj, Object stopObj) {
+    public static Object dqIndex(Object self, Object x, Object startObj, Object stopObj) { if (!SyncSupport.MT) return dqIndex0(self, x, startObj, stopObj); synchronized (dq(self)) { return dqIndex0(self, x, startObj, stopObj); } }
+    private static Object dqIndex0(Object self, Object x, Object startObj, Object stopObj) {
         Deque d = dq(self);
         int size = d.items.size();
         long start = index(startObj), stop = stopObj instanceof Long l ? l : index(stopObj);
@@ -216,7 +230,8 @@ public final class CollectionsModule {
         throw new PyException("ValueError", PyRuntime.pyRepr(x) + " is not in deque");
     }
 
-    public static Object dqInsert(Object self, Object iObj, Object x) {
+    public static Object dqInsert(Object self, Object iObj, Object x) { if (!SyncSupport.MT) return dqInsert0(self, iObj, x); synchronized (dq(self)) { return dqInsert0(self, iObj, x); } }
+    private static Object dqInsert0(Object self, Object iObj, Object x) {
         Deque d = dq(self);
         if (d.maxlen >= 0 && d.items.size() >= d.maxlen) throw new PyException("IndexError", "deque already at its maximum size");
         long i = index(iObj);
@@ -227,7 +242,8 @@ public final class CollectionsModule {
         return null;
     }
 
-    public static Object dqRemove(Object self, Object x) {
+    public static Object dqRemove(Object self, Object x) { if (!SyncSupport.MT) return dqRemove0(self, x); synchronized (dq(self)) { return dqRemove0(self, x); } }
+    private static Object dqRemove0(Object self, Object x) {
         Deque d = dq(self);
         long mutations = d.mutations;
         for (int i = 0; i < d.items.size(); i++) {
@@ -238,9 +254,11 @@ public final class CollectionsModule {
         throw new PyException("ValueError", "deque.remove(x): x not in deque");
     }
 
-    public static Object dqReverse(Object self) { Deque d = dq(self); java.util.Collections.reverse(d.items); d.mutations++; return null; }
+    public static Object dqReverse(Object self) { if (!SyncSupport.MT) return dqReverse0(self); synchronized (dq(self)) { return dqReverse0(self); } }
+    private static Object dqReverse0(Object self) { Deque d = dq(self); java.util.Collections.reverse(d.items); d.mutations++; return null; }
 
-    public static Object dqCopy(Object self) {
+    public static Object dqCopy(Object self) { if (!SyncSupport.MT) return dqCopy0(self); synchronized (dq(self)) { return dqCopy0(self); } }
+    private static Object dqCopy0(Object self) {
         Deque d = dq(self);
         PyClass cls = ((PyInstance) self).cls;
         PyInstance out = new PyInstance(cls);
@@ -251,7 +269,8 @@ public final class CollectionsModule {
         return out;
     }
 
-    public static Object dqLen(Object self) { return (long) dq(self).items.size(); }
+    public static Object dqLen(Object self) { if (!SyncSupport.MT) return dqLen0(self); synchronized (dq(self)) { return dqLen0(self); } }
+    private static Object dqLen0(Object self) { return (long) dq(self).items.size(); }
 
     private static Object iterate(Deque d, boolean reversed) {
         long mutations = d.mutations;
@@ -259,6 +278,10 @@ public final class CollectionsModule {
         return new PyLazyIterator() {
             @Override String pyTypeName() { return reversed ? "_collections._deque_reverse_iterator" : "_collections._deque_iterator"; }
             @Override Object compute() {
+                if (SyncSupport.MT) synchronized (d) { return step(); }
+                return step();
+            }
+            private Object step() {
                 if (d.mutations != mutations) throw new PyException("RuntimeError", "deque mutated during iteration");
                 if (at[0] >= d.items.size()) throw new NoSuchElementException();
                 int i = at[0]++;
@@ -267,10 +290,13 @@ public final class CollectionsModule {
         };
     }
 
-    public static Object dqIter(Object self) { return iterate(dq(self), false); }
-    public static Object dqReversed(Object self) { return iterate(dq(self), true); }
+    public static Object dqIter(Object self) { if (!SyncSupport.MT) return dqIter0(self); synchronized (dq(self)) { return dqIter0(self); } }
+    private static Object dqIter0(Object self) { return iterate(dq(self), false); }
+    public static Object dqReversed(Object self) { if (!SyncSupport.MT) return dqReversed0(self); synchronized (dq(self)) { return dqReversed0(self); } }
+    private static Object dqReversed0(Object self) { return iterate(dq(self), true); }
 
-    public static Object dqContains(Object self, Object x) {
+    public static Object dqContains(Object self, Object x) { if (!SyncSupport.MT) return dqContains0(self, x); synchronized (dq(self)) { return dqContains0(self, x); } }
+    private static Object dqContains0(Object self, Object x) {
         Deque d = dq(self);
         long mutations = d.mutations;
         for (int i = 0; i < d.items.size(); i++) {
@@ -289,11 +315,15 @@ public final class CollectionsModule {
         return (int) i;
     }
 
-    public static Object dqGet(Object self, Object i) { Deque d = dq(self); return d.items.get(slot(d, i)); }
-    public static Object dqSet(Object self, Object i, Object x) { Deque d = dq(self); d.items.set(slot(d, i), x); return null; }
-    public static Object dqDel(Object self, Object i) { Deque d = dq(self); d.items.remove(slot(d, i)); d.mutations++; return null; }
+    public static Object dqGet(Object self, Object i) { if (!SyncSupport.MT) return dqGet0(self, i); synchronized (dq(self)) { return dqGet0(self, i); } }
+    private static Object dqGet0(Object self, Object i) { Deque d = dq(self); return d.items.get(slot(d, i)); }
+    public static Object dqSet(Object self, Object i, Object x) { if (!SyncSupport.MT) return dqSet0(self, i, x); synchronized (dq(self)) { return dqSet0(self, i, x); } }
+    private static Object dqSet0(Object self, Object i, Object x) { Deque d = dq(self); d.items.set(slot(d, i), x); return null; }
+    public static Object dqDel(Object self, Object i) { if (!SyncSupport.MT) return dqDel0(self, i); synchronized (dq(self)) { return dqDel0(self, i); } }
+    private static Object dqDel0(Object self, Object i) { Deque d = dq(self); d.items.remove(slot(d, i)); d.mutations++; return null; }
 
-    public static Object dqRepr(Object self) {
+    public static Object dqRepr(Object self) { if (!SyncSupport.MT) return dqRepr0(self); synchronized (dq(self)) { return dqRepr0(self); } }
+    private static Object dqRepr0(Object self) {
         Deque d = dq(self);
         StringBuilder out = new StringBuilder(((PyInstance) self).cls.name).append("([");
         for (int i = 0; i < d.items.size(); i++) {
@@ -305,7 +335,8 @@ public final class CollectionsModule {
         return out.append(")").toString();
     }
 
-    public static Object dqAdd(Object self, Object other) {
+    public static Object dqAdd(Object self, Object other) { if (!SyncSupport.MT) return dqAdd0(self, other); synchronized (dq(self)) { return dqAdd0(self, other); } }
+    private static Object dqAdd0(Object self, Object other) {
         if (!(other instanceof PyInstance o) || !(o.slotValues.get(STATE) instanceof Deque))
             throw new PyException("TypeError", "can only concatenate deque (not \"" + PyRuntime.typeName(other) + "\") to deque");
         Object out = dqCopy(self);
@@ -313,9 +344,11 @@ public final class CollectionsModule {
         return out;
     }
 
-    public static Object dqIAdd(Object self, Object other) { dqExtend(self, other); return self; }
+    public static Object dqIAdd(Object self, Object other) { if (!SyncSupport.MT) return dqIAdd0(self, other); synchronized (dq(self)) { return dqIAdd0(self, other); } }
+    private static Object dqIAdd0(Object self, Object other) { dqExtend(self, other); return self; }
 
-    public static Object dqMul(Object self, Object nObj) {
+    public static Object dqMul(Object self, Object nObj) { if (!SyncSupport.MT) return dqMul0(self, nObj); synchronized (dq(self)) { return dqMul0(self, nObj); } }
+    private static Object dqMul0(Object self, Object nObj) {
         Deque d = dq(self);
         long n = index(nObj);
         Object out = dqCopy(self);
@@ -325,7 +358,8 @@ public final class CollectionsModule {
         return out;
     }
 
-    public static Object dqIMul(Object self, Object nObj) {
+    public static Object dqIMul(Object self, Object nObj) { if (!SyncSupport.MT) return dqIMul0(self, nObj); synchronized (dq(self)) { return dqIMul0(self, nObj); } }
+    private static Object dqIMul0(Object self, Object nObj) {
         Deque d = dq(self);
         long n = index(nObj);
         ArrayList<Object> base = new ArrayList<>(d.items);
@@ -350,19 +384,27 @@ public final class CollectionsModule {
         };
     }
 
-    public static Object dqEq(Object self, Object other) { return compare(self, other, "eq"); }
-    public static Object dqNe(Object self, Object other) {
+    public static Object dqEq(Object self, Object other) { if (!SyncSupport.MT) return dqEq0(self, other); synchronized (dq(self)) { return dqEq0(self, other); } }
+    private static Object dqEq0(Object self, Object other) { return compare(self, other, "eq"); }
+    public static Object dqNe(Object self, Object other) { if (!SyncSupport.MT) return dqNe0(self, other); synchronized (dq(self)) { return dqNe0(self, other); } }
+    private static Object dqNe0(Object self, Object other) {
         Object r = compare(self, other, "eq");
         return r == PyRuntime.NOT_IMPLEMENTED ? r : (Object) !PyRuntime.truth(r);
     }
-    public static Object dqLt(Object self, Object other) { return compare(self, other, "lt"); }
-    public static Object dqLe(Object self, Object other) { return compare(self, other, "le"); }
-    public static Object dqGt(Object self, Object other) { return compare(self, other, "gt"); }
-    public static Object dqGe(Object self, Object other) { return compare(self, other, "ge"); }
+    public static Object dqLt(Object self, Object other) { if (!SyncSupport.MT) return dqLt0(self, other); synchronized (dq(self)) { return dqLt0(self, other); } }
+    private static Object dqLt0(Object self, Object other) { return compare(self, other, "lt"); }
+    public static Object dqLe(Object self, Object other) { if (!SyncSupport.MT) return dqLe0(self, other); synchronized (dq(self)) { return dqLe0(self, other); } }
+    private static Object dqLe0(Object self, Object other) { return compare(self, other, "le"); }
+    public static Object dqGt(Object self, Object other) { if (!SyncSupport.MT) return dqGt0(self, other); synchronized (dq(self)) { return dqGt0(self, other); } }
+    private static Object dqGt0(Object self, Object other) { return compare(self, other, "gt"); }
+    public static Object dqGe(Object self, Object other) { if (!SyncSupport.MT) return dqGe0(self, other); synchronized (dq(self)) { return dqGe0(self, other); } }
+    private static Object dqGe0(Object self, Object other) { return compare(self, other, "ge"); }
 
-    public static Object dqMaxlen(Object self) { Deque d = dq(self); return d.maxlen < 0 ? null : (Object) d.maxlen; }
+    public static Object dqMaxlen(Object self) { if (!SyncSupport.MT) return dqMaxlen0(self); synchronized (dq(self)) { return dqMaxlen0(self); } }
+    private static Object dqMaxlen0(Object self) { Deque d = dq(self); return d.maxlen < 0 ? null : (Object) d.maxlen; }
 
-    public static Object dqReduce(Object self) {
+    public static Object dqReduce(Object self) { if (!SyncSupport.MT) return dqReduce0(self); synchronized (dq(self)) { return dqReduce0(self); } }
+    private static Object dqReduce0(Object self) {
         Deque d = dq(self);
         PyTuple args = d.maxlen < 0 ? new PyTuple() : tuple(new PyTuple(), d.maxlen);
         return tuple(((PyInstance) self).cls, args, null, iterate(d, false));

@@ -44,13 +44,25 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
         if(frame!=null){firstArgument=frame.firstArgument;hasClassCell=frame.classEnv!=null;}
     }
 
+    private static final java.lang.invoke.VarHandle RUNNING;
+    static {
+        try { RUNNING = java.lang.invoke.MethodHandles.lookup().findVarHandle(PyGenerator.class, "running", boolean.class); }
+        catch (ReflectiveOperationException e) { throw new ExceptionInInitializerError(e); }
+    }
+
+    /** Resume the generator. Re-entry (from its own body or from another thread) raises ValueError, as in CPython. */
     Object advance() {
+        if (!RUNNING.compareAndSet(this, false, true)) throw new PyException("ValueError", "generator already executing");
+        try { return advance0(); }
+        finally { running=false; }
+    }
+
+    private Object advance0() {
         if (finished) throw new PyGeneratorEnd(returnValue);
         started = true;
         ActiveFrame logical=logicalFrame();
         LOGICAL_FRAMES.get().push(logical);
         boolean traced=Tracing.enabled;
-        running=true;
         try {
             if(traced){Tracing.call(logical);}
             logical.resumed=true;
@@ -75,12 +87,11 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
         } catch (ReflectiveOperationException exc) {
             throw new RuntimeException(exc);
         } finally {
-            running=false;
             ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
         }
     }
 
-    boolean running=false; private ActiveFrame logicalFrame;
+    volatile boolean running=false; private ActiveFrame logicalFrame;
     /** The generator's one persistent frame: it keeps its line and locals across suspensions. */
     ActiveFrame logicalFrame(){
         if(logicalFrame==null){

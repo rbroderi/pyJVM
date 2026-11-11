@@ -24,6 +24,11 @@ import java.util.Set;
 /** Method-call slot for PyByteArray receivers (split out of PyRuntime.callMethod). */
 final class PyByteArrayMethods {
     static Object call(Object obj, String name, Object[] args) {
+        if (!SyncSupport.MT) return call0(obj, name, args);
+        synchronized (obj) { return call0(obj, name, args); }
+    }
+
+    private static Object call0(Object obj, String name, Object[] args) {
         PyByteArray bytes=(PyByteArray)obj;
         if(!name.equals("join") && !name.equals("extend")) args=NativeSubclass.unwrapArgs(args);
         return switch(name) {
