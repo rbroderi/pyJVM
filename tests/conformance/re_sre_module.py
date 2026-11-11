@@ -10,7 +10,7 @@ print(_sre.unicode_iscased(0x10400), _sre.unicode_tolower(0x10400), _sre.unicode
 # the compiled program is what the pure-Python compiler produced
 code = re._compiler._code(re._parser.parse("a(b)?", 0), 32)
 p = _sre.compile("a(b)?", 32, code, 1, {}, (None, None))
-print(p, p.groups, p.flags, p.groupindex, p.match("ab").groups())
+print(p, p.groups, p.flags, dict(p.groupindex), p.match("ab").groups())
 print(p == re.compile("a(b)?"), type(p).__name__, type(p.match("a")).__name__, type(p.scanner("a")).__name__)
 
 # invalid programs are rejected before they run

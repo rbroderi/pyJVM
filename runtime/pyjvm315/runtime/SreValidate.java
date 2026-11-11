@@ -76,8 +76,12 @@ final class SreValidate {
     }
 
     /** Validate ops in [i, end); returns the index where validation stopped (always end on success). */
-    private static int inner(int[] c, int i, int end, int groups) {
+    private static int inner(int[] c, int i, int end, int groups) { return inner(c, i, end, groups, false); }
+
+    /** With jumpOk, an op starting at end-2 that is a JUMP stops the scan there (the yes-branch of GROUPREF_EXISTS with an else). */
+    private static int inner(int[] c, int i, int end, int groups, boolean jumpOk) {
         while (i < end) {
+            if (jumpOk && i + 2 == end && c[i] == SreState.JUMP) return i;
             int op = c[i++];
             switch (op) {
                 case SreState.ANY: case SreState.ANY_ALL: case SreState.FAILURE: case SreState.SUCCESS: break;
@@ -218,16 +222,12 @@ final class SreValidate {
         long skip = u(c[i + 1]);
         need(skip >= 2 && skip <= end - i);
         int target = i + (int) skip;
-        if (skip >= 4 && c[target - 2] == SreState.JUMP) {
-            int yesEnd = target - 2;
-            need(inner(c, i + 2, yesEnd, groups) == yesEnd);
-            long jskip = u(c[target - 1]);
-            need(jskip <= end - (target - 1));
-            int after = target - 1 + (int) jskip;
-            need(inner(c, target, after, groups) == after);
-            return after;
-        }
-        need(inner(c, i + 2, target, groups) == target);
-        return target;
+        int r = inner(c, i + 2, target, groups, true);
+        if (r == target) return target;
+        long jskip = u(c[r + 1]);
+        need(jskip <= end - (r + 1));
+        int after = r + 1 + (int) jskip;
+        need(inner(c, target, after, groups, false) == after);
+        return after;
     }
 }

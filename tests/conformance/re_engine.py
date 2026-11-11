@@ -131,7 +131,7 @@ except Exception as e:
 p = re.compile(r"(\d+)-(?P<x>\w)", re.I)
 fn, args = copyreg.dispatch_table[re.Pattern](p)
 q = fn(*args)
-print(q == p, q.pattern, q.flags, q.groupindex)
+print(q == p, q.pattern, q.flags, dict(q.groupindex))
 print(re.compile("a") is re.compile("a"), re.compile(p) is p)
 try:
     re.compile(p, re.I)

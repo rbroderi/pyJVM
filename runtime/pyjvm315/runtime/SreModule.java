@@ -315,9 +315,10 @@ public final class SreModule {
     public static Object patFlags(Object self) { return (long) pat(self).flags; }
     public static Object patGroups(Object self) { return (long) pat(self).groups; }
     public static Object patGroupindex(Object self) {
+        // CPython: a read-only mappingproxy over the dict; here a frozen dict copy (pyJVM has no mappingproxy type)
         PyDict copy = new PyDict();
         for (Map.Entry<Object,Object> en : pat(self).groupindex.entrySet()) copy.put(en.getKey(), en.getValue());
-        return copy;
+        return copy.freeze();
     }
 
     private static Object doMatch(Object self, Object string, Object pos, Object endpos, int mode) {

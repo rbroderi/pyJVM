@@ -69,6 +69,12 @@ final class SreSubject {
     Object slice(int from, int to) {
         if (isBytes) {
             if (from == 0 && to == raw.length && orig instanceof PyBytes) return orig;
+            if (orig instanceof PyByteArray ba) {   // a match keeps the live buffer (bpo-29444): slice what it holds now
+                int n = ba.data.size(), a = Math.min(from, n), b = Math.max(a, Math.min(to, n));
+                byte[] out = new byte[b - a];
+                for (int k = 0; k < out.length; k++) out[k] = ba.data.get(a + k);
+                return new PyBytes(out);
+            }
             return new PyBytes(Arrays.copyOfRange(raw, from, to));
         }
         if (bmp) return str.substring(from, to);
