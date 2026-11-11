@@ -26,6 +26,7 @@ public final class NativeModules {
         m.attrs.put("version_info", version);
         m.attrs.put("version", LangVersion.MAJOR + "." + LangVersion.MINOR + ".0 (pyjvm)");
         m.attrs.put("maxsize", Long.MAX_VALUE);
+        m.attrs.put("maxunicode", 0x10ffffL);
         m.attrs.put("byteorder", "big");
         m.attrs.put("platform", "java");
         ArrayList<Object> args = new ArrayList<>();
@@ -43,6 +44,22 @@ public final class NativeModules {
         NativeFunction hook = new NativeFunction("displayhook", Namespaces::defaultDisplayhook);
         m.attrs.put("displayhook", hook);
         m.attrs.put("__displayhook__", hook);
+        return m;
+    }
+
+    /** The C helpers behind string.Formatter (CPython's _string module). */
+    static PyModule stringHelpers() {
+        PyModule m = new PyModule("_string", "pyjvm315.runtime.NativeModules");
+        fn(m, "formatter_parser", (a, k) -> {
+            if (a.size() != 1 || !(a.get(0) instanceof String s))
+                throw new PyException("TypeError", "formatter_parser() argument must be str, not " + (a.isEmpty() ? "nothing" : PyRuntime.typeName(a.get(0))));
+            return PyRuntime.iter(FormatTemplate.parserTuples(s));
+        });
+        fn(m, "formatter_field_name_split", (a, k) -> {
+            if (a.size() != 1 || !(a.get(0) instanceof String s))
+                throw new PyException("TypeError", "formatter_field_name_split() argument must be str, not " + (a.isEmpty() ? "nothing" : PyRuntime.typeName(a.get(0))));
+            return FormatTemplate.fieldNameSplit(s);
+        });
         return m;
     }
 
