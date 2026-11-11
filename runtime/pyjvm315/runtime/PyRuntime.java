@@ -3976,6 +3976,8 @@ public final class PyRuntime {
             }
             if(cls.nativeKind!=null || name.equals("__base__")){Object nativeValue=NativeSubclassMethods.classAttribute(cls,name);if(nativeValue!=MISSING)return nativeValue;}
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
+            if(name.equals("__subclasshook__"))return new NativeFunction("__subclasshook__",(a,k)->NOT_IMPLEMENTED);
+            if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
@@ -4123,6 +4125,7 @@ public final class PyRuntime {
             return false;
         }
         if (obj instanceof PyInstance proxy && proxy.cls.weakProxy && !(clsObj instanceof PyClass pc && pc.weakProxy)) { Object target=WeakrefProxy.referent(proxy); if(truth(isInstance(target,clsObj)))return true; }
+        if (clsObj instanceof PyClass hooked && hooked.metaclass != null && hooked.metaclass.lookupMethod("__instancecheck__") != null) return truth(callMethod(hooked, "__instancecheck__", new Object[]{obj}));
         if (clsObj instanceof PyClass cls) return obj instanceof PyInstance instance ? instance.cls.mro.contains(cls) : obj instanceof PyClass oc && oc.metaclass!=null && oc.metaclass.mro.contains(cls);
         if (clsObj instanceof PyBuiltinType bt) {
             if(obj instanceof PyExceptionValue error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
@@ -4131,6 +4134,7 @@ public final class PyRuntime {
             if(obj instanceof PyInstance nativeInst && nativeInst.payload!=null) return bt.name.equals("object") || bt.name.equals(nativeInst.cls.nativeKind);
             return switch(bt.name) {
                 case "object" -> true;
+                case "NoneType" -> obj == null;
                 case "super" -> obj instanceof PySuper;
                 case "int" -> isIntLike(obj);
                 case "bool" -> obj instanceof Boolean;
@@ -4166,6 +4170,7 @@ public final class PyRuntime {
 
     public static Object isSubclass(Object subObj,Object clsObj) {
         if(clsObj instanceof PyTuple tuple){for(Object value:tuple.items)if(truth(isSubclass(subObj,value)))return true;return false;}
+        if(clsObj instanceof PyClass hooked && hooked.metaclass!=null && hooked.metaclass.lookupMethod("__subclasscheck__")!=null)return truth(callMethod(hooked,"__subclasscheck__",new Object[]{subObj}));
         if(!isType(subObj) || !isType(clsObj))throw new PyException("TypeError","issubclass() arguments must be classes");
         return typeMro(subObj).contains(clsObj);
     }

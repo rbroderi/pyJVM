@@ -48,7 +48,20 @@ final class PyClass {
     boolean weakrefOk = false;
     /** Instances are weakref.proxy objects: attribute access and isinstance forward to the referent. */
     boolean weakProxy = false;
-    PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; }
+    private static final java.util.concurrent.CopyOnWriteArrayList<WeakReference<PyClass>> ALL = new java.util.concurrent.CopyOnWriteArrayList<>();
+    PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; ALL.add(new WeakReference<>(this)); }
+
+    /** type.__subclasses__(): live classes that list {@code parent} among their direct bases, oldest first. */
+    static ArrayList<Object> directSubclasses(PyClass parent) {
+        ArrayList<Object> out = new ArrayList<>();
+        ArrayList<WeakReference<PyClass>> dead = new ArrayList<>();
+        for (WeakReference<PyClass> r : ALL) {
+            PyClass c = r.get();
+            if (c == null) dead.add(r); else if (c != parent && c.finalized && c.bases.contains(parent)) out.add(c);
+        }
+        if (dead.size() > 256) ALL.removeAll(dead);
+        return out;
+    }
 
     PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;if(c.attrs.containsKey(name))return null;} return null; }
     PyProperty lookupProperty(String name) { for (PyClass c:mro){PyProperty p=c.properties.get(name);if(p!=null)return p;} return null; }
