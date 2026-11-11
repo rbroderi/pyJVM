@@ -1891,7 +1891,7 @@ public final class PyRuntime {
     public static Object bytes2(Object value,Object encoding){
         if(!(value instanceof String text) || !(encoding instanceof String enc))
             throw new PyException("TypeError","encoding without a string argument");
-        return new PyBytes(text.getBytes(Charset.forName(enc)));
+        return new PyBytes(text.getBytes(pyCharset(enc)));
     }
     public static Object bytearray0(){return new PyByteArray();}
     public static Object bytearray1(Object value){return new PyByteArray(bytesFromObject(value));}
@@ -2254,6 +2254,22 @@ public final class PyRuntime {
         return value;
     }
     // ---- namespaces for exec()/eval() code (see ExecSupport) ----
+    /** Python codec name -> Java charset ("latin-1", "utf_8", ...); unknown names raise LookupError. */
+    static Charset pyCharset(String name){
+        String n=name.toLowerCase(Locale.ROOT).replace('_','-').trim();
+        switch(n){
+            case "utf-8","utf8","u8","utf" -> { return java.nio.charset.StandardCharsets.UTF_8; }
+            case "latin-1","latin1","iso-8859-1","iso8859-1","l1","latin","8859","cp819" -> { return java.nio.charset.StandardCharsets.ISO_8859_1; }
+            case "ascii","us-ascii","646" -> { return java.nio.charset.StandardCharsets.US_ASCII; }
+            case "utf-16","utf16" -> { return java.nio.charset.StandardCharsets.UTF_16; }
+            case "utf-16le","utf-16-le" -> { return java.nio.charset.StandardCharsets.UTF_16LE; }
+            case "utf-16be","utf-16-be" -> { return java.nio.charset.StandardCharsets.UTF_16BE; }
+            default -> {
+                try { return Charset.forName(n); }
+                catch(RuntimeException e){ throw new PyException("LookupError","unknown encoding: "+name); }
+            }
+        }
+    }
     static Class<?> ownerClass(Object owner) throws ClassNotFoundException { return owner instanceof Class<?> c ? c : Class.forName((String)owner); }
     public static Object nsLoad(Object locals,Object globals,Object nameObj) {
         Map<?,?> l=(Map<?,?>)locals, g=(Map<?,?>)globals;

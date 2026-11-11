@@ -177,6 +177,7 @@ class Compiler:
         self.dynamic = dynamic
         self.mode = mode
         self.eval_expr: ast.expr | None = None
+        self.declared_global: set[str] = set()
         self.has_implicit_exec = False   # static module with exec(x)/eval(x): unknown names resolve through __py_extras
         self.class_name = class_name.replace(".", "/")
         self.import_map = dict(import_map or {})
@@ -212,6 +213,8 @@ class Compiler:
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
+        # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
+        self.declared_global = {n for node in ast.walk(tree) if isinstance(node, ast.Global) for n in node.names}
         if not self.dynamic:
             self.has_implicit_exec = any(
                 isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("exec", "eval")
@@ -336,10 +339,10 @@ class Compiler:
 
     def _ns_field(self, scope: Scope, name: str) -> str:
         """Module-level names live in the exec locals mapping; function-level globals in the globals mapping."""
-        return "__py_locals" if scope.module and name not in scope.global_decl else "__py_globals"
+        return "__py_locals" if scope.module and name not in scope.global_decl and name not in self.declared_global else "__py_globals"
 
     def _emit_ns_load(self, name: str, b: CodeBuilder, scope: Scope, via_function: bool) -> None:
-        local_first = scope.module and not via_function and name not in scope.global_decl
+        local_first = scope.module and not via_function and name not in scope.global_decl and name not in self.declared_global
         b.getstatic(self.class_name, "__py_locals" if local_first else "__py_globals", OBJ)
         b.getstatic(self.class_name, "__py_globals", OBJ)
         b.ldc_string(name); b.invokestatic(RUNTIME, "nsLoad", f"({OBJ*3}){OBJ}")

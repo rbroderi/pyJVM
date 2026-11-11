@@ -51,7 +51,7 @@ final class PyByteArrayMethods {
             case "decode" -> {
                 if(args.length>1) throw new PyException("TypeError","decode() takes at most 1 argument");
                 String enc=args.length==0?"utf-8":(String)args[0];
-                yield new String(bytes.toByteArray(),Charset.forName(enc));
+                yield new String(bytes.toByteArray(),PyRuntime.pyCharset(enc));
             }
             case "hex" -> { requireArgs(name,args,0); yield bytesHex(bytes.toByteArray()); }
             case "find" -> binaryFind(bytes,args);

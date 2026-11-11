@@ -95,3 +95,22 @@ try:
     exec("pass", [])
 except TypeError:
     print("TypeError globals")
+
+# a name declared `global` in any nested scope binds through the globals mapping, even at module level
+gl, lc = {}, {}
+exec("""
+def f():
+    y = 1
+    def g():
+        global y
+        return y
+    def h():
+        return y + 1
+    return g, h
+y = 9
+g, h = f()
+result9 = g()
+result2 = h()
+plain = 5
+""", gl, lc)
+print(sorted(k for k in gl if not k.startswith("__")), sorted(lc), lc["result9"], lc["result2"])

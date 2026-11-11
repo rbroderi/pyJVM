@@ -33,8 +33,13 @@ def main(argv: list[str]) -> int:
         report = {"kind": "Unsupported", "message": str(exc)}
     except SyntaxError as exc:
         report = {"kind": "SyntaxError", "message": exc.msg or str(exc), "lineno": exc.lineno, "offset": exc.offset}
-    except (FrameError, RecursionError) as exc:
-        report = {"kind": "Error", "message": f"{type(exc).__name__}: {exc}"}
+    except FrameError as exc:
+        too_big = "1..65535 bytes" in str(exc)
+        report = {"kind": "Unsupported" if too_big else "Error",
+                  "message": "compiled code exceeds the JVM 64KB method limit (method splitting is not implemented)"
+                  if too_big else f"FrameError: {exc}"}
+    except RecursionError as exc:
+        report = {"kind": "Unsupported", "message": "source is too deeply nested for the compiler"}
     else:
         sys.stdout.buffer.write(data)
         sys.stdout.buffer.flush()

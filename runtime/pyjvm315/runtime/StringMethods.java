@@ -22,15 +22,34 @@ import java.util.Set;
 
 /** Method-call slot for String receivers (split out of PyRuntime.callMethod). */
 final class StringMethods {
+    /** Python's str.isspace() code points (Unicode White_Space plus the ASCII separators U+001C..U+001F). */
+    static boolean isPySpace(int cp) {
+        return (cp >= 0x09 && cp <= 0x0D) || (cp >= 0x1C && cp <= 0x20) || cp == 0x85 || cp == 0xA0 || cp == 0x1680
+            || (cp >= 0x2000 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029 || cp == 0x202F || cp == 0x205F || cp == 0x3000;
+    }
+    static Object stripCall(String str, String name, Object[] args) {
+        if (args.length > 1) throw new PyException("TypeError", name + " expected at most 1 argument, got " + args.length);
+        String chars = null;
+        if (args.length == 1 && args[0] != null) {
+            if (!(args[0] instanceof String c)) throw new PyException("TypeError", name + " arg must be None or str");
+            chars = c;
+        }
+        int[] cps = str.codePoints().toArray();
+        int start = 0, end = cps.length;
+        boolean left = !name.equals("rstrip"), right = !name.equals("lstrip");
+        while (left && start < end && strippable(cps[start], chars)) start++;
+        while (right && end > start && strippable(cps[end - 1], chars)) end--;
+        return new String(cps, start, end - start);
+    }
+    private static boolean strippable(int cp, String chars) { return chars == null ? isPySpace(cp) : chars.indexOf(cp) >= 0; }
+
     static Object call(Object obj, String name, Object[] args) {
         String str=(String)obj;
         return switch(name) {
             case "__mod__" -> { requireArgs(name,args,1); yield new PercentFormatter(str,args[0]).run(); }
             case "upper" -> { requireArgs(name,args,0); yield str.toUpperCase(Locale.ROOT); }
             case "lower" -> { requireArgs(name,args,0); yield str.toLowerCase(Locale.ROOT); }
-            case "strip" -> { requireArgs(name,args,0); yield str.strip(); }
-            case "lstrip" -> { requireArgs(name,args,0); yield str.stripLeading(); }
-            case "rstrip" -> { requireArgs(name,args,0); yield str.stripTrailing(); }
+            case "strip", "lstrip", "rstrip" -> stripCall(str,name,args);
             case "startswith" -> { requireArgs(name,args,1); yield str.startsWith((String)args[0]); }
             case "endswith" -> { requireArgs(name,args,1); yield str.endsWith((String)args[0]); }
             case "replace" -> { requireArgs(name,args,2); yield str.replace((String)args[0],(String)args[1]); }
@@ -44,7 +63,7 @@ final class StringMethods {
             case "encode" -> {
                 if(args.length>1) throw new PyException("TypeError","encode() takes at most 1 argument");
                 String enc=args.length==0?"utf-8":(String)args[0];
-                yield new PyBytes(str.getBytes(Charset.forName(enc)));
+                yield new PyBytes(str.getBytes(PyRuntime.pyCharset(enc)));
             }
             default -> throw new PyException("AttributeError","'str' object has no attribute '"+name+"'");
         };
