@@ -17,7 +17,7 @@ def _runtime_class_source() -> Path:
 
 def _runtime_sources() -> list[Path]:
     """Every runtime source file (PyRuntime plus the per-type files split out of it)."""
-    return sorted(_runtime_class_source().parent.glob("*.java"))
+    return sorted(_runtime_class_source().parent.parent.rglob("*.java"))
 
 
 def build_runtime(output_dir: Path) -> None:
