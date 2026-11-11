@@ -89,7 +89,8 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
         except Exception as exc:
             return Result(source.name, "ERROR", f"build failed: {exc}")
         # exec()/eval()/compile() compile through the host-Python backend (until the compiler is self-hosted)
-        backend_env = {"PYJVM_HOME": str(Path(__file__).resolve().parent.parent), "PYJVM_PYTHON": python_exe}
+        backend_env = {"PYJVM_HOME": str(Path(__file__).resolve().parent.parent), "PYJVM_PYTHON": python_exe,
+                       "PYJVM_LANG_VERSION": "%d.%d" % reference_version(python_exe)}
         jvm = _run([java_exe, "-Xverify:all", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", str(out), "ConformanceMain"],
                    cwd=source.parent, extra_env=backend_env)
 

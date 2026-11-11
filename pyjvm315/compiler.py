@@ -46,6 +46,8 @@ EXCEPTION_TYPES = {
     "SyntaxWarning", "RuntimeWarning", "FutureWarning", "ImportWarning", "UnicodeWarning",
     "BytesWarning", "ResourceWarning", "KeyboardInterrupt", "SystemExit",
 }
+# Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
+NATIVE_MODULES = {"ast", "_ast"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
@@ -2224,6 +2226,10 @@ class Compiler:
             case ast.Import(names=names):
                 for alias in names:
                     module_name = alias.name
+                    if module_name in NATIVE_MODULES:
+                        b.ldc_string(module_name); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
+                        self._store_name(alias.asname or module_name, b, scope)
+                        continue
                     jvm_name = self.import_map.get(module_name)
                     if jvm_name is None:
                         raise CompileError(f"import of module {module_name!r} is not available")
@@ -2253,6 +2259,16 @@ class Compiler:
                     resolved = '.'.join(base)
                 if not resolved:
                     raise CompileError("relative import requires a resolvable package")
+                if resolved in NATIVE_MODULES and not level:
+                    if any(alias.name == '*' for alias in names):
+                        raise CompileError(f"star import from native module {resolved!r} is not implemented")
+                    b.ldc_string(resolved); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
+                    module_slot = scope.temp(); b.astore(module_slot)
+                    for alias in names:
+                        b.aload(module_slot); b.ldc_string(alias.name)
+                        b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
+                        self._store_name(alias.asname or alias.name, b, scope)
+                    return
                 jvm_name = self.import_map.get(resolved)
                 if jvm_name is None:
                     raise CompileError(f"import from module {resolved!r} is not available")

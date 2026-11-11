@@ -93,6 +93,7 @@ public final class PyRuntime {
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
         if (value instanceof BuiltinBoundMethod) return "builtin_function_or_method";
         if (value instanceof PyCode) return "code";
+        if (value instanceof NativeFunction) return "builtin_function_or_method";
         if (value instanceof PyLazyIterator it) return it.pyTypeName();
         if(value instanceof PySlice)return "slice";
         if(value==NOT_IMPLEMENTED)return "NotImplementedType";
@@ -118,6 +119,18 @@ public final class PyRuntime {
     }
 
     static final LinkedHashMap<String,PyModule> MODULE_CACHE = new LinkedHashMap<>();
+    /** `import ast` / `import _ast`: modules implemented in Java rather than compiled from Python. */
+    public static Object importNative(Object nameObj) {
+        String name=(String)nameObj;
+        PyModule cached=MODULE_CACHE.get(name); if(cached!=null) return cached;
+        PyModule module = switch(name){
+            case "ast" -> AstModule.module();
+            case "_ast" -> AstModule.privateModule();
+            default -> throw new PyException("ImportError","No module named '"+name+"'");
+        };
+        MODULE_CACHE.put(name,module);
+        return module;
+    }
     public static Object importModule(Object nameObj,Object classObj) {
         String name=(String)nameObj, className=(String)classObj;
         PyModule cached=MODULE_CACHE.get(name); if(cached!=null) return cached;
@@ -334,7 +347,7 @@ public final class PyRuntime {
         if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : builtinType("type");
         return builtinType(typeName(value));
     }
-    public static Object callable_(Object value){return value instanceof PyFunction || value instanceof BoundCallable || value instanceof PyMethodDescriptor d && d.kind.equals("static") || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType || value instanceof PyInstance instance && instance.cls.lookupAttr("__call__")!=MISSING;}
+    public static Object callable_(Object value){return value instanceof NativeFunction || value instanceof PyFunction || value instanceof BoundCallable || value instanceof PyMethodDescriptor d && d.kind.equals("static") || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType || value instanceof PyInstance instance && instance.cls.lookupAttr("__call__")!=MISSING;}
 
     static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
     public static Object notImplemented() { return NOT_IMPLEMENTED; }
@@ -2526,6 +2539,7 @@ public final class PyRuntime {
             return callFunction(method.function,actual,kwargs);
         }
         if(callable instanceof PyMethodDescriptor method && method.kind.equals("static"))return callFunction(method.function,args,kwargs);
+        if (callable instanceof NativeFunction nf) return nf.body.call(args,kwargs);
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
         if (callable instanceof BuiltinBoundMethod method) {
             if(!kwargs.isEmpty()) {
