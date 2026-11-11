@@ -224,7 +224,7 @@ final class StringMethods {
         String str=(String)obj;
         if(!name.startsWith("format") && !name.equals("__mod__") && !name.equals("join")) args=NativeSubclass.unwrapArgs(args);
         return switch(name) {
-            case "__mod__" -> { requireArgs(name,args,1); yield new PercentFormatter(str,args[0]).run(); }
+            case "__mod__" -> { requireArgs(name,args,1); yield PercentFormat.formatString(str,args[0]); }
             case "upper" -> { requireArgs(name,args,0); yield str.toUpperCase(Locale.ROOT); }
             case "lower" -> { requireArgs(name,args,0); yield str.toLowerCase(Locale.ROOT); }
             case "casefold" -> { requireArgs(name,args,0); yield str.toLowerCase(Locale.ROOT).replace("\u00df", "ss"); }
@@ -325,8 +325,8 @@ final class StringMethods {
                 }
                 yield sb.toString();
             }
-            case "format" -> StrFormat.format(str, new ArrayList<Object>(Arrays.asList(args)), new LinkedHashMap<Object,Object>());
-            case "format_map" -> { requireArgs(name,args,1); @SuppressWarnings("unchecked") Map<Object,Object> m=(Map<Object,Object>)args[0]; yield StrFormat.format(str, new ArrayList<Object>(), m); }
+            case "format" -> FormatTemplate.format(str, new ArrayList<Object>(Arrays.asList(args)), new LinkedHashMap<Object,Object>());
+            case "format_map" -> { if(args.length!=1)throw new PyException("TypeError","str.format_map() takes exactly one argument ("+args.length+" given)"); yield FormatTemplate.formatMap(str, args[0]); }
             case "isalpha" -> allChars(str, Character::isLetter);
             case "isdecimal" -> allChars(str, c -> Character.getType(c) == Character.DECIMAL_DIGIT_NUMBER);
             case "isdigit" -> allChars(str, StringMethods::isDigitCp);

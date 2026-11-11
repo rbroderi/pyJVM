@@ -46,6 +46,22 @@ public final class NativeModules {
         return m;
     }
 
+    /** The C helpers behind string.Formatter (CPython's _string module). */
+    static PyModule stringHelpers() {
+        PyModule m = new PyModule("_string", "pyjvm315.runtime.NativeModules");
+        fn(m, "formatter_parser", (a, k) -> {
+            if (a.size() != 1 || !(a.get(0) instanceof String s))
+                throw new PyException("TypeError", "formatter_parser() argument must be str, not " + (a.isEmpty() ? "nothing" : PyRuntime.typeName(a.get(0))));
+            return PyRuntime.iter(FormatTemplate.parserTuples(s));
+        });
+        fn(m, "formatter_field_name_split", (a, k) -> {
+            if (a.size() != 1 || !(a.get(0) instanceof String s))
+                throw new PyException("TypeError", "formatter_field_name_split() argument must be str, not " + (a.isEmpty() ? "nothing" : PyRuntime.typeName(a.get(0))));
+            return FormatTemplate.fieldNameSplit(s);
+        });
+        return m;
+    }
+
     /** Whole-file text and byte access (the self-hosted compiler reads sources and writes class files). */
     static PyModule jvmIo() {
         PyModule m = new PyModule("jvm_io", "pyjvm315.runtime.NativeModules");

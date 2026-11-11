@@ -133,6 +133,7 @@ public final class PyRuntime {
             case "sys" -> NativeModules.sys();
             case "builtins" -> Namespaces.builtinsModule();
             case "jvm_io" -> NativeModules.jvmIo();
+            case "_string" -> NativeModules.stringHelpers();
             default -> throw new PyException("ImportError","No module named '"+name+"'");
         };
         MODULE_CACHE.put(name,module);
@@ -254,7 +255,10 @@ public final class PyRuntime {
         if(name.equals("dir") && n<=1)return n==0?dirLocals():dirValue(args.get(0));
         if(name.equals("vars") && n<=1)return n==0?varsLocals():varsValue(args.get(0));
         if((name.equals("globals") || name.equals("locals")) && n==0)return name.equals("globals")?Namespaces.globalsCall():Namespaces.localsCall();
-        if(name.equals("format") && (n==1 || n==2))return formatValue(args.get(0),n==1?"":args.get(1));
+        if(name.equals("format")){
+            if(n<1 || n>2)throw new PyException("TypeError",n<1?"format expected at least 1 argument, got 0":"format expected at most 2 arguments, got "+n);
+            return formatValue(args.get(0),n==1?"":args.get(1));
+        }
         if(name.equals("next") && (n==1 || n==2)) {
             try { return next_(args.get(0)); }
             catch(PyException e) { if(n==2 && exceptionIsSubclass(e.typeName,"StopIteration")) return args.get(1); throw e; }
@@ -1055,45 +1059,23 @@ public final class PyRuntime {
 
     public static Object ascii_(Object value){return asciiRepr(value);}
     public static Object formatValue(Object value,Object specObj){
-        if(!(specObj instanceof String spec))throw new PyException("TypeError","format() argument 2 must be str, not "+typeName(specObj));
+        if(!(specObj instanceof String spec))throw new PyException("TypeError","format() argument 2 must be str, not "+(specObj==null?"None":typeName(specObj)));
         PyClass owner=value instanceof PyInstance instance?instance.cls:value instanceof PyClass cls?cls.metaclass:null;
         if(owner!=null){
             Object method=owner.lookupAttr("__format__");
             if(method!=MISSING){
                 Object result=callFunction(descriptorGet(method,value,owner),new ArrayList<>(List.of(spec)),new LinkedHashMap<>());
-                if(!(result instanceof String))throw new PyException("TypeError","__format__ must return a str, not "+typeName(result));
+                if(!(result instanceof String))throw new PyException("TypeError",owner.qualname+".__format__() must return a str, not "+typeName(result));
                 return result;
             }
         }
-        if(value instanceof PyInstance w && w.payload!=null && (w.payload instanceof String || isIntLike(w.payload) || w.payload instanceof Double))
-            return spec.isEmpty()?pyStr(value):new FormatSpec(spec).apply(w.payload);
-        if(value instanceof String || isIntLike(value) || value instanceof Double)return new FormatSpec(spec).apply(value);
-        return objectFormat(value,spec);
+        String text=FormatSpec.formatNative(value,spec);
+        return text!=null?text:objectFormat(value,spec);
     }
     static Object objectFormat(Object value,Object specObj){
         if(!(specObj instanceof String spec))throw new PyException("TypeError","__format__() argument must be str");
         if(!spec.isEmpty())throw new PyException("TypeError","unsupported format string passed to "+typeName(value)+".__format__");
         return pyStr(value);
-    }
-    static String shortestFloat(double value){
-        if(Double.isNaN(value))return "nan";
-        if(Double.isInfinite(value))return value<0?"-inf":"inf";
-        boolean negative=Double.doubleToRawLongBits(value)<0;
-        if(value==0)return negative?"-0.0":"0.0";
-        double absolute=Math.abs(value);
-        java.math.BigDecimal exact=new java.math.BigDecimal(absolute),rounded=exact;
-        for(int digits=1;digits<=17;digits++){
-            rounded=exact.round(new java.math.MathContext(digits,java.math.RoundingMode.HALF_EVEN));
-            if(Double.doubleToLongBits(rounded.doubleValue())==Double.doubleToLongBits(absolute))break;
-        }
-        rounded=rounded.stripTrailingZeros();int exponent=rounded.precision()-rounded.scale()-1;
-        String body;
-        if(exponent>=-4 && exponent<16){body=rounded.toPlainString();if(body.indexOf('.')<0)body+=".0";}
-        else body=rounded.movePointLeft(exponent).toPlainString()+"e"+(exponent<0?"-":"+")+(Math.abs(exponent)<10?"0":"")+Math.abs(exponent);
-        return (negative?"-":"")+body;
-    }
-    static String groupDigits(String digits,int size,char separator){
-        StringBuilder out=new StringBuilder();for(int i=0;i<digits.length();i++){if(i>0 && (digits.length()-i)%size==0)out.append(separator);out.append(digits.charAt(i));}return out.toString();
     }
 
     // Percent formatting is kept off the shared method dispatcher/JIT hot paths.
@@ -1146,44 +1128,12 @@ public final class PyRuntime {
         if(value instanceof BigInteger && !Double.isFinite(result))throw new PyException("OverflowError","int too large to convert to float");
         return result;
     }
-    static String floatDigits(double number,char conversion,int precision,boolean alternate){
-        // CPython reserves headroom for binary64 digits and exponent in int-sized buffers.
-        if(precision>Integer.MAX_VALUE-1024)throw new PyException("ValueError","precision too big");
-        if(Double.isNaN(number))return Character.isUpperCase(conversion)?"NAN":"nan";
-        if(Double.isInfinite(number))return Character.isUpperCase(conversion)?"INF":"inf";
-        int digits=precision<0?6:precision;
-        char kind=Character.toLowerCase(conversion);
-        java.math.BigDecimal exact=new java.math.BigDecimal(number),rounded;
-        String body;
-        if(kind=='f'){
-            body=exact.setScale(digits,java.math.RoundingMode.HALF_EVEN).toPlainString();
-            if(digits==0 && alternate)body+=".";
-        }else{
-            int significant=kind=='e'?Math.addExact(digits,1):Math.max(1,digits);
-            rounded=exact.round(new java.math.MathContext(significant,java.math.RoundingMode.HALF_EVEN));
-            int exponent=rounded.signum()==0?0:rounded.precision()-rounded.scale()-1;
-            if(kind=='e' || exponent<-4 || exponent>=significant){
-                body=rounded.movePointLeft(exponent).setScale(significant-1,java.math.RoundingMode.HALF_EVEN).toPlainString();
-                if(kind=='g' && !alternate)body=trimFraction(body);
-                if(alternate && body.indexOf('.')<0)body+=".";
-                body+=(Character.isUpperCase(conversion)?"E":"e")+(exponent<0?"-":"+")+(Math.abs(exponent)<10?"0":"")+Math.abs(exponent);
-            }else{
-                body=rounded.setScale(Math.max(0,significant-exponent-1),java.math.RoundingMode.HALF_EVEN).toPlainString();
-                if(!alternate)body=trimFraction(body);
-                else if(body.indexOf('.')<0)body+=".";
-            }
-        }
-        return body;
-    }
-    static String trimFraction(String text){
-        if(text.indexOf('.')<0)return text;
-        int end=text.length();while(end>0 && text.charAt(end-1)=='0')end--;
-        if(end>0 && text.charAt(end-1)=='.')end--;
-        return text.substring(0,end);
-    }
+    static String floatDigits(double number,char conversion,int precision,boolean alternate){return FormatFloat.digits(number,conversion,precision,alternate,false);}
+    static String shortestFloat(double value){return FormatFloat.repr(value);}
 
     public static Object mod(Object a, Object b) {
-        if(a instanceof String format)return new PercentFormatter(format,b).run();
+        if(a instanceof String format)return PercentFormat.formatString(format,b);
+        if(a instanceof PyByteSequence)return PercentFormat.formatBytes(a,b);
         if (isIntLike(a) && isIntLike(b)) {
             BigInteger x = bigInt(a), y = bigInt(b);
             if (y.signum() == 0) throw new ArithmeticException("integer division or modulo by zero");
@@ -1642,6 +1592,7 @@ public final class PyRuntime {
             if (!m.containsKey(key)) throw new PyException("KeyError",key);
             return m.get(key);
         }
+        if(key instanceof String || key instanceof Double || key==null || !(value instanceof List || value instanceof PyTuple || value instanceof PyRange || value instanceof String))throw indexTypeError(value,key);
         int i = asIndex(key);
         if (value instanceof List<?> xs) return xs.get(normalizeIndex(i, xs.size()));
         if (value instanceof PyTuple t) return t.items.get(normalizeIndex(i, t.items.size()));
@@ -1657,7 +1608,13 @@ public final class PyRuntime {
             int end = s.offsetByCodePoints(start, 1);
             return s.substring(start, end);
         }
-        throw typeError("object is not subscriptable", value);
+        throw indexTypeError(value,key);
+    }
+    static PyException indexTypeError(Object value,Object key){
+        String kind=typeName(value),given=typeName(key);
+        if(value instanceof List || value instanceof PyTuple || value instanceof PyRange)return new PyException("TypeError",kind+" indices must be integers or slices, not "+given);
+        if(value instanceof String)return new PyException("TypeError","string indices must be integers, not '"+given+"'");
+        return new PyException("TypeError","'"+kind+"' object is not subscriptable");
     }
 
     @SuppressWarnings("unchecked")
@@ -1995,10 +1952,13 @@ public final class PyRuntime {
         return out.toString();
     }
     static String bytesRepr(byte[] raw){
-        StringBuilder out=new StringBuilder("b'");
+        boolean hasSingle=false,hasDouble=false;
+        for(byte bb:raw){if(bb=='\'')hasSingle=true;else if(bb=='"')hasDouble=true;}
+        char quote=hasSingle && !hasDouble?'"':'\'';
+        StringBuilder out=new StringBuilder("b").append(quote);
         for(byte bb:raw){
             int v=bb&0xff;
-            if(v=='\\' || v=='\'') out.append('\\').append((char)v);
+            if(v=='\\' || v==quote) out.append('\\').append((char)v);
             else if(v>=32 && v<127) out.append((char)v);
             else switch(v){
                 case 9 -> out.append("\\t");
@@ -2007,7 +1967,7 @@ public final class PyRuntime {
                 default -> out.append(String.format("\\x%02x",v));
             }
         }
-        return out.append('\'').toString();
+        return out.append(quote).toString();
     }
     static byte[] requireBytesLike(Object value){
         if(value instanceof PyInstance w && w.payload instanceof PyByteSequence seq) return seq.toByteArray();
@@ -2618,7 +2578,7 @@ public final class PyRuntime {
                     return NativeSubclassMethods.callInitNew(nativeType.name,method.name,args,kwargs);
                 if(method.self instanceof Map<?,?> && method.name.equals("update")) return callMethodDynamic(method.self,method.name,args,kwargs);
                 if(method.self instanceof List<?> && method.name.equals("sort")) return callMethodDynamic(method.self,method.name,args,kwargs);
-                if(method.self instanceof String fmt && method.name.equals("format")) return StrFormat.format(fmt,args,kwargs);
+                if(method.self instanceof String fmt && method.name.equals("format")) return FormatTemplate.format(fmt,args,kwargs);
                 List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : null;
                 if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
                 Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
@@ -3365,7 +3325,7 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         String name=(String)nameObj;
         if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
-        if(obj instanceof String fmt && name.equals("format")) return StrFormat.format(fmt,args,kwargs);
+        if(obj instanceof String fmt && name.equals("format")) return FormatTemplate.format(fmt,args,kwargs);
         if(obj instanceof List<?> && name.equals("sort") && args.isEmpty()) { ListMethods.sortInPlace((List<Object>)obj,kwargs); return null; }
         if(obj instanceof Map<?,?> && name.equals("update")) {
             callMethod(obj,name,args.toArray());
@@ -3428,12 +3388,14 @@ public final class PyRuntime {
             requireArgs(name,args,2);
             if(builtin.name.equals("object"))return objectFormat(args[0],args[1]);
             if(!truth(isInstance(args[0],builtin)))throw new PyException("TypeError","format descriptor requires a "+builtin.name+" object");
-            return formatValue(args[0],args[1]);
+            if(!(args[1] instanceof String sp))throw new PyException("TypeError","__format__() argument must be str, not "+typeName(args[1]));
+            String text=FormatSpec.formatNative(args[0],sp);
+            return text!=null?text:objectFormat(args[0],args[1]);
         }
         if(builtin.name.equals("str") && name.equals("__mod__")){
             requireArgs(name,args,2);
             if(!(args[0] instanceof String str))throw new PyException("TypeError","str.__mod__ requires a str object");
-            return new PercentFormatter(str,args[1]).run();
+            return PercentFormat.formatString(str,args[1]);
         }
         if(builtin.name.equals("super") && name.equals("__get__")){
             if(args.length<2 || args.length>3 || !(args[0] instanceof PySuper sup))throw new PyException("TypeError","super.__get__ requires a super object and instance");
