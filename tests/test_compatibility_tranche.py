@@ -135,9 +135,11 @@ def test_execution_fixture_does_not_accept_absent_or_wrong_exceptions(body, exce
 
 @pytest.mark.parametrize('statement', ['break', 'continue'])
 def test_class_suite_cannot_branch_to_enclosing_loop(statement):
+    # a genuine syntax error, so it is a plain SyntaxError (CompileError is reserved for unsupported features)
     from pyjvm315.compiler import CompileError
-    with pytest.raises(CompileError, match='outside loop'):
+    with pytest.raises(SyntaxError, match='outside loop') as info:
         compile_source(f'for value in range(2):\n    class Invalid:\n        {statement}\n')
+    assert not isinstance(info.value, CompileError)
 
 
 def test_annotation_only_assignments_are_recorded():

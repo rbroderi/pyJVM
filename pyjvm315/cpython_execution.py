@@ -140,13 +140,17 @@ def __init__(self):
     return header + ast.unparse(ast.fix_missing_locations(ast.Module(body=[*fixtures, *driver], type_ignores=[]))) + '\n'
 
 
-def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_TARGET) -> dict:
+def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_TARGET, selfhosted: bool = False) -> dict:
     results = []
     with tempfile.TemporaryDirectory(prefix='pyjvm-cpython-execution-') as td:
         work = Path(td)
         runtime = work / 'runtime'
         runtime.mkdir()
         build_runtime(runtime)
+        classes = None
+        if selfhosted:
+            from .selfhost import build_selfhosted
+            classes = build_selfhosted(work / 'selfhosted')
         imports: tuple[str, ...] = ()
         for line in manifest.read_text().splitlines():
             entry = line.strip()
@@ -171,7 +175,7 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
                 if reference.returncode != 0:
                     result = Result(name, 'ERROR', 'CPython reference failed: ' + reference.stderr)
                 else:
-                    result = compare_file(source, python, runtime_cache=runtime, target=target)
+                    result = compare_file(source, python, runtime_cache=runtime, target=target, selfhosted=classes)
                     result.name = name
                 results.append(result)
     version = subprocess.run([python, '--version'], text=True, capture_output=True, check=True).stdout.strip()
@@ -189,9 +193,10 @@ def main(argv=None):
     parser.add_argument('--manifest', type=Path, default=Path('tools/cpython_execution_manifest.txt'))
     parser.add_argument('--python', default=sys.executable)
     parser.add_argument('--target', type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET)
+    parser.add_argument('--selfhosted', action='store_true', help='compile exec/eval/compile code with the self-hosted compiler (no host Python)')
     parser.add_argument('--output', type=Path)
     ns = parser.parse_args(argv)
-    report = run_cases(ns.cpython_root, ns.manifest, ns.python, target=ns.target)
+    report = run_cases(ns.cpython_root, ns.manifest, ns.python, target=ns.target, selfhosted=ns.selfhosted)
     if ns.output:
         ns.output.parent.mkdir(parents=True, exist_ok=True)
         ns.output.write_text(json.dumps(report, indent=2) + '\n')

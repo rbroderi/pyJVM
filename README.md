@@ -23,14 +23,21 @@ through the globals/locals mappings you pass (not static fields), define it as a
 changes to their globals, `nonlocal`/`global`/`del`, nested `exec` and code objects reused across
 namespaces behave as in CPython.
 
-The compiler is still Python, so the runtime reaches it through a `CompilerBackend`. The interim
-`HostPythonBackend` runs `pyjvm315.exec_compile` in a host interpreter: set `PYJVM_HOME` to the
-directory containing the `pyjvm315` package and optionally `PYJVM_PYTHON` (default `python3`).
-When the compiler is self-hosted (roadmap P1-07) the backend becomes in-process and these
-variables go away. Explicit limits, each raising `NotImplementedError` rather than guessing:
-no backend configured; `exec(x)`/`eval(x)` without globals from a *statically compiled* module
-(it has no namespace dict to hand over; code compiled by `exec`/`eval` does); `locals()` inside a
-function of exec'd code; `compile(..., "single")`; non-`dict` locals mappings.
+**The compiler runs in-process.** pyJVM's compiler is itself compiled by pyJVM (the bootstrap gate:
+`tools/selfhost.py stage1|stage2`, stage 2 byte-identical to stage 1). `exec`/`eval`/`compile` load those
+class files from the classpath and need no Python installation:
+
+    python tools/selfhost.py stage1 build/selfhost      # builds build/selfhost/stage1 (the compiler's class files)
+    java -cp <runtime>:<program>:build/selfhost/stage1 ...
+
+Source is parsed by pyJVM's own Java tokenizer and parser (`runtime/pyjvm315/parser`, verified identical
+to CPython's `tokenize` and `ast.parse` over the standard library), and `import ast` is a native module
+with real, subclassable node classes. If the compiler classes are not on the classpath, a host Python can
+stand in: set `PYJVM_HOME` to the directory containing the `pyjvm315` package (and optionally
+`PYJVM_PYTHON`). Explicit limits, each raising `NotImplementedError` or `SyntaxError` rather than guessing:
+`locals()` inside a function of exec'd code; `compile(..., "single")`; non-`dict` locals mappings;
+`compile()` of an AST object; generated code over the JVM's 64KB method limit; `feature_version`
+gating in `ast.parse`.
 
 ## 0.9 status
 

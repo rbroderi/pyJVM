@@ -43,6 +43,10 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -m pyjvm315.conformance tests/conformance --python python --target 21
+      - name: Differential conformance, exec/eval/compile through the self-hosted compiler (no host Python)
+        env:
+          PYTHONPATH: .
+        run: python -m pyjvm315.conformance tests/conformance --python python --target 21 --selfhosted
 
 
   cpython-regression-probe:
@@ -107,7 +111,7 @@ jobs:
           PYTHONPATH: .
         run: >-
           python -m pyjvm315.cpython_execution --cpython-root cpython-src
-          --manifest tools/cpython_execution_manifest.txt --target 21
+          --manifest tools/cpython_execution_manifest.txt --target 21 --selfhosted
           --output artifacts/cpython-execution.json
       - uses: actions/upload-artifact@v4
         if: always()

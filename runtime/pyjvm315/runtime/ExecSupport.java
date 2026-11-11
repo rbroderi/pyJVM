@@ -27,10 +27,72 @@ final class ExecSupport {
 
     private static volatile CompilerBackend backend;
     static void setBackend(CompilerBackend replacement) { backend = replacement; }
+    /** The self-hosted compiler when its classes are on the classpath (PYJVM_COMPILER=host forces the host interpreter). */
     private static CompilerBackend backend() {
         CompilerBackend b = backend;
-        if (b == null) backend = b = new HostPythonBackend();
+        if (b == null) {
+            boolean forceHost = "host".equals(System.getenv("PYJVM_COMPILER"));
+            backend = b = !forceHost && SelfHostedBackend.available() ? new SelfHostedBackend() : new HostPythonBackend();
+        }
         return b;
+    }
+
+    /**
+     * The compiler running in-process: pyJVM's own compiler, compiled by itself (roadmap P1-07), is loaded from
+     * the classpath like any other module and asked for the class file. No host Python is involved.
+     */
+    static final class SelfHostedBackend implements CompilerBackend {
+        static final String MODULE_CLASS = "pyjvm315.imports.pyjvm315.compiler";
+        private final ConcurrentHashMap<String,byte[]> cache = new ConcurrentHashMap<>();
+
+        static boolean available() {
+            try { Class.forName(MODULE_CLASS); return true; }
+            catch (ClassNotFoundException | LinkageError e) { return false; }
+        }
+
+        @Override public byte[] compile(String source, String filename, String mode) {
+            String key = mode + '\0' + filename + '\0' + source;
+            byte[] cached = cache.get(key);
+            if (cached != null) return cached;
+            Object[] result = new Object[1]; Throwable[] failure = new Throwable[1];
+            // the compiler recurses deeply on nested source, so it gets a thread with a large stack
+            Thread worker = new Thread(null, () -> {
+                try { result[0] = compileInProcess(source, filename, mode); } catch (Throwable t) { failure[0] = t; }
+            }, "pyjvm-compiler", 1L << 30);
+            worker.start();
+            try { worker.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new PyException("RuntimeError", "interrupted while compiling"); }
+            if (failure[0] != null) throw translate(failure[0]);
+            byte[] data = ((PyBytes) result[0]).data;
+            cache.put(key, data);
+            return data;
+        }
+
+        private static Object compileInProcess(String source, String filename, String mode) {
+            PyModule compiler = (PyModule) PyRuntime.importModule("pyjvm315.compiler", MODULE_CLASS);
+            Object compileSource = PyRuntime.moduleGetattr(compiler, "compile_source");
+            java.util.LinkedHashMap<Object,Object> kwargs = new java.util.LinkedHashMap<>();
+            kwargs.put("class_name", "pyjvm315.runtime.PyExec"); kwargs.put("filename", filename);
+            kwargs.put("dynamic", true); kwargs.put("mode", mode);
+            return PyRuntime.callFunction(compileSource, new java.util.ArrayList<Object>(java.util.List.of(source)), kwargs);
+        }
+
+        /** The compiler's own exceptions become the errors Python code expects from compile(). */
+        private static RuntimeException translate(Throwable t) {
+            if (t instanceof PyException p) {
+                String message = PyRuntime.pyStr(p.value instanceof PyInstance ? p.value : p.value == null ? "" : p.value);
+                switch (p.typeName) {
+                    case "CompileError": return new PyException("NotImplementedError", message);
+                    case "SyntaxError", "IndentationError", "TabError": return new PyException(p.typeName, message);
+                    case "FrameError":
+                        return message.contains("1..65535 bytes")
+                            ? new PyException("NotImplementedError", "compiled code exceeds the JVM 64KB method limit (method splitting is not implemented)")
+                            : new PyException("RuntimeError", "FrameError: " + message);
+                    default: return new PyException("RuntimeError", "compiler failure: " + p.typeName + ": " + message);
+                }
+            }
+            if (t instanceof RuntimeException r) return r;
+            return new PyException("RuntimeError", "compiler failure: " + t);
+        }
     }
 
     /**
@@ -47,8 +109,9 @@ final class ExecSupport {
             String home = System.getenv("PYJVM_HOME");
             if (home == null || home.isEmpty())
                 throw new PyException("NotImplementedError",
-                    "exec/eval/compile need a compiler backend: set PYJVM_HOME to the directory containing the pyjvm315 "
-                    + "package (the in-process self-hosted compiler is not implemented yet)");
+                    "exec/eval/compile need a compiler: put the self-hosted compiler's class files on the classpath "
+                    + "(tools/selfhost.py stage1 <dir>, then add <dir>/stage1), or set PYJVM_HOME to the directory "
+                    + "containing the pyjvm315 package to use a host Python instead");
             String python = System.getenv().getOrDefault("PYJVM_PYTHON", "python3");
             String key = mode + '\0' + filename + '\0' + source;
             byte[] cached = cache.get(key);

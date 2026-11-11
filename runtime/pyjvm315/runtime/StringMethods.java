@@ -26,7 +26,7 @@ final class StringMethods {
         "strip", "lstrip", "rstrip", "startswith", "endswith", "removeprefix", "removesuffix", "replace", "split", "rsplit", "splitlines",
         "join", "find", "rfind", "index", "rindex", "count", "partition", "rpartition", "center", "ljust", "rjust", "zfill", "expandtabs",
         "translate", "isalpha", "isdecimal", "isdigit", "isnumeric", "isalnum", "isspace", "isascii", "isupper", "islower", "istitle",
-        "isidentifier", "isprintable", "encode");
+        "isidentifier", "isprintable", "encode", "format", "format_map");
     /** Parameter names of methods that take keyword arguments (positional order). */
     static final java.util.Map<String, java.util.List<String>> PARAMS = java.util.Map.of(
         "encode", java.util.List.of("encoding", "errors"), "split", java.util.List.of("sep", "maxsplit"),
@@ -322,6 +322,8 @@ final class StringMethods {
                 }
                 yield sb.toString();
             }
+            case "format" -> StrFormat.format(str, new ArrayList<Object>(Arrays.asList(args)), new LinkedHashMap<Object,Object>());
+            case "format_map" -> { requireArgs(name,args,1); @SuppressWarnings("unchecked") Map<Object,Object> m=(Map<Object,Object>)args[0]; yield StrFormat.format(str, new ArrayList<Object>(), m); }
             case "isalpha" -> allChars(str, Character::isLetter);
             case "isdecimal" -> allChars(str, c -> Character.getType(c) == Character.DECIMAL_DIGIT_NUMBER);
             case "isdigit" -> allChars(str, StringMethods::isDigitCp);

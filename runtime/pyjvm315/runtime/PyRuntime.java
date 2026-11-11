@@ -2561,6 +2561,7 @@ public final class PyRuntime {
             if(!kwargs.isEmpty()) {
                 if(method.self instanceof Map<?,?> && method.name.equals("update")) return callMethodDynamic(method.self,method.name,args,kwargs);
                 if(method.self instanceof List<?> && method.name.equals("sort")) return callMethodDynamic(method.self,method.name,args,kwargs);
+                if(method.self instanceof String fmt && method.name.equals("format")) return StrFormat.format(fmt,args,kwargs);
                 List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : null;
                 if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
                 Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
@@ -3289,6 +3290,7 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         String name=(String)nameObj;
         if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
+        if(obj instanceof String fmt && name.equals("format")) return StrFormat.format(fmt,args,kwargs);
         if(obj instanceof List<?> && name.equals("sort") && args.isEmpty()) { ListMethods.sortInPlace((List<Object>)obj,kwargs); return null; }
         if(obj instanceof Map<?,?> && name.equals("update")) {
             callMethod(obj,name,args.toArray());

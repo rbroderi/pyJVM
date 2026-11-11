@@ -68,7 +68,7 @@ def _jvm_exception(stderr: str) -> str | None:
 
 
 def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_cache: Path | None = None, *,
-                 target: int = DEFAULT_TARGET) -> Result:
+                 target: int = DEFAULT_TARGET, selfhosted: Path | None = None) -> Result:
     source = source.resolve()
     needed = required_python(source.read_text(encoding="utf-8"))
     if needed is not None and reference_version(python_exe) < needed:
@@ -93,9 +93,14 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
         except Exception as exc:
             return Result(source.name, "ERROR", f"build failed: {exc}")
         # exec()/eval()/compile() compile through the host-Python backend (until the compiler is self-hosted)
-        backend_env = {"PYJVM_HOME": str(Path(__file__).resolve().parent.parent), "PYJVM_PYTHON": python_exe,
-                       "PYJVM_LANG_VERSION": "%d.%d" % reference_version(python_exe)}
-        jvm = _run([java_exe, "-Xverify:all", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", str(out), "ConformanceMain"],
+        backend_env = {"PYJVM_LANG_VERSION": "%d.%d" % reference_version(python_exe)}
+        classpath = str(out)
+        if selfhosted is not None:
+            # the compiler runs in-process from its own class files: the JVM is given no host Python at all
+            classpath += os.pathsep + str(selfhosted)
+        else:
+            backend_env.update(PYJVM_HOME=str(Path(__file__).resolve().parent.parent), PYJVM_PYTHON=python_exe)
+        jvm = _run([java_exe, "-Xverify:all", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", classpath, "ConformanceMain"],
                    cwd=source.parent, extra_env=backend_env)
 
     if _stdout(jvm) != _stdout(py):
@@ -119,7 +124,7 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
 
 
 def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
-              target: int = DEFAULT_TARGET) -> list[Result]:
+              target: int = DEFAULT_TARGET, selfhosted: bool = False) -> list[Result]:
     if path.is_file():
         files = [path]
     else:
@@ -134,7 +139,11 @@ def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
     with tempfile.TemporaryDirectory(prefix="pyjvm315-runtime-") as td:
         runtime_cache = Path(td)
         build_runtime(runtime_cache)
-        return [compare_file(f, python_exe, java_exe, runtime_cache, target=target) for f in files]
+        classes = None
+        if selfhosted:
+            from .selfhost import build_selfhosted
+            classes = build_selfhosted(Path(td) / "selfhosted")
+        return [compare_file(f, python_exe, java_exe, runtime_cache, target=target, selfhosted=classes) for f in files]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -145,8 +154,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     ap.add_argument("--unsupported-summary", action="store_true", help="Group unsupported cases by compiler reason")
     ap.add_argument("--target", type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET)
+    ap.add_argument("--selfhosted", action="store_true",
+                    help="run exec/eval/compile through the self-hosted compiler on the JVM (no host Python)")
     ns = ap.parse_args(argv)
-    results = run_suite(ns.path, ns.python, ns.java, target=ns.target)
+    results = run_suite(ns.path, ns.python, ns.java, target=ns.target, selfhosted=ns.selfhosted)
 
     passed = sum(r.status == "PASS" for r in results)
     unsupported = sum(r.status == "UNSUPPORTED" for r in results)

@@ -3046,14 +3046,23 @@ class Compiler:
         b.mark(end)
 
 
+# Compile-time errors CPython also reports as SyntaxError (everything else CompileError raises is an unsupported feature).
+GENUINE_SYNTAX_ERRORS = ("break outside loop", "continue outside loop", "return outside function", "no binding for nonlocal")
+
+
 def compile_source(source: str, class_name: str = "Main", filename: str = "<string>",
                    import_map: dict[str,str] | None = None,
                    import_exports: dict[str, list[str] | None] | None = None,
                    module_name: str = "__main__", package_name: str | None = None,
                    *, target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> bytes:
-    return Compiler(class_name, import_map=import_map, import_exports=import_exports,
-                    module_name=module_name, package_name=package_name, target=target,
-                    dynamic=dynamic, mode=mode).compile(source, filename)
+    try:
+        return Compiler(class_name, import_map=import_map, import_exports=import_exports,
+                        module_name=module_name, package_name=package_name, target=target,
+                        dynamic=dynamic, mode=mode).compile(source, filename)
+    except CompileError as exc:
+        if str(exc).startswith(GENUINE_SYNTAX_ERRORS):
+            raise SyntaxError(str(exc)) from None
+        raise
 
 
 def _resolve_import_name(current_module: str, current_is_package: bool, module: str | None, level: int) -> str | None:
