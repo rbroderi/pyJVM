@@ -49,7 +49,11 @@ public final class ExceptionGroupSupport {
         return e instanceof PyExceptionValue v ? v.typeName : e instanceof PyInstance i ? i.cls.name : typeName(e);
     }
 
-    static ExcState state(PyInstance i) { if (i.exc == null) i.exc = new ExcState(); return i.exc; }
+    static ExcState state(PyInstance i) {
+        ExcState s = i.exc;
+        if (s != null) return s;
+        synchronized (i) { if (i.exc == null) i.exc = new ExcState(); return i.exc; }
+    }
 
     static Object cause(Object e) { return e instanceof PyExceptionValue v ? v.cause : e instanceof PyInstance i && i.exc != null ? i.exc.cause : null; }
     static Object context(Object e) { return e instanceof PyExceptionValue v ? v.context : e instanceof PyInstance i && i.exc != null ? i.exc.context : null; }
