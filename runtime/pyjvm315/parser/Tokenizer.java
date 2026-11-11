@@ -137,16 +137,22 @@ public final class Tokenizer {
 
     /** Handle indentation/blank lines at the start of a logical line. @return false at EOF. */
     private boolean lineStart() {
-        int j = i, col = 0;
+        int j = i, col = 0, contCol = -1;
         while (j < n) {
             char c = src.charAt(j);
             if (c == ' ') col++;
             else if (c == '\t') col = (col / 8 + 1) * 8;
             else if (c == '\f') col = 0;
+            else if (c == '\\' && isNewline(j + 1)) {
+                // Indentation cannot be split over physical lines: the first backslash fixes the level (as CPython's tokenizer does).
+                if (contCol < 0) contCol = col;
+                j = newlineEnd(j + 1); col = 0; continue;
+            }
             else break;
             j++;
         }
         if (j >= n) { i = n; return false; }
+        if (contCol >= 0) col = contCol;
         char c = src.charAt(j);
         if (c == '#') {
             int s = j; int e = s; while (e < n && !isNewline(e)) e++;
@@ -156,7 +162,6 @@ public final class Tokenizer {
             return true;
         }
         if (isNewline(j)) { int ne = newlineEnd(j); emit(Token.NL, j, ne); i = ne; return true; }
-        if (c == '\\' && isNewline(j + 1)) { i = newlineEnd(j + 1); return true; }
         int line = lineOf(j);
         if (col > indents.peek()) {
             indents.push(col);

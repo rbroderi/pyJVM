@@ -3422,6 +3422,9 @@ def check_async_scopes(tree: ast.AST) -> None:
         else:
             inner = in_async
         for child in ast.iter_child_nodes(node):
+            # annotation expressions are validated (with CPython's own messages) by the annotation lowering
+            if child is getattr(node, "annotation", None) or child is getattr(node, "returns", None):
+                continue
             stack.append((child, inner))
 
 
