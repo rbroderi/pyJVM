@@ -32,6 +32,8 @@ final class PyClass {
     List<PyClass> mro = List.of(this);
     PyClass metaclass = null;
     String builtinBaseName = null;
+    /** Position of the builtin base among the declared bases (for __bases__ ordering). */
+    int builtinBasePos = -1;
     /** Builtin value type this class derives from (int, str, list, dict, ...; see NativeSubclass), resolved at finalization, else null. */
     String nativeKind = null;
     /** Name of the built-in exception type this class ultimately derives from (user-defined exception classes), else null. */

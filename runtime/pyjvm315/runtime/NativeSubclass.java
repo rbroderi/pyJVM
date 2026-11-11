@@ -100,7 +100,7 @@ final class NativeSubclass {
             for (PyClass c : b.mro) if (c.builtinBaseName != null && isKind(c.builtinBaseName) && !c.builtinBaseName.equals(base.name))
                 throw new PyException("TypeError", "multiple bases have instance lay-out conflict");
         }
-        target.builtinBaseName = base.name;
+        target.builtinBaseName = base.name; target.builtinBasePos = target.bases.size();
     }
 
     // ---------- allocation / construction ----------
