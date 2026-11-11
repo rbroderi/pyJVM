@@ -9,6 +9,7 @@ from .stackmap import FrameError
 from .versions import feature_version, deferred_annotations
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
 from .annot import lower_annotations, ANNOTATION_MARKERS, CLASSDICT_INTRINSIC
+from .carets import build_caret_table
 from .excstar import check_except_star_flow, lower_try_star
 from .typeparams import lower_type_params, TP_PREFIX, HELPERS as TYPEPARAM_HELPERS
 
@@ -239,6 +240,9 @@ class Compiler:
         else:
             level = feature_version() if self.feature_version_override is None else self.feature_version_override
             tree = ast.parse(source, filename=filename, mode=self.mode, feature_version=level)
+        self.caret_table = ""
+        if not self.dynamic and not filename.startswith("<"):
+            self.caret_table = build_caret_table(tree, source)
         if self.mode == "eval":
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
@@ -928,6 +932,9 @@ class Compiler:
         self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b); self._emit_owner(b)
         b.invokestatic(RUNTIME,"pushModuleFrame",f"({OBJ*4})V")
+        for chunk_start in range(0, len(self.caret_table), 16000):
+            b.ldc_string(self.filename); b.ldc_string(self.caret_table[chunk_start:chunk_start + 16000])
+            b.invokestatic(RUNTIME2, "registerCarets", f"({OBJ}{OBJ})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         if self.module_name == "__main__":
             b.aconst_null()
@@ -948,9 +955,19 @@ class Compiler:
             b.aload(loader_slot)
             b.invokestatic(RUNTIME, "makeModuleSpec", f"({OBJ*5}){OBJ}")
             self._store_name("__spec__", b, scope)
+        guard_start, guard_end, guard_handler = b.label(), b.label(), b.label()
+        b.mark(guard_start)
         scope = self._emit_module_body(body, b, scope)
+        b.mark(guard_end)
         b.invokestatic(RUNTIME,"popLogicalFrame",f"()V")
         b.return_()
+        if self.module_name == "__main__":
+            # an exception leaving the program is reported like CPython does (sys.excepthook) and sets the exit status
+            guard_slot = scope.temp()
+            b.mark(guard_handler); b.astore(guard_slot)
+            b.aload(guard_slot); b.invokestatic("pyjvm315/runtime/ExceptionGroupSupport", "handleUncaught", f"({OBJ})V")
+            b.return_()
+            b.add_exception_handler(guard_start, guard_end, guard_handler, "java/lang/Throwable")
         code = b.finish()
         self.cf.add_method(Method("main", "([Ljava/lang/String;)V", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
 
@@ -3345,12 +3362,20 @@ class Compiler:
     def _compile_try_except(self, body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         start, protected_end, dispatch, done = b.label(), b.label(), b.label(), b.label()
         exc_slot = scope.temp()
+        # an exception that left an except clause of this try body leaves that clause's entry on the handled stack
+        reset_slot = -1
+        if self._contains_handler(body):
+            reset_slot = scope.temp()
+            b.invokestatic(RUNTIME2, "excDepth", f"(){OBJ}"); b.astore(reset_slot)
         b.mark(start)
         for stmt in body: self._stmt(stmt, b, scope, in_function)
         b.mark(protected_end)
         for stmt in orelse: self._stmt(stmt, b, scope, in_function)
         b.goto(done)
         b.mark(dispatch); b.astore(exc_slot)
+        if reset_slot >= 0:
+            b.aload(reset_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
+        b.aload(exc_slot); b.invokestatic(RUNTIME2, "attachContext", f"({OBJ})V")
         b.aload(exc_slot); b.invokestatic(RUNTIME,"tracebackAddCurrentFrame",f"({OBJ})V")
         b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
         self._trace_handler_entry(None, exc_slot, b)
@@ -3380,6 +3405,13 @@ class Compiler:
             b.mark(next_handler)
         b.aload(exc_slot); b.athrow()
         b.mark(done)
+
+    @staticmethod
+    def _contains_handler(stmts: list[ast.stmt]) -> bool:
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.ExceptHandler): return True
+        return False
 
     def _handler_enter(self, exc_slot: int, b: CodeBuilder, scope: Scope) -> int:
         """Record the exception an except clause is handling (sys.exception()); returns the slot holding the previous depth."""

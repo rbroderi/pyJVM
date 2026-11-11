@@ -10,7 +10,7 @@ The lowering follows CPython's CHECK_EG_MATCH / PREP_RERAISE_STAR protocol.  The
         $eg_m, $eg_r = __py_eg_internal("match", $eg_r, TYPE, LINE)     # once per clause
         if $eg_m is not None:
             try: [NAME = $eg_m]; HANDLER BODY
-            except BaseException as $eg_n: collect($eg_x, $eg_n, $eg_m, $eg_o)
+            except BaseException as $eg_n: __py_eg_internal("collect", $eg_x, $eg_n, ($eg_m, $eg_o))
         $eg_p = __py_eg_internal("prep", $eg_o, $eg_x, $eg_r)
         if $eg_p is not None: __py_eg_internal("throw", $eg_p)
     else: ORELSE
@@ -49,14 +49,36 @@ def _violates(node: ast.AST, in_loop: bool) -> bool:
     return False
 
 
+def _has_return(node: ast.AST) -> bool:
+    if isinstance(node, _SCOPES):
+        return False
+    if isinstance(node, ast.Return):
+        return True
+    for child in ast.iter_child_nodes(node):
+        if _has_return(child):
+            return True
+    return False
+
+
+def _check(node: ast.AST, in_function: bool) -> None:
+    if isinstance(node, ast.TryStar):
+        for handler in node.handlers:
+            for stmt in handler.body:
+                if _violates(stmt, False):
+                    # CPython reports a return outside any function before the except* restriction
+                    if not in_function and _has_return(stmt):
+                        raise SyntaxError("'return' outside function")
+                    raise SyntaxError(STAR_FLOW_MESSAGE)
+    inner = in_function or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+    if isinstance(node, ast.ClassDef):
+        inner = False
+    for child in ast.iter_child_nodes(node):
+        _check(child, inner)
+
+
 def check_except_star_flow(tree: ast.AST) -> None:
     """return / break / continue may not leave an except* clause."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.TryStar):
-            for handler in node.handlers:
-                for stmt in handler.body:
-                    if _violates(stmt, False):
-                        raise SyntaxError(STAR_FLOW_MESSAGE)
+    _check(tree, False)
 
 
 def _relocate(node: ast.AST, line: int) -> None:

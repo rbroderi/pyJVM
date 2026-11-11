@@ -69,9 +69,7 @@ print(v.__context__ is c)
 attempt("bad cause", lambda: setattr(v, "__cause__", 3))
 attempt("bad context", lambda: setattr(v, "__context__", "x"))
 attempt("bad tb", lambda: setattr(v, "__traceback__", 3))
-del v.__cause__
-del v.__context__
-print(v.__cause__, v.__context__)
+print(v.__cause__, v.__context__ is c)
 
 # raise ... from sets cause and suppresses context
 try:

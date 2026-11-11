@@ -264,6 +264,19 @@ public final class ExceptionGroupSupport {
 
     // ---------- sys.exception / sys.exc_info ----------
     static void installSys(PyModule sys) {
+        NativeFunction hook = new NativeFunction("excepthook", (a, k) -> {
+            if (a.size() != 3) throw new PyException("TypeError", "excepthook expected 3 arguments, got " + a.size());
+            defaultExcepthook(a.get(0), a.get(1), a.get(2));
+            return null;
+        });
+        sys.attrs.put("excepthook", hook);
+        sys.attrs.put("__excepthook__", hook);
+        sys.attrs.put("exit", new NativeFunction("exit", (a, k) -> {
+            ArrayList<Object> args = new ArrayList<>();
+            if (!a.isEmpty()) args.add(a.get(0));
+            raiseObject(BuiltinsExtra.newException("SystemExit", args));
+            return null;
+        }));
         sys.attrs.put("exception", new NativeFunction("exception", (a, k) -> {
             Object t = BuiltinsExtra.currentHandled();
             return t == null ? null : exceptionInstance(t);
@@ -277,6 +290,57 @@ public final class ExceptionGroupSupport {
             out.items.add(value == null ? null : traceback(value));
             return out;
         }));
+    }
+
+    // ---------- uncaught exceptions and sys.excepthook ----------
+    /** Exit code and optional message for an uncaught SystemExit. */
+    private static int systemExitStatus(Object exit) {
+        Object code = null;
+        if (PyRuntime.getattr(exit, "args") instanceof PyTuple t && !t.items.isEmpty()) code = t.items.size() == 1 ? t.items.get(0) : t;
+        if (code == null) return 0;
+        if (code instanceof Boolean b) return b ? 1 : 0;
+        if (code instanceof Number n && !(code instanceof Double)) return bigInt(n).intValue();
+        try { callMethod(BuiltinsExtra.currentStream("stderr"), "write", new Object[]{pyStr(code) + "\n"}); } catch (RuntimeException ignored) { }
+        return 1;
+    }
+
+    /** The default sys.excepthook: the full report on sys.stderr. */
+    static void defaultExcepthook(Object type, Object value, Object tb) {
+        if (!isExc(value)) throw new PyException("TypeError", "print_exception(): Exception expected for value, " + typeName(value) + " found");
+        if (traceback(value) == null && tb instanceof PyTraceback t) setTraceback(value, t);
+        Object err = BuiltinsExtra.currentStream("stderr");
+        callMethod(err, "write", new Object[]{TracebackFormat.format(value)});
+        if (truth(hasattr(err, "flush"))) callMethod(err, "flush", new Object[0]);
+    }
+
+    /** Entry of the generated main: an exception left the program. Prints the report (sys.excepthook) and exits. */
+    public static void handleUncaught(Object throwableObj) {
+        Throwable t = (Throwable) throwableObj;
+        PyException p;
+        if (t instanceof PyException known) p = known;
+        else if (t instanceof ArithmeticException || t instanceof IndexOutOfBoundsException || t instanceof java.util.NoSuchElementException
+                 || t instanceof ClassCastException || t instanceof IllegalArgumentException) p = new PyException(pythonExceptionType(t), exceptionValue(t));
+        else if (t instanceof StackOverflowError) p = new PyException("RecursionError", "maximum recursion depth exceeded");
+        else if (t instanceof Error err) throw err;
+        else throw (RuntimeException) t;
+        BuiltinsExtra.attachContext(p);
+        tracebackAddCurrentFrame(p);
+        Object value = exceptionInstance(p);
+        System.out.flush();
+        if (excTypeName(value).equals("SystemExit")) { System.exit(systemExitStatus(value)); return; }
+        try {
+            PyModule sys = (PyModule) importNative("sys");
+            Object hook = sys.attrs.get("excepthook");
+            if (hook == null) throw new PyException("RuntimeError", "lost sys.excepthook");
+            callFunction(hook, new ArrayList<Object>(List.of(typeOf(value), value, traceback(value))), new LinkedHashMap<Object,Object>());
+        } catch (Throwable hookFailure) {
+            System.err.println("Error in sys.excepthook:");
+            try { defaultExcepthook(typeOf(hookFailure instanceof PyException ? exceptionInstance(hookFailure) : value), hookFailure instanceof PyException ? exceptionInstance(hookFailure) : value, null); } catch (Throwable ignored) { }
+            System.err.println("\nOriginal exception was:");
+            defaultExcepthook(typeOf(value), value, null);
+        }
+        System.err.flush();
+        System.exit(1);
     }
 
     // ---------- BaseExceptionGroup methods ----------
@@ -401,7 +465,8 @@ public final class ExceptionGroupSupport {
     }
 
     private static boolean sameMetadata(Object a, Object b) {
-        return notes(a) == notes(b) && traceback(a) == traceback(b) && cause(a) == cause(b) && context(a) == context(b);
+        // CPython (3.13 to 3.15) behaves as if __notes__ were not part of the comparison: a matched group that only gained notes still counts as re-raised
+        return traceback(a) == traceback(b) && cause(a) == cause(b) && context(a) == context(b);
     }
 
     private static void leafIds(Object e, IdentityHashMap<Object,Boolean> out) {

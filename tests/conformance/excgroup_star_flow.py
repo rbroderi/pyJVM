@@ -1,6 +1,5 @@
 # try/except* in generators, coroutines, loops, finally; sys.exception() inside handlers; syntax errors
 import sys
-import asyncio
 
 def gen():
     try:
@@ -47,15 +46,27 @@ print(next(t))
 
 async def co():
     try:
-        await asyncio.sleep(0)
+        await Yield()
         raise ExceptionGroup("g", [ValueError(1), KeyError(2)])
     except* ValueError as e:
-        await asyncio.sleep(0)
+        await Yield()
         print("co V", len(e.exceptions))
     except* KeyError as e:
         print("co K", len(e.exceptions))
 
-asyncio.run(co())
+
+class Yield:
+    def __await__(self):
+        yield
+
+
+c = co()
+try:
+    while True:
+        c.send(None)
+except StopIteration:
+    pass
+
 
 # try/except* as the last statement of loops, with continue/break around (not inside) it
 for i in range(4):
@@ -82,7 +93,7 @@ def early():
     try:
         return "body"
     except* ValueError:
-        return "never"
+        print("never")
     finally:
         print("cleanup")
 print(early())

@@ -25,7 +25,8 @@ final class PyException extends RuntimeException {
     final String typeName; final Object value; Object instance; Object tracedFrame; SyntaxInfo syntax; Object cause; Object context; boolean suppressContext; PyTraceback traceback;
     PyException(String typeName, Object value) { this(typeName,value,null,null,false,null); }
     PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
-    PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { super(value == null ? null : pyStr(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
+    PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { super(value == null ? null : messageOf(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
+    private static String messageOf(Object value){ try { return pyStr(value); } catch (RuntimeException e) { return null; } }   // a failing __str__ is reported when the exception is printed
     void addFrame(String name,String filename,long firstline,long line){traceback=prependTraceback(traceback,name,filename,firstline,line);}
     void addFrame(String name,String filename,long line){addFrame(name,filename,line,line);}
     @Override public String toString() { return typeName + (value == null ? "" : ": " + pyStr(value)); }

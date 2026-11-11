@@ -508,6 +508,10 @@ public final class PyRuntime {
             PyMethod m=instance.cls.lookupMethod("__str__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
             if(instance.payload!=null && (instance.cls.nativeKind.equals("str") || instance.cls.nativeKind.equals("bytes"))) return pyStr(instance.payload);
+            if(ExceptionGroupSupport.isGroup(instance)) {
+                int n=ExceptionGroupSupport.groupExceptions(instance).items.size();
+                return pyStr(ExceptionGroupSupport.groupMessage(instance))+" ("+n+" sub-exception"+(n==1?"":"s")+")";
+            }
             m=instance.cls.lookupMethod("__repr__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}
             if(instance.cls.exceptionBase!=null && instance.fields.get("args") instanceof PyTuple a) {
@@ -2906,6 +2910,7 @@ public final class PyRuntime {
         Throwable t = (Throwable)throwableObj;
         if (t instanceof PyException p) return p.value;
         String msg = t.getMessage();
+        if (t instanceof StackOverflowError) return "maximum recursion depth exceeded";
         return msg == null ? "" : msg;
     }
     public static Object exceptionInstance(Object throwableObj) {
@@ -2920,6 +2925,7 @@ public final class PyRuntime {
         if (t instanceof IndexOutOfBoundsException) return "IndexError";
         if (t instanceof NoSuchElementException) return "KeyError";
         if (t instanceof IllegalArgumentException || t instanceof ClassCastException) return "TypeError";
+        if (t instanceof StackOverflowError) return "RecursionError";
         if (t instanceof AssertionError) return "AssertionError";
         if (t instanceof NoSuchElementException) return "KeyError";
         return "RuntimeError";
@@ -3712,6 +3718,7 @@ public final class PyRuntime {
             if (name.equals("args")) return BuiltinsExtra.exceptionArgs(exc.value);
             Object groupAttr=BuiltinsExtra.groupAttribute(exc,name); if(groupAttr!=MISSING) return groupAttr;
             if (name.equals("value") && exc.typeName.equals("StopIteration")) return exc.value;
+            if (name.equals("code") && exc.typeName.equals("SystemExit")) { PyTuple a=(PyTuple)BuiltinsExtra.exceptionArgs(exc.value); return a.items.isEmpty()?null:a.items.size()==1?a.items.get(0):a; }
             Object special=ExceptionGroupSupport.getattr(exc,name); if(special!=MISSING) return special;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
         }

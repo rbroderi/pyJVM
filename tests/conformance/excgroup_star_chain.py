@@ -49,3 +49,15 @@ except BaseException as r:
     print(repr(r), repr(r.exceptions[0].__context__), repr(r.exceptions[1].__context__))
     print(repr(r.__context__))
     print([repr(x) for x in r.exceptions])
+
+# a matched group that gained notes in its handler still counts as re-raised (the notes are dropped)
+eg = ExceptionGroup("g", [ValueError("a"), TypeError("b")])
+try:
+    try:
+        raise eg
+    except* ValueError as e:
+        e.add_note("n")
+        raise
+except BaseException as r:
+    print(repr(r), r is eg, getattr(r, "__notes__", None), getattr(eg, "__notes__", None))
+    print([repr(x) for x in r.exceptions])
