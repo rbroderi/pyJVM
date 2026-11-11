@@ -43,6 +43,7 @@ public final class AstModule {
         fn(m, "increment_lineno", (a, k) -> incrementLineno(a.get(0), a.size() > 1 ? a.get(1) : (Object) 1L));
         fn(m, "get_docstring", (a, k) -> getDocstring(a.get(0)));
         fn(m, "literal_eval", (a, k) -> literalEval(a.get(0)));
+        fn(m, "compare", (a, k) -> compare(a.get(0), a.get(1), truth(k.getOrDefault("compare_attributes", false))));
         m.attrs.put("NodeVisitor", visitorClass);
         m.attrs.put("NodeTransformer", transformerClass);
         m.attrs.put("AST", astClass);
@@ -115,6 +116,32 @@ public final class AstModule {
     private static PyClass specClass(PyClass cls) {
         for (PyClass c : cls.mro) if (AstNode.exists(c.name) && CLASSES.get(c.name) == c) return c;
         return null;
+    }
+
+    static boolean isNode(Object o) { return isAst(o); }
+
+    private static boolean compare(Object a, Object b, boolean attributes) {
+        if (a == null || b == null) return a == b;
+        if (isAst(a) || isAst(b)) {
+            if (!isAst(a) || !isAst(b) || ((PyInstance) a).cls != ((PyInstance) b).cls) return false;
+            PyInstance x = (PyInstance) a, y = (PyInstance) b;
+            for (String f : fieldsOf(x)) {
+                if (x.fields.containsKey(f) != y.fields.containsKey(f)) return false;
+                if (x.fields.containsKey(f) && !compare(x.fields.get(f), y.fields.get(f), attributes)) return false;
+            }
+            if (attributes) for (Object an : (List<?>) pyAttrs(x)) {
+                String f = (String) an;
+                if (x.fields.containsKey(f) != y.fields.containsKey(f)) return false;
+                if (x.fields.containsKey(f) && !truth(eq(x.fields.get(f), y.fields.get(f)))) return false;
+            }
+            return true;
+        }
+        if (a instanceof List<?> l && b instanceof List<?> m) {
+            if (l.size() != m.size()) return false;
+            for (int i = 0; i < l.size(); i++) if (!compare(l.get(i), m.get(i), attributes)) return false;
+            return true;
+        }
+        return typeName(a).equals(typeName(b)) && truth(eq(a, b));
     }
 
     private static boolean isAst(Object o) { return o instanceof PyInstance i && i.cls.mro.contains(astClass); }

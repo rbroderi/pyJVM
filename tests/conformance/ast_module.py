@@ -67,3 +67,5 @@ def describe(node):
             return type(node).__name__
 
 print(describe(ast.parse("1 + x", mode="eval").body), describe(ast.parse("'s'", mode="eval").body), describe(ast.parse("-1", mode="eval").body))
+
+print(ast.dump(compile("x = 1", "<s>", "exec", ast.PyCF_ONLY_AST)), ast.dump(compile("1 + 2", "<s>", "eval", flags=ast.PyCF_ONLY_AST)))

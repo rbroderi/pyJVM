@@ -42,12 +42,47 @@ class Fixture:
         assert hasattr(actual, name), "CPython assertHasAttr failed"
     def assertNotHasAttr(self, actual, name):
         assert not hasattr(actual, name), "CPython assertNotHasAttr failed"
+    def assertTrue(self, value):
+        assert value, "CPython assertTrue failed"
+    def assertFalse(self, value):
+        assert not value, "CPython assertFalse failed"
+    def assertIsNone(self, value):
+        assert value is None, "CPython assertIsNone failed"
+    def assertIsNotNone(self, value):
+        assert value is not None, "CPython assertIsNotNone failed"
+    def assertIsNot(self, actual, expected):
+        assert actual is not expected, "CPython assertIsNot failed"
+    def assertGreater(self, a, b):
+        assert a > b, "CPython assertGreater failed"
+    def assertLess(self, a, b):
+        assert a < b, "CPython assertLess failed"
+    def assertGreaterEqual(self, a, b):
+        assert a >= b, "CPython assertGreaterEqual failed"
+    def assertLessEqual(self, a, b):
+        assert a <= b, "CPython assertLessEqual failed"
+    def assertListEqual(self, actual, expected):
+        assert actual == expected, "CPython assertListEqual failed"
+    def assertTupleEqual(self, actual, expected):
+        assert actual == expected, "CPython assertTupleEqual failed"
+    def assertDictEqual(self, actual, expected):
+        assert actual == expected, "CPython assertDictEqual failed"
+    def assertRaisesRegex(self, expected, regex, function=None, *args, **kwargs):
+        # the message pattern is not checked; only the exception type (a documented fixture limit)
+        return self.assertRaises(expected, function, *args, **kwargs)
+    def subTest(self, *args, **kwargs):
+        return SubTestContext()
     def assertRaises(self, expected, function=None, *args, **kwargs):
         context = RaisesContext(expected)
         if function is None:
             return context
         with context:
             function(*args, **kwargs)
+
+class SubTestContext:
+    def __enter__(self):
+        return self
+    def __exit__(self, kind, value, trace):
+        return False
 
 class RaisesContext:
     def __init__(self, expected):
@@ -79,7 +114,7 @@ def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
     return copy.deepcopy(method)
 
 
-def fixture_source(method: ast.FunctionDef, variant: str) -> str:
+def fixture_source(method: ast.FunctionDef, variant: str, imports: tuple[str, ...] = ()) -> str:
     if variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset'):
         raise ValueError("unsupported fixture variant")
     fixtures = ast.parse(FIXTURE).body
@@ -101,7 +136,8 @@ def __init__(self):
         fixture.body.extend(setup)
     fixture.body.append(copy.deepcopy(method))
     driver = ast.parse(f'Fixture().{method.name}()\nprint("CPYTHON CASE PASSED")').body
-    return ast.unparse(ast.fix_missing_locations(ast.Module(body=[*fixtures, *driver], type_ignores=[]))) + '\n'
+    header = ''.join(f'import {name}\n' for name in imports)
+    return header + ast.unparse(ast.fix_missing_locations(ast.Module(body=[*fixtures, *driver], type_ignores=[]))) + '\n'
 
 
 def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_TARGET) -> dict:
@@ -111,8 +147,12 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
         runtime = work / 'runtime'
         runtime.mkdir()
         build_runtime(runtime)
+        imports: tuple[str, ...] = ()
         for line in manifest.read_text().splitlines():
             entry = line.strip()
+            if entry.startswith('@imports'):   # "@imports ast textwrap": modules the following bodies expect at module level
+                imports = tuple(entry.split()[1:])
+                continue
             if not entry or entry.startswith('#'):
                 continue
             fields = entry.split()
@@ -126,7 +166,7 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
             for variant in variants:
                 name = fields[0] + '[' + variant + ']'
                 source = work / 'case.py'
-                source.write_text(fixture_source(method, variant), encoding='utf-8')
+                source.write_text(fixture_source(method, variant, imports), encoding='utf-8')
                 reference = subprocess.run([python, str(source)], text=True, capture_output=True, timeout=60)
                 if reference.returncode != 0:
                     result = Result(name, 'ERROR', 'CPython reference failed: ' + reference.stderr)

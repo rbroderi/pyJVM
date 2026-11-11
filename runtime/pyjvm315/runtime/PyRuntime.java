@@ -210,6 +210,11 @@ public final class PyRuntime {
                 throw new PyException("TypeError","compile() got an unexpected keyword argument '"+key+"'");
             Object source=args.size()>0?args.get(0):kwargs.get("source"), file=args.size()>1?args.get(1):kwargs.get("filename"), mode=args.size()>2?args.get(2):kwargs.get("mode");
             if(source==null || file==null || mode==null) throw new PyException("TypeError","compile() missing required argument");
+            Object flags=args.size()>3?args.get(3):kwargs.get("flags");
+            if(flags instanceof Long f && (f & 1024L)!=0) { // PyCF_ONLY_AST
+                if(AstModule.isNode(source)) return source;
+                return AstModule.compileToAst(source,(String)mode);
+            }
             return ExecSupport.compileCode(source,file,mode);
         }
         if(name.equals("zip")) {
