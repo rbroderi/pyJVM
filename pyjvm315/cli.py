@@ -40,12 +40,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-runtime", action="store_true", help="Do not build runtime support class")
     parser.add_argument("--target", type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET,
                         help="Java classfile target (21 only; runtime requires Java 21+)")
+    parser.add_argument("--trace", action="store_true",
+                        help="Instrumented mode: line/handler events for sys.settrace, setprofile and sys.monitoring "
+                             "(also PYJVM_TRACE=1; modules mentioning settrace/setprofile/monitoring are instrumented automatically)")
     ns = parser.parse_args(argv)
 
     out = Path(ns.output)
     out.mkdir(parents=True, exist_ok=True)
     try:
-        class_file = compile_file(ns.source, out, ns.class_name, target=ns.target)
+        class_file = compile_file(ns.source, out, ns.class_name, target=ns.target, trace=ns.trace)
         if not ns.no_runtime:
             build_runtime(out)
     except (CompileError, FrameError, RuntimeError, subprocess.CalledProcessError) as exc:

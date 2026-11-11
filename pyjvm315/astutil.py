@@ -25,3 +25,18 @@ def deepcopy_ast(node, keep=None):
     if isinstance(node, list):
         return [deepcopy_ast(item, keep) for item in node]
     return node
+
+
+def shallow_copy_ast(node):
+    """One-level copy of an AST node (children shared), keeping compiler-private marks."""
+    fields = {}
+    for name, value in ast.iter_fields(node):
+        fields[name] = value
+    new = node.__class__(**fields)
+    for attr in node._attributes:
+        if hasattr(node, attr):
+            setattr(new, attr, getattr(node, attr))
+    for key, value in list(node.__dict__.items()):
+        if key not in fields and key not in node._attributes:
+            setattr(new, key, value)
+    return new

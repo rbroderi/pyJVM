@@ -4,6 +4,7 @@ compiler core in compiler.py has no file or stdlib dependencies so that it can c
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 from .classfile import DEFAULT_TARGET
@@ -194,13 +195,14 @@ def class_file_path(output_dir, jvm_name):
 
 
 def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None,
-                 *, target: int = DEFAULT_TARGET) -> Path:
+                 *, target: int = DEFAULT_TARGET, trace: bool = False) -> Path:
+    trace = trace or os.environ.get("PYJVM_TRACE", "") not in ("", "0")
     plan = plan_compile(source_path, class_name)
     out = None
     for path, jvm_name, module_name, package_name in plan.jobs:
         data = compile_source(path.read_text(encoding="utf-8"), jvm_name, str(path),
                               import_map=plan.import_map, import_exports=plan.import_exports,
-                              module_name=module_name, package_name=package_name, target=target)
+                              module_name=module_name, package_name=package_name, target=target, trace=trace)
         out = class_file_path(output_dir, jvm_name)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(data)

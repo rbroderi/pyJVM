@@ -30,7 +30,7 @@ final class PyFunction {
     final LinkedHashMap<String,Object> defaults;
     final PyEnv closure;
     final boolean envMode;
-    String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false;
+    String displayName, filename; long firstlineno; boolean asyncMode=false, asyncGeneratorMode=false, generatorLike=false;
     boolean hasClassCell=false;
     List<String> freeNames=List.of();
     PyTuple closureTuple;
@@ -102,6 +102,7 @@ final class PyFunction {
     }
 
     Object invokeStatic(Object[] bound) {
+        if(Tracing.enabled && !generatorLike) return invokeStaticTraced(bound);
         ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
         logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
         logical.classEnv=hasClassCell?closure:null;
@@ -109,6 +110,7 @@ final class PyFunction {
         List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
         if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
         for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
+        logical.owner=owner;
         LOGICAL_FRAMES.get().push(logical);
         try {
             Class<?> cls=ownerClass(owner);
@@ -124,6 +126,48 @@ final class PyFunction {
             return reflected.invoke(null, actual);
         } catch (java.lang.reflect.InvocationTargetException exc) {
             Throwable cause=exc.getCause();
+            if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
+            if (cause instanceof RuntimeException r) throw r;
+            if (cause instanceof Error e) throw e;
+            throw new RuntimeException(cause);
+        } catch (ReflectiveOperationException exc) {
+            throw new RuntimeException(exc);
+        } finally {
+            ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); if(!stack.isEmpty() && stack.peek()==logical) stack.pop();
+        }
+    }
+
+
+    /** invokeStatic with sys.settrace/setprofile/monitoring events (only reached while a hook is installed). */
+    private Object invokeStaticTraced(Object[] bound) {
+        ActiveFrame logical=new ActiveFrame(displayName,filename,firstlineno);
+        logical.firstArgument=!posonly.isEmpty()?posonly.get(0):!poskw.isEmpty()?poskw.get(0):null;
+        logical.classEnv=hasClassCell?closure:null;
+        logical.closure=closure; logical.freeNames=freeNames;
+        List<String> localNames=new ArrayList<>(); localNames.addAll(posonly); localNames.addAll(poskw); localNames.addAll(kwonly);
+        if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
+        for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
+        logical.owner=owner;
+        LOGICAL_FRAMES.get().push(logical);
+        boolean traced=true;
+        try {
+            if(traced) Tracing.call(logical);
+            Class<?> cls=ownerClass(owner);
+            int hidden = envMode ? 1 : 0;
+            Class<?>[] types=new Class<?>[bound.length + hidden]; Arrays.fill(types, Object.class);
+            var reflected=cls.getDeclaredMethod(method, types);
+            Object[] actual;
+            if (envMode) {
+                actual = new Object[bound.length + 1];
+                actual[0] = closure;
+                System.arraycopy(bound, 0, actual, 1, bound.length);
+            } else actual = bound;
+            Object produced=reflected.invoke(null, actual);
+            if(traced) Tracing.ret(logical,produced,false);
+            return produced;
+        } catch (java.lang.reflect.InvocationTargetException exc) {
+            Throwable cause=exc.getCause();
+            if (cause instanceof PyException p && traced) Tracing.unwind(logical,p);
             if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
             if (cause instanceof RuntimeException r) throw r;
             if (cause instanceof Error e) throw e;
