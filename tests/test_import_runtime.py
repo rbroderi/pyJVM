@@ -112,3 +112,11 @@ def test_temp_dir_package_matches_cpython(python_exe, jvm_kit, tmp_path):
     main.write_text(MAIN.format(root=str(root)), encoding="utf-8")
     result = compare_file(main, python_exe, runtime_cache=runtime, selfhosted=selfhosted)
     assert result.status == "PASS", result.detail
+
+
+@pytest.mark.parametrize("python_exe", _lanes())
+def test_native_stdlib_modules_match_cpython(python_exe, jvm_kit):
+    runtime, selfhosted = jvm_kit
+    main = Path(__file__).parent / "conformance" / "native_stdlib_modules" / "main.py"
+    result = compare_file(main, python_exe, runtime_cache=runtime, selfhosted=selfhosted)
+    assert result.status == "PASS", result.detail
