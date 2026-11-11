@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CORE = ["compiler", "classfile", "stackmap", "patma", "annot", "astutil", "versions"]
+CORE = ["compiler", "classfile", "stackmap", "patma", "annot", "typeparams", "astutil", "versions"]
 ENTRY = '''import sys
 import jvm_io
 from pyjvm315.compiler import compile_source

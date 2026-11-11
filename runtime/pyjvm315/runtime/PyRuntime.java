@@ -69,6 +69,7 @@ public final class PyRuntime {
 
     static String typeName(Object value) {
         if(value instanceof PyObject)return "object";
+        if(value instanceof TypeParamsObject tp)return tp.typeName();
         if(value instanceof PyCell)return "cell";
         if (value == null) return "NoneType";
         if (value instanceof Long || value instanceof BigInteger) return "int";
@@ -358,7 +359,7 @@ public final class PyRuntime {
         if(value instanceof PyClass cls) return cls.metaclass != null ? cls.metaclass : builtinType("type");
         return builtinType(typeName(value));
     }
-    public static Object callable_(Object value){return value instanceof NativeFunction || value instanceof PyFunction || value instanceof BoundCallable || value instanceof PyMethodDescriptor d && d.kind.equals("static") || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType || value instanceof PyInstance instance && instance.cls.lookupAttr("__call__")!=MISSING;}
+    public static Object callable_(Object value){return value instanceof NativeFunction || value instanceof PyFunction || value instanceof BoundCallable || value instanceof PyMethodDescriptor d && d.kind.equals("static") || value instanceof PyBuiltinFunction || value instanceof BuiltinBoundMethod || value instanceof BoundMethod || value instanceof BoundSuperMethod || value instanceof BoundClassMethod || value instanceof BoundStaticMethod || value instanceof UnboundMethod || value instanceof PyClass || value instanceof PyBuiltinType || value instanceof TypeParamsGeneric || value instanceof PyInstance instance && instance.cls.lookupAttr("__call__")!=MISSING;}
 
     static final Object NOT_IMPLEMENTED=Singleton.NOT_IMPLEMENTED, ELLIPSIS=Singleton.ELLIPSIS;
     public static Object notImplemented() { return NOT_IMPLEMENTED; }
@@ -419,6 +420,7 @@ public final class PyRuntime {
     }
     public static Object hash(Object value) {
         if(value instanceof PyFrozenSet frozen)return frozen.pythonHash();
+        if(value instanceof TypeParamsObject tp)return tp.pyHash();
         if(isIntLike(value))return numericHash(bigInt(value));
         if(value instanceof PyComplex z) {
             long real=Double.isNaN(z.real)?(Long)id(z):((Number)hash(z.real)).longValue();
@@ -477,6 +479,7 @@ public final class PyRuntime {
 
     public static String pyStr(Object value) {
         if (value == null) return "None";
+        if (value instanceof TypeParamsObject tp) return tp.repr();
         if (value instanceof PyComplex z) return z.toString();
         if (value instanceof Double number)return shortestFloat(number);
         if(value instanceof BoundCallable bound){
@@ -1234,7 +1237,7 @@ public final class PyRuntime {
     }
 
     public static Object bitAnd(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__and__","__rand__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
-    public static Object bitOr(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");if(a instanceof Map<?,?> && b instanceof Map<?,?>){PyDict out=new PyDict((Map<?,?>)a);dictUpdate(out,b);return a instanceof PyDict fa && fa.isFrozen()?out.freeze():out;}return compact(bigInt(a).or(bigInt(b))); }
+    public static Object bitOr(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");if(a instanceof Map<?,?> && b instanceof Map<?,?>){PyDict out=new PyDict((Map<?,?>)a);dictUpdate(out,b);return a instanceof PyDict fa && fa.isFrozen()?out.freeze():out;}if(!(a instanceof Long)){Object union=TypeParamsUnion.tryOr(a,b);if(union!=null)return union;}return compact(bigInt(a).or(bigInt(b))); }
     public static Object bitXor(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__xor__","__rxor__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
     public static Object lshift(Object a, Object b) {
         BigInteger n = bigInt(b); if (n.signum() < 0) throw new ArithmeticException("negative shift count");
@@ -1598,6 +1601,7 @@ public final class PyRuntime {
 
     public static Object getitem(Object value, Object key) {
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__getitem__");if(m!=null)return invoke(instance,m,new Object[]{key});}
+        if(value instanceof TypeParamsObject || value instanceof PyClass || value instanceof PyBuiltinType)return TypeParamsSupport.subscript(value,key);
         if (key instanceof PySlice sl) return sliceGet(value, sl);
         if (value instanceof PyByteSequence seq) {
             int i=asIndex(key); return (long)seq.unsignedAt(normalizeIndex(i,seq.byteSize()));
@@ -2352,7 +2356,7 @@ public final class PyRuntime {
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(AnnotationSupport.isHelper(name))return builtinFunction(name);
         if(Set.of("exec","eval","compile","aiter","anext","ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round","globals","locals").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","sentinel","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -2568,6 +2572,7 @@ public final class PyRuntime {
         }
         if(callable instanceof PyMethodDescriptor method && method.kind.equals("static"))return callFunction(method.function,args,kwargs);
         if (callable instanceof NativeFunction nf) return nf.body.call(args,kwargs);
+        if (callable instanceof TypeParamsGeneric generic) return generic.call(args,kwargs);
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
         if (callable instanceof BuiltinBoundMethod method) {
             if(!kwargs.isEmpty()) {
@@ -2618,6 +2623,7 @@ public final class PyRuntime {
                 throw new PyException("TypeError","type() takes 1 or 3 arguments");
             }
             if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
+            if(type.name.equals("sentinel"))return TypeParamsSentinel.construct(args,kwargs);
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(Set.of("map","zip","enumerate","filter").contains(type.name)) return callBuiltin(type.name,args,kwargs);
             if(type.name.equals("frozendict")) return dictConstruct(args,kwargs).freeze();
@@ -2889,6 +2895,8 @@ public final class PyRuntime {
             if(pyBase.exceptionBase!=null && target.exceptionBase==null){ target.exceptionBase=pyBase.exceptionBase; EXCEPTION_PARENTS.put(target.name,pyBase.name); }
             return;
         }
+        if(base instanceof TypeParamsGeneric generic && generic.origin instanceof PyClass origin){ classAddBase(cls,origin); return; }
+        if(base instanceof PyBuiltinType sealed && sealed.name.equals("sentinel")) throw new PyException("TypeError","type 'sentinel' is not an acceptable base type");
         if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
             return;
@@ -3571,6 +3579,7 @@ public final class PyRuntime {
             return new NativeFunction("from_bytes",(a,k)->callMethodDynamic(obj,"from_bytes",a,k));
         if(!(nameObj instanceof String))throw new PyException("TypeError","attribute name must be string");
         String name = (String)nameObj;
+        if(obj instanceof TypeParamsObject tp)return tp.getattr(name);
         if(obj==null && name.equals("__doc__"))return "The type of the None singleton.";
         if(obj instanceof PyCell cell && name.equals("cell_contents")){
             Object value=cell.value();
@@ -3584,6 +3593,7 @@ public final class PyRuntime {
             if(name.equals("__get__"))return new BuiltinBoundMethod(obj,name);
             if(function.metadata.containsKey(name))return function.metadata.get(name);
             if(function.attrs.containsKey(name))return function.attrs.get(name);
+            if(name.equals("__type_params__"))return TypeParamsSupport.emptyTypeParams();
             if(!name.equals("__class__"))throw new PyException("AttributeError","function has no attribute '"+name+"'");
         }
         if(obj instanceof PyMethodDescriptor method){
@@ -3724,6 +3734,7 @@ public final class PyRuntime {
                 out.put("__name__",cls.name);
                 return out;
             }
+            if(name.equals("__type_params__"))return cls.attrs.containsKey(name)?cls.attrs.get(name):TypeParamsSupport.emptyTypeParams();
             Object attr=cls.lookupAttr(name);
             if(attr!=MISSING) return descriptorGet(attr, null, cls);
             PyProperty prop=cls.lookupProperty(name);
@@ -3773,6 +3784,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError","readonly attribute");
         String name=(String)nameObj;
         if(obj instanceof PyFrame frame){PyFrameSupport.setFrameAttr(frame,name,value);return;}
+        if(obj instanceof TypeParamsObject tp){tp.setattr(name,value);return;}
         if(obj instanceof PyCell cell && name.equals("cell_contents")){cell.set(value);return;}
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
@@ -3819,6 +3831,7 @@ public final class PyRuntime {
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
+        if(obj instanceof TypeParamsObject tp){tp.delattr((String)nameObj);return;}
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyCell cell && nameObj.equals("cell_contents")){cell.set(UNBOUND);return;}
@@ -3896,6 +3909,7 @@ public final class PyRuntime {
                 case "enumerate" -> obj instanceof PyEnumerate;
                 case "filter" -> obj instanceof PyFilter;
                 case "slice" -> obj instanceof PySlice;
+                case "sentinel" -> obj instanceof TypeParamsSentinel;
                 case "type" -> obj instanceof PyClass || obj instanceof PyBuiltinType;
                 case "BaseException", "Exception" -> obj instanceof PyExceptionValue || obj instanceof PyException;
                 default -> false;

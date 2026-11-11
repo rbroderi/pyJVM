@@ -96,7 +96,7 @@ GLOBAL_LOOKUP = "__pyjvm_global__"
 
 def _target_names(target: ast.AST, out: set[str]) -> None:
     for node in ast.walk(target):
-        if isinstance(node, ast.Name):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
             out.add(node.id)
 
 
