@@ -80,6 +80,7 @@ public final class PyRuntime {
         if (value instanceof PyMemoryView) return "memoryview";
         if (value instanceof PyTuple) return "tuple";
         if (value instanceof List) return "list";
+        if (value instanceof PyDict d && d.isFrozen()) return "frozendict";
         if (value instanceof Map) return "dict";
         if(value instanceof PyFrozenSet)return "frozenset";
         if(value instanceof PySetIterator)return "set_iterator";
@@ -405,6 +406,7 @@ public final class PyRuntime {
             return accumulator==-1?1546275796L:accumulator;
         }
         if(value instanceof PySlice sl){PyTuple parts=new PyTuple();parts.items.add(sl.start);parts.items.add(sl.stop);parts.items.add(sl.step);return hash(parts);}
+        if(value instanceof PyDict fd && fd.isFrozen())return normalizeHash((long)fd.hashCode());
         if(value instanceof List<?> || value instanceof Map<?,?> || value instanceof Set<?> || value instanceof PyByteArray)
             throw new PyException("TypeError","unhashable type: '"+typeName(value)+"'");
         if(value instanceof PyMemoryView view){if(!view.readonly())throw new PyException("ValueError","cannot hash writable memoryview object");return byteHash(view.toByteArray());}
@@ -466,14 +468,16 @@ public final class PyRuntime {
             return seqRepr(xs, "{", "}");
         }
         if (value instanceof Map<?, ?> m) {
-            StringBuilder out = new StringBuilder("{");
+            boolean frozenDict = m instanceof PyDict fd && fd.isFrozen();
+            if (frozenDict && m.isEmpty()) return "frozendict()";
+            StringBuilder out = new StringBuilder(frozenDict ? "frozendict({" : "{");
             boolean first = true;
             for (var e : m.entrySet()) {
                 if (!first) out.append(", ");
                 first = false;
                 out.append(pyRepr(e.getKey())).append(": ").append(pyRepr(e.getValue()));
             }
-            return out.append('}').toString();
+            return out.append(frozenDict ? "})" : "}").toString();
         }
         return String.valueOf(value);
     }
@@ -1159,7 +1163,7 @@ public final class PyRuntime {
     }
     public static Object isub(Object a,Object b){return inplaceSetBinary(a,b,"difference","__isub__");}
     public static Object ibitAnd(Object a,Object b){return inplaceSetBinary(a,b,"intersection","__iand__");}
-    public static Object ibitOr(Object a,Object b){if(a instanceof Map<?,?>){dictUpdate(a,b);return a;}return inplaceSetBinary(a,b,"union","__ior__");}
+    public static Object ibitOr(Object a,Object b){if(a instanceof PyDict fa && fa.isFrozen())return bitOr(a,b);if(a instanceof Map<?,?>){dictUpdate(a,b);return a;}return inplaceSetBinary(a,b,"union","__ior__");}
     public static Object ibitXor(Object a,Object b){return inplaceSetBinary(a,b,"symmetric_difference","__ixor__");}
     static Object inplaceSetBinary(Object a,Object b,String operation,String special){
         if(a instanceof PyInstance instance){
@@ -1178,7 +1182,7 @@ public final class PyRuntime {
     }
 
     public static Object bitAnd(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__and__","__rand__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"intersection");return compact(bigInt(a).and(bigInt(b))); }
-    public static Object bitOr(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");if(a instanceof Map<?,?> && b instanceof Map<?,?>){PyDict out=new PyDict((Map<?,?>)a);dictUpdate(out,b);return out;}return compact(bigInt(a).or(bigInt(b))); }
+    public static Object bitOr(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__or__","__ror__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"union");if(a instanceof Map<?,?> && b instanceof Map<?,?>){PyDict out=new PyDict((Map<?,?>)a);dictUpdate(out,b);return a instanceof PyDict fa && fa.isFrozen()?out.freeze():out;}return compact(bigInt(a).or(bigInt(b))); }
     public static Object bitXor(Object a, Object b) { if(a instanceof PyDictView || b instanceof PyDictView){Object[] ops=viewOperands(a,b);if(ops!=null){a=ops[0];b=ops[1];}} if(a instanceof PyInstance || b instanceof PyInstance){Object result=binarySpecial(a,b,"__xor__","__rxor__",false);if(result!=NOT_IMPLEMENTED)return result;}if(a instanceof Set<?> && b instanceof Set<?>)return setAlgebra(a,b,"symmetric_difference");return compact(bigInt(a).xor(bigInt(b))); }
     public static Object lshift(Object a, Object b) {
         BigInteger n = bigInt(b); if (n.signum() < 0) throw new ArithmeticException("negative shift count");
@@ -1444,8 +1448,19 @@ public final class PyRuntime {
     }
     public static Object dictFrom(Object value) { Object out=dict0(); dictUpdate(out,value); return out; }
 
+    /** dict(mapping_or_iterable, **kwargs) shared by dict and frozendict. */
+    @SuppressWarnings("unchecked")
+    static PyDict dictConstruct(List<Object> args,Map<Object,Object> kwargs){
+        if(args.size()>1) throw new PyException("TypeError","dict expected at most 1 argument, got "+args.size());
+        PyDict out=new PyDict();
+        if(args.size()==1) dictUpdate(out,args.get(0));
+        for(Map.Entry<Object,Object> e:kwargs.entrySet()) out.put(e.getKey(),e.getValue());
+        return out;
+    }
     static final Set<String> DICT_METHODS=Set.of("copy","get","keys","values","items","update","pop","popitem","setdefault","clear",
         "__contains__","__len__","__getitem__","__setitem__","__delitem__","__iter__","__reversed__","__eq__","__ne__","__or__","__ror__","__ior__");
+    static final Set<String> FROZENDICT_METHODS=Set.of("copy","get","keys","values","items","__contains__","__len__","__getitem__","__iter__",
+        "__reversed__","__eq__","__ne__","__or__","__ror__");
     static boolean setMethodKnown(String name,boolean frozen){
         return Set.of("copy","union","intersection","difference","symmetric_difference","issubset","issuperset","isdisjoint","__contains__","__len__","__iter__").contains(name)
             || !frozen && Set.of("add","remove","discard","clear","pop","update","intersection_update","difference_update","symmetric_difference_update","__ior__","__iand__","__ixor__","__isub__").contains(name);
@@ -2228,7 +2243,7 @@ public final class PyRuntime {
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
         if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
-        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
+        if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
     public static Object envGetLocal(Object envObj, Object nameObj) {
@@ -2483,13 +2498,8 @@ public final class PyRuntime {
             if(type.name.equals("memoryview") && kwargs.isEmpty() && args.size()==1)return memoryview1(args.get(0));
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
             if(Set.of("map","zip","enumerate","filter").contains(type.name)) return callBuiltin(type.name,args,kwargs);
-            if(type.name.equals("dict")) {
-                if(args.size()>1) throw new PyException("TypeError","dict expected at most 1 argument, got "+args.size());
-                Object out=dict0();
-                if(args.size()==1) dictUpdate(out,args.get(0));
-                for(Map.Entry<Object,Object> e:kwargs.entrySet()) ((Map<Object,Object>)out).put(e.getKey(),e.getValue());
-                return out;
-            }
+            if(type.name.equals("frozendict")) return dictConstruct(args,kwargs).freeze();
+            if(type.name.equals("dict")) return dictConstruct(args,kwargs);
             if(type.name.equals("slice")) {
                 if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3) throw new PyException("TypeError","slice() requires 1 to 3 positional arguments");
                 return new PySlice(args.size()==1?null:args.get(0),args.size()==1?args.get(0):args.get(1),args.size()<3?null:args.get(2));
@@ -3240,11 +3250,11 @@ public final class PyRuntime {
             if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__() requires a class");
             return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
         }
-        if(builtin.name.equals("dict") && name.equals("fromkeys")) {
+        if((builtin.name.equals("dict")||builtin.name.equals("frozendict")) && name.equals("fromkeys")) {
             if(args.length<1||args.length>2) throw new PyException("TypeError","fromkeys expected 1 or 2 arguments");
             PyDict out=new PyDict();
             for(Object key:iterable(args[0])) out.put(key,args.length==2?args[1]:null);
-            return out;
+            return builtin.name.equals("frozendict")?out.freeze():out;
         }
         if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
             requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
@@ -3431,7 +3441,7 @@ public final class PyRuntime {
             if(!name.equals("__class__"))throw new PyException("AttributeError","property has no attribute '"+name+"'");
         }
         if(obj instanceof Set<?> && setMethodKnown(name,obj instanceof PyFrozenSet))return new BuiltinBoundMethod(obj,name);
-        if(obj instanceof Map<?,?> && DICT_METHODS.contains(name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof Map<?,?> && (obj instanceof PyDict fd && fd.isFrozen() ? FROZENDICT_METHODS : DICT_METHODS).contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
@@ -3675,7 +3685,8 @@ public final class PyRuntime {
                 case "memoryview" -> obj instanceof PyMemoryView;
                 case "list" -> obj instanceof List<?>;
                 case "tuple" -> obj instanceof PyTuple;
-                case "dict" -> obj instanceof Map<?,?>;
+                case "dict" -> obj instanceof Map<?,?> && !(obj instanceof PyDict fd && fd.isFrozen());
+                case "frozendict" -> obj instanceof PyDict fd && fd.isFrozen();
                 case "set" -> obj instanceof Set<?> && !(obj instanceof PyFrozenSet);
                 case "frozenset" -> obj instanceof PyFrozenSet;
                 case "range" -> obj instanceof PyRange;

@@ -26,6 +26,14 @@ final class PyDict extends AbstractMap<Object,Object> {
     private int used;             // entries appended (including deleted)
     private int live;             // current size
     private int version;          // bumped on every key insertion/removal (not on value updates)
+    private boolean frozen;       // frozendict: immutable once built
+
+    /** Make this dict immutable (turns it into a frozendict). Returns this. */
+    PyDict freeze() { frozen = true; return this; }
+    boolean isFrozen() { return frozen; }
+    private void mutable(String what) {
+        if (frozen) throw new PyException("TypeError", "'frozendict' object does not support item " + what);
+    }
 
     PyDict() { this(8); }
     PyDict(int capacity) { alloc(Math.max(8, capacity)); }
@@ -122,6 +130,7 @@ final class PyDict extends AbstractMap<Object,Object> {
     }
 
     @Override public Object put(Object key, Object value) {
+        mutable("assignment");
         int hash = hashOf(key);
         int idx = find(key, hash);
         if (idx >= 0) { Object old = vals[idx]; vals[idx] = value; return old; }
@@ -130,6 +139,7 @@ final class PyDict extends AbstractMap<Object,Object> {
     }
 
     @Override public Object remove(Object key) {
+        mutable("deletion");
         int hash = hashOf(key);
         int idx = find(key, hash);
         if (idx < 0) return null;
@@ -145,6 +155,7 @@ final class PyDict extends AbstractMap<Object,Object> {
     }
 
     @Override public void clear() {
+        mutable("deletion");
         Arrays.fill(table, EMPTY);
         Arrays.fill(keys, 0, used, null); Arrays.fill(vals, 0, used, null);
         if (live != 0) version++;
@@ -210,6 +221,13 @@ final class PyDict extends AbstractMap<Object,Object> {
     }
 
     @Override public int hashCode() {
-        throw new PyException("TypeError", "unhashable type: 'dict'");
+        if (!frozen) throw new PyException("TypeError", "unhashable type: 'dict'");
+        long h = 0x345678L;
+        for (int n = 0; n < used; n++) {
+            if (keys[n] == DELETED) continue;
+            long pair = ((Number) PyRuntime.hash(keys[n])).longValue() * 1000003L ^ ((Number) PyRuntime.hash(vals[n])).longValue();
+            h += pair * 0x9E3779B97F4A7C15L ^ (pair >>> 29);   // commutative: order must not matter
+        }
+        return (int) (h ^ (h >>> 32));
     }
 }

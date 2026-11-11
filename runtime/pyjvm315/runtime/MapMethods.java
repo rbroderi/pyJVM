@@ -22,9 +22,14 @@ import java.util.Set;
 
 /** Method-call slot for Map<?,?> receivers (split out of PyRuntime.callMethod). */
 final class MapMethods {
+    static final java.util.Set<String> FROZEN_ALLOWED=PyRuntime.FROZENDICT_METHODS;
     static Object call(Object obj, String name, Object[] args) {
         Map<?,?> raw=(Map<?,?>)obj;
         @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)raw;
+        if(map instanceof PyDict fd && fd.isFrozen()) {
+            if(!FROZEN_ALLOWED.contains(name)) throw new PyException("AttributeError","'frozendict' object has no attribute '"+name+"'");
+            if(name.equals("copy")) { requireArgs(name,args,0); return map; }
+        }
         return switch(name) {
             case "copy" -> { requireArgs(name,args,0); yield new PyDict(map); }
             case "get" -> { if(args.length<1||args.length>2) throw new PyException("TypeError","get expected 1 or 2 arguments"); yield map.getOrDefault(args[0],args.length==2?args[1]:null); }
