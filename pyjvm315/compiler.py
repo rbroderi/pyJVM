@@ -52,7 +52,7 @@ EXCEPTION_TYPES = {
     "FileExistsError", "BrokenPipeError", "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError",
 }
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
-NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal", "itertools", "_collections"}
+NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
@@ -2665,13 +2665,18 @@ class Compiler:
                             self._store_name(alias.asname or alias.name, b, scope)
                         return True
                     if resolved in NATIVE_MODULES and not level:
-                        if any(alias.name == '*' for alias in names):
-                            raise CompileError(f"star import from native module {resolved!r} is not implemented")
+                        has_star = any(alias.name == '*' for alias in names)
+                        if has_star and not (self.dynamic and scope.module):
+                            raise CompileError(f"star import from native module {resolved!r} is only supported in exec'd or imported-at-run-time code")
                         b.ldc_string(resolved); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
                         module_slot = scope.temp(); b.astore(module_slot)
                         for alias in names:
+                            if alias.name == '*':
+                                b.aload(module_slot); self._emit_namespace_call("locals", b, scope)
+                                b.invokestatic(IMPORT_SUPPORT, "importStar", f"({OBJ}{OBJ}){OBJ}"); b.pop()
+                                continue
                             b.aload(module_slot); b.ldc_string(alias.name)
-                            b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
+                            b.invokestatic(IMPORT_SUPPORT, "importFrom", f"({OBJ}{OBJ}){OBJ}")
                             self._store_name(alias.asname or alias.name, b, scope)
                         return True
                     jvm_name = self.import_map.get(resolved)

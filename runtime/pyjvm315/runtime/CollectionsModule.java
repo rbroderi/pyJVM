@@ -70,6 +70,11 @@ public final class CollectionsModule {
         PyRuntime.classAddProperty(dequeClass, "maxlen", c.getName(), "dqMaxlen", null);
         finish(dequeClass);
         m.attrs.put("deque", dequeClass);
+        for (String name : new String[]{"_deque_iterator", "_deque_reverse_iterator"}) {
+            PyClass iterClass = define("_collections", name, null);
+            finish(iterClass);
+            m.attrs.put(name, iterClass);
+        }
 
         return finishDefaultdict(m, c);
     }
