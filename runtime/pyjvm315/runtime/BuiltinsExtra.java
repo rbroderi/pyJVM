@@ -311,6 +311,7 @@ public final class BuiltinsExtra {
 
     static Object newExceptionCall(String type, List<Object> args, Map<Object,Object> kwargs) {
         if (!kwargs.isEmpty()) {
+            if (isGroupType(type) && args.size() != 2) return newGroup(type, args);
             if (Set.of("ImportError", "ModuleNotFoundError", "SyntaxError", "IndentationError", "TabError", "OSError", "StopIteration").contains(type))
                 throw new PyException("TypeError", type + "() keyword arguments are not supported by this runtime");
             throw new PyException("TypeError", type + "() takes no keyword arguments");
@@ -338,8 +339,8 @@ public final class BuiltinsExtra {
         boolean sequence = excs instanceof List<?> || excs instanceof PyTuple || excs instanceof String || excs instanceof PyRange
             || excs instanceof PyBytes || excs instanceof PyByteArray || excs instanceof PyInstance i && i.cls.lookupMethod("__getitem__") != null;
         if (!sequence) throw new PyException("TypeError", "second argument (exceptions) must be a sequence");
-        PyTuple items = new PyTuple();
-        for (Object item : iterable(excs)) items.items.add(item);
+        PyTuple items = excs instanceof PyTuple given ? given : new PyTuple();
+        if (items != excs) for (Object item : iterable(excs)) items.items.add(item);
         if (items.items.isEmpty()) throw new PyException("ValueError", "second argument (exceptions) must be a non-empty sequence");
         for (int i = 0; i < items.items.size(); i++)
             if (!isExceptionObject(items.items.get(i)))
@@ -365,7 +366,7 @@ public final class BuiltinsExtra {
         if (!(args[0] instanceof String)) throw new PyException("TypeError", "BaseExceptionGroup.__new__() argument 1 must be str, not " + typeName(args[0]));
         PyTuple items = validatedGroupItems(args[1]);
         if (instance.cls.exceptionBase.equals("ExceptionGroup"))
-            for (Object item : items.items) if (!isPlainException(item)) throw new PyException("TypeError", "Cannot nest BaseExceptions in an ExceptionGroup");
+            for (Object item : items.items) if (!isPlainException(item)) throw new PyException("TypeError", "Cannot nest BaseExceptions in '" + instance.cls.name + "'");
         instance.fields.put("message", args[0]);
         instance.fields.put("exceptions", items);
     }
@@ -391,7 +392,7 @@ public final class BuiltinsExtra {
         List<Object> shown = new ArrayList<>();
         if (value instanceof PyExcArgs a) {
             shown.addAll(a.args.items);
-            if (a.group != null && !(shown.get(1) instanceof List<?>)) shown.set(1, new ArrayList<Object>(a.group.items));
+            if (a.group != null && shown.get(1) instanceof List<?>) shown.set(1, new ArrayList<Object>(a.group.items));
         } else if (value != null) {
             shown.add(value);
         }

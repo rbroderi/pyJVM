@@ -2791,19 +2791,20 @@ public final class PyRuntime {
 
     // ---------- Exceptions ----------
     public static Object makeException(Object typeObj, Object value) {
+        if (value == null && BuiltinsExtra.isGroupType((String)typeObj)) return BuiltinsExtra.newException((String)typeObj, new ArrayList<Object>());
         return new PyExceptionValue((String)typeObj, value);
     }
 
     /** A PyException for a user-defined exception class or instance, or null when {@code value} is neither. */
     static PyException userException(Object value) {
         if(value instanceof PyClass cls && cls.exceptionBase!=null) value=instantiate(cls,new Object[0]);
-        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return new PyException(inst.cls.name,inst);
+        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return ExceptionGroupSupport.throwableFor(inst);
         return null;
     }
     public static void raiseObject(Object value) {
         PyException user=userException(value);
         if(user!=null) throw user;
-        if (value instanceof PyExceptionValue e) { PyException again = new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback); again.syntax = e.syntax; throw again; }
+        if (value instanceof PyExceptionValue e) throw ExceptionGroupSupport.throwableFor(e);
         if (value instanceof PyException e) throw e;
         if (value instanceof PyBuiltinType t && exceptionIsSubclass(t.name,"BaseException")) throw new PyException(t.name,null);
         throw new PyException("TypeError", "exceptions must derive from BaseException");
@@ -2815,29 +2816,39 @@ public final class PyRuntime {
         throw new PyException("RuntimeError", "no active exception to reraise");
     }
     public static void raiseObjectWithContext(Object value, Object contextObj) {
+        if(value instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) value=new PyExceptionValue(bt.name,null);
         PyException raised=userException(value);
         if (raised!=null) {}
-        else if (value instanceof PyExceptionValue e) { raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback); raised.syntax=e.syntax; }
+        else if (value instanceof PyExceptionValue e) raised=ExceptionGroupSupport.throwableFor(e);
         else if (value instanceof PyException e) raised=e;
         else throw new PyException("TypeError", "exceptions must derive from BaseException");
         if(!raised.suppressContext && contextObj instanceof Throwable t) {
-            raised.context=exceptionInstance(t);
+            Object handled=exceptionInstance(t);
+            if(handled!=raised.instance && handled!=raised.value) {
+                raised.context=handled;
+                if(raised.instance!=null) ExceptionGroupSupport.setContext(raised.instance,handled);
+            }
         }
         throw raised;
     }
     public static void raiseObjectFrom(Object value, Object causeObj) {
+        if(value instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) value=new PyExceptionValue(bt.name,null);
         PyException raised=userException(value);
         if(raised!=null) {}
-        else if(value instanceof PyExceptionValue e) { raised=new PyException(e.typeName,e.value); raised.syntax=e.syntax; }
+        else if(value instanceof PyExceptionValue e) raised=ExceptionGroupSupport.throwableFor(e);
         else if(value instanceof PyException e) raised=e;
         else throw new PyException("TypeError","exceptions must derive from BaseException");
-        if(causeObj == null) { raised.cause=null; raised.suppressContext=true; throw raised; }
-        if(causeObj instanceof PyExceptionValue e) raised.cause=e;
-        else if(causeObj instanceof PyException e) raised.cause=exceptionInstance(e);
-        else if(causeObj instanceof PyInstance ci && ci.cls.exceptionBase!=null) raised.cause=ci;
+        Object cause;
+        if(causeObj == null) cause=null;
+        else if(causeObj instanceof PyExceptionValue e) cause=e;
+        else if(causeObj instanceof PyException e) cause=exceptionInstance(e);
+        else if(causeObj instanceof PyInstance ci && ci.cls.exceptionBase!=null) cause=ci;
+        else if(causeObj instanceof PyClass cc && cc.exceptionBase!=null) cause=instantiate(cc,new Object[0]);
+        else if(causeObj instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) cause=new PyExceptionValue(bt.name,null);
         else throw new PyException("TypeError","exception causes must derive from BaseException");
-        raised.suppressContext=true;
-        if(raised.value instanceof PyInstance user) user.fields.put("__cause__",raised.cause);
+        raised.cause=cause; raised.suppressContext=true;
+        Object target=raised.value instanceof PyInstance ? raised.value : raised.instance;
+        if(target!=null){ ExceptionGroupSupport.setCause(target,cause); ExceptionGroupSupport.setSuppress(target,true); }
         throw raised;
     }
 
@@ -2894,9 +2905,8 @@ public final class PyRuntime {
     }
     public static Object exceptionInstance(Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        if (t instanceof PyException p && p.value instanceof PyInstance user && user.cls.exceptionBase!=null) return user;
-        if (t instanceof PyException p) { PyExceptionValue v = new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext,p.traceback); v.syntax = p.syntax; return v; }
-        return new PyExceptionValue(pythonExceptionType(t), exceptionValue(t));
+        if (t instanceof PyException p) return ExceptionGroupSupport.instanceFor(p);
+        return ExceptionGroupSupport.instanceForForeign(t);
     }
 
     static String pythonExceptionType(Throwable t) {
@@ -2928,6 +2938,7 @@ public final class PyRuntime {
         if(base instanceof PyBuiltinType sealed && sealed.name.equals("sentinel")) throw new PyException("TypeError","type 'sentinel' is not an acceptable base type");
         if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
+            else if(target.exceptionBase.equals("BaseExceptionGroup") && exceptionIsSubclass(exc.name,"Exception")){ target.exceptionBase="ExceptionGroup"; target.builtinBaseName="ExceptionGroup"; EXCEPTION_PARENTS.put(target.name,"ExceptionGroup"); }
             return;
         }
         if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super"))) {
@@ -3273,7 +3284,7 @@ public final class PyRuntime {
         if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
-        if(exceptionIsSubclass(type,"BaseException") && name.equals("__init__"))return true;
+        if(exceptionIsSubclass(type,"BaseException") && (name.equals("__init__") || name.equals("__new__")))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
             case "str" -> name.equals("__mod__");
@@ -3327,6 +3338,7 @@ public final class PyRuntime {
             if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
+        if(newMethod!=null && cls.exceptionBase!=null && created instanceof PyInstance made && made.cls.exceptionBase!=null && cls.lookupMethod("__init__")==null) ExceptionGroupSupport.setArgsField(made,args);
         // __init__ is called only when __new__ produced an instance of cls or a
         // subclass, matching Python's constructor protocol.
         if(created instanceof PyInstance instance && instance.cls.mro.contains(cls)) {
@@ -3461,6 +3473,7 @@ public final class PyRuntime {
             return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
         }
         if(builtin.name.equals("int") && name.equals("from_bytes")) return IntMethods.fromBytes(args);
+        if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__new__")) return ExceptionGroupSupport.exceptionNew(builtin,args);
         if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__init__")) {   // BaseException.__init__(self, *args)
             if(args.length<1 || !(args[0] instanceof PyInstance self)) throw new PyException("TypeError","descriptor '__init__' requires an exception instance");
             PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args).subList(1,args.length)); self.fields.put("args",t);
@@ -3694,10 +3707,7 @@ public final class PyRuntime {
             if (name.equals("args")) return BuiltinsExtra.exceptionArgs(exc.value);
             Object groupAttr=BuiltinsExtra.groupAttribute(exc,name); if(groupAttr!=MISSING) return groupAttr;
             if (name.equals("value") && exc.typeName.equals("StopIteration")) return exc.value;
-            if (name.equals("__cause__")) return exc.cause;
-            if (name.equals("__context__")) return exc.context;
-            if (name.equals("__suppress_context__")) return exc.suppressContext;
-            if (name.equals("__traceback__")) return exc.traceback;
+            Object special=ExceptionGroupSupport.getattr(exc,name); if(special!=MISSING) return special;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
         }
         if(obj instanceof PyMemoryView view) {
@@ -3804,6 +3814,7 @@ public final class PyRuntime {
             PyMethod method=instance.cls.lookupMethod(name);
             if (method != null) return new BoundMethod(instance, name);
             if(instance.payload!=null){Object nativeValue=NativeSubclassMethods.instanceAttribute(instance,name);if(nativeValue!=MISSING)return nativeValue;}
+            if(instance.cls.exceptionBase!=null){Object special=ExceptionGroupSupport.getattr(instance,name);if(special!=MISSING)return special;}
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
@@ -3843,6 +3854,8 @@ public final class PyRuntime {
         }
         if(obj instanceof PyManagedProperty)throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
+        if(obj instanceof PyExceptionValue || obj instanceof PyInstance excInstance && excInstance.cls.exceptionBase!=null && excInstance.cls.lookupAttr(name)==MISSING && excInstance.cls.lookupProperty(name)==null)
+            if(ExceptionGroupSupport.setattr(obj,name,value)) return;
         if (obj instanceof PyInstance instance) {
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) {
@@ -3874,6 +3887,8 @@ public final class PyRuntime {
     }
     public static void delattr(Object obj,Object nameObj) {
         if(obj instanceof TypeParamsObject tp){tp.delattr((String)nameObj);return;}
+        if(nameObj instanceof String excName && (obj instanceof PyExceptionValue || obj instanceof PyInstance excInst && excInst.cls.exceptionBase!=null && excName.startsWith("__"))
+            && ExceptionGroupSupport.delattr(obj,excName)) return;
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
         if(obj instanceof PyCell cell && nameObj.equals("cell_contents")){cell.set(UNBOUND);return;}

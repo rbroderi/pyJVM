@@ -43,6 +43,7 @@ final class TypeSlots {
         add(Map.class, MapMethods::call);
         add(Set.class, SetMethods::call);
         add(PyInstance.class, PyInstanceMethods::call);
+        add(PyExceptionValue.class, ExceptionGroupSupport::invokeMethod);
         add(TypeParamsObject.class, (self, name, args) -> ((TypeParamsObject) self).callMethod(name, args));
     }
 
