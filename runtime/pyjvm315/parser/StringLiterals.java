@@ -33,7 +33,7 @@ final class StringLiterals {
                 case 'u' -> { out.append((char) hex(body, i + 1, 4, pos, "\\uXXXX")); i += 4; }
                 case 'U' -> {
                     int v = hex(body, i + 1, 8, pos, "\\UXXXXXXXX"); i += 8;
-                    if (v > 0x10FFFF) throw pos.error("(unicode error) 'unicodeescape' codec can't decode bytes: illegal Unicode character");
+                    if (v < 0 || v > 0x10FFFF) throw pos.error("(unicode error) 'unicodeescape' codec can't decode bytes: illegal Unicode character");
                     out.appendCodePoint(v);
                 }
                 case 'N' -> {
