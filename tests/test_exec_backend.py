@@ -54,7 +54,7 @@ def test_implicit_namespace_without_backend_is_explicit(runtime_dir):
 
 
 def test_unsupported_source_reports_the_compiler_reason(runtime_dir):
-    r = run_jvm(runtime_dir, "try:\n    exec('from posix import *', {})\nexcept NotImplementedError as e:\n    print('NIE')\n", backend=True)
+    r = run_jvm(runtime_dir, "try:\n    exec('x = (yield)', {})\nexcept NotImplementedError as e:\n    print('NIE')\n", backend=True)
     assert r.stdout.strip() == "NIE", r.stderr
 
 
