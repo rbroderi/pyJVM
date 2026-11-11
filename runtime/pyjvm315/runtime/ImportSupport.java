@@ -390,7 +390,7 @@ public final class ImportSupport {
         sys.attrs.put("builtin_module_names", tupleOf(new ArrayList<Object>(builtin)));
         LinkedHashMap<String,Object> flags = new LinkedHashMap<>();
         for (String f : new String[]{"debug", "inspect", "interactive", "optimize", "dont_write_bytecode", "no_user_site", "no_site",
-                "ignore_environment", "verbose", "bytes_warning", "quiet", "hash_randomization", "isolated", "dev_mode", "safe_path", "int_max_str_digits"})
+                "ignore_environment", "verbose", "bytes_warning", "quiet", "hash_randomization", "isolated", "dev_mode", "safe_path", "int_max_str_digits", "warn_default_encoding", "gil", "thread_inherit_context", "context_aware_warnings"})
             flags.put(f, f.equals("dont_write_bytecode") ? 1L : f.equals("int_max_str_digits") ? 4300L : 0L);
         sys.attrs.put("flags", namespaceObject("flags", flags));
         LinkedHashMap<String,Object> impl = new LinkedHashMap<>();
@@ -399,6 +399,9 @@ public final class ImportSupport {
         impl.put("hexversion", ((long) LangVersion.MAJOR << 24) | ((long) LangVersion.MINOR << 16) | 0xf0L);
         sys.attrs.put("implementation", namespaceObject("implementation", impl));
         fn(sys, "audit", (a, k) -> null);
+        fn(sys, "getfilesystemencoding", (a, k) -> "utf-8");
+        fn(sys, "getfilesystemencodeerrors", (a, k) -> "surrogateescape");
+        if (!sys.attrs.containsKey("getdefaultencoding")) fn(sys, "getdefaultencoding", (a, k) -> "utf-8");
         fn(sys, "intern", (a, k) -> a.get(0));
         sys.lazyAttrs = attr -> {
             if (!bootstrapped && !bootstrapping && stdlibDir() != null && (attr.equals("meta_path") || attr.equals("path_hooks") || attr.equals("path_importer_cache"))) {

@@ -47,6 +47,7 @@ public final class PosixModule {
         for (Map.Entry<String,String> e : System.getenv().entrySet())
             env.put(new PyBytes(e.getKey().getBytes(StandardCharsets.UTF_8)), new PyBytes(e.getValue().getBytes(StandardCharsets.UTF_8)));
         m.attrs.put("environ", env);
+        PosixFiles.install(m);
         return m;
     }
 

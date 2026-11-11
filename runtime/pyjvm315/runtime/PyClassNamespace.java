@@ -23,5 +23,7 @@ import java.util.Set;
 
 final class PyClassNamespace extends LinkedHashMap<Object,Object> {
     final PyClass prebuilt;
+    /** The object returned by the metaclass's __prepare__ when it is an instance of a dict subclass; the class body writes through it. */
+    PyInstance prepared;
     PyClassNamespace(PyClass prebuilt){this.prebuilt=prebuilt;}
 }

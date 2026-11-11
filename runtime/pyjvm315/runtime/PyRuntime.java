@@ -3033,7 +3033,9 @@ public final class PyRuntime {
                 ArrayList<Object> args=new ArrayList<>();
                 args.add(cls.name); args.add(explicitBasesTuple(cls));
                 Object prepared=invokeOnClassKw(meta,prepare,args,kwargs);
-                if(!(prepared instanceof Map<?,?> map))
+                if(prepared instanceof PyInstance wrapper && wrapper.payload instanceof Map<?,?>) namespace.prepared=wrapper;
+                Object mapping=namespace.prepared!=null?namespace.prepared.payload:prepared;
+                if(!(mapping instanceof Map<?,?> map))
                     throw new PyException("TypeError","__prepare__() must return a mapping");
                 namespace.clear();
                 for(var e:map.entrySet()) namespace.put(e.getKey(),e.getValue());
@@ -3044,11 +3046,19 @@ public final class PyRuntime {
         return namespace;
     }
 
+    /** After a write through a prepared dict-subclass namespace, the plain map the compiler reads from mirrors its payload. */
+    private static void mirrorPrepared(PyClassNamespace pn){
+        Map<?,?> source=(Map<?,?>)pn.prepared.payload;
+        LinkedHashMap<Object,Object> copy=new LinkedHashMap<>(source);
+        pn.clear();pn.putAll(copy);
+    }
     public static void classNamespacePut(Object namespace,Object name,Object value) {
         @SuppressWarnings("unchecked") Map<Object,Object> map=(Map<Object,Object>)namespace;
+        if(map instanceof PyClassNamespace pn && pn.prepared!=null){setitem(pn.prepared,name,value);mirrorPrepared(pn);return;}
         map.put(name,value);
     }
     public static void classNamespaceDelete(Object namespace,Object name) {
+        if(namespace instanceof PyClassNamespace pn && pn.prepared!=null){callMethod(pn.prepared,"__delitem__",new Object[]{name});mirrorPrepared(pn);return;}
         Map<?,?> values=(Map<?,?>)namespace;
         if(!values.containsKey(name)) throw new PyException("NameError", "name '"+name+"' is not defined");
         values.remove(name);
@@ -3086,7 +3096,7 @@ public final class PyRuntime {
             PyMethod newMethod=meta.lookupMethod("__new__");
             if(newMethod!=null) {
                 ArrayList<Object> args=new ArrayList<>();
-                args.add(meta); args.add(prebuilt.name); args.add(explicitBasesTuple(prebuilt)); args.add(namespaceObj);
+                args.add(meta); args.add(prebuilt.name); args.add(explicitBasesTuple(prebuilt)); args.add(namespaceObj instanceof PyClassNamespace pn && pn.prepared!=null?pn.prepared:namespaceObj);
                 created=invokeOnClassKw(meta,newMethod,args,kwargs);
             }
         }
@@ -3103,7 +3113,7 @@ public final class PyRuntime {
                 PyMethod init=meta.lookupMethod("__init__");
                 if(init!=null) {
                     ArrayList<Object> initArgs=new ArrayList<>();
-                    initArgs.add(cls.name); initArgs.add(explicitBasesTuple(cls)); initArgs.add(namespaceObj);
+                    initArgs.add(cls.name); initArgs.add(explicitBasesTuple(cls)); initArgs.add(namespaceObj instanceof PyClassNamespace pn && pn.prepared!=null?pn.prepared:namespaceObj);
                     Object result=invokeMetaclassInstance(init,cls,initArgs,kwargs);
                     if(result!=null) throw new PyException("TypeError","metaclass __init__() should return None");
                 }
