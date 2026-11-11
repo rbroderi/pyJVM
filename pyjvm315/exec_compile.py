@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compile-service entry point used by the JVM runtime for exec()/eval()/compile().
 
 The runtime launches ``python -I -c <boot> <home> <mode> <filename>``, writes the source to stdin

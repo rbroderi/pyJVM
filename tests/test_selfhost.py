@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Bootstrap gate (roadmap P1-07): the compiler, compiled by itself on the JVM, reproduces the host-built class files.
 
 Stage 1 builds the JVM compiler with the host-run compiler; stage 2 runs it on the JVM to compile its own source

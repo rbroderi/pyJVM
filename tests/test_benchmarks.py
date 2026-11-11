@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Validate the harness's correctness and regression guard, not speed on CI."""
 import copy
 import importlib.util

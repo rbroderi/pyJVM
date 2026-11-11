@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """File-system driver: compile whole source trees to class files. Host-only (uses pathlib); the
 compiler core in compiler.py has no file or stdlib dependencies so that it can compile itself."""
 from __future__ import annotations

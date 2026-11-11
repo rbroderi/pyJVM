@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """exec/eval/compile failure modes that have no CPython counterpart (explicit, never silent)."""
 from __future__ import annotations
 

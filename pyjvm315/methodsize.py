@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Method-size lint for compiled JVM class files.
 
 HotSpot refuses to JIT-compile methods whose bytecode exceeds 8,000 bytes

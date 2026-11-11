@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Python version policy. Self-hostable: only ``sys`` is needed (host-only helpers live in hostver.py).
 
 The compiler runs on, and parses source with, the *host* interpreter's ``ast``. Supported host range is

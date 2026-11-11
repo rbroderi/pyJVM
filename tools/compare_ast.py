@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compare pyjvm315.parser.Parser with CPython's ast.parse over a source tree (roadmap P1-05 acceptance)."""
 from __future__ import annotations
 

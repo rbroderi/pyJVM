@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """AST helpers that need nothing but the ast module (usable when the compiler compiles itself)."""
 from __future__ import annotations
 

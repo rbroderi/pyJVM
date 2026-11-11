@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Verifier dataflow for the instruction subset emitted by this backend.
 
 Frames describe JVM verification types, not inferred Python value types. New

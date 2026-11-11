@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Self-hosting build (roadmap P1-07/P1-08).
 
 Stage 1: the host-run compiler compiles the compiler's own core (package `pyjvm315` minus host-only modules)

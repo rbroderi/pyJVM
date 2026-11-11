@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.31.0"
 description = "Experimental Python (3.13+) AST to JVM classfile transpiler"
 requires-python = ">=3.13"
 readme = "README.md"
-license = {text = "BSD-3-Clause"}
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES"]
 authors = [{name = "OpenAI"}]
 dependencies = []
 

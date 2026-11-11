@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Move nested classes of PyRuntime into package-level files (P0-01).
 
 Usage: python tools/extract_nested.py Name [Name...]

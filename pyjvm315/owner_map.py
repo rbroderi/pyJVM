@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Tag each unsupported-probe reason with the file/pass and roadmap ticket that owns it.
 
 Rules are ordered; first match wins. The lead uses ``--owner-map`` to assign tickets.

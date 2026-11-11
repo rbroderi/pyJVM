@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Split a giant `match` dispatcher method into chunk methods (JVM methods are limited to 64KB of bytecode).
 
 usage: python tools/split_match.py <file> <class> <method> <arms-per-chunk>

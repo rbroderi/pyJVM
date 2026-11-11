@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Lower annotated assignments (PEP 526) to plain statements, recording module/class annotations.
 
 ``x: T = v`` becomes ``x = v`` plus ``__annotations__['x'] = T`` at module and class level (T is stored as

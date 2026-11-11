@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Host-only version helpers (regex, subprocess): reference-interpreter detection and conformance gates."""
 from __future__ import annotations
 

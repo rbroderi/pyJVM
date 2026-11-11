@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compare pyjvm315.parser.Tokenizer with CPython's tokenize over a source tree (roadmap P1-04 acceptance)."""
 from __future__ import annotations
 

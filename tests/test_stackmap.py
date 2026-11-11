@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Verify frame analysis, encoding boundaries, and actual strict JVM loading."""
 import shutil
 import re

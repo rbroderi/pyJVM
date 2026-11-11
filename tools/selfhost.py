@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Self-hosting build (roadmap P1-07): see pyjvm315/selfhost.py.
 
 usage: python tools/selfhost.py stage1 <workdir>     build the JVM compiler with the host compiler

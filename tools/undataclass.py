@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Rewrite @dataclass classes as plain classes with explicit __init__ (self-hosting needs no `dataclasses`)."""
 from __future__ import annotations
 

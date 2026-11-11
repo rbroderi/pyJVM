@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Execute selected unchanged CPython test bodies with explicit supported fixtures.
 
 Unlike regression_probe, this lane uses no placeholder imports or bindings and

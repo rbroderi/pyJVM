@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 from pathlib import Path
 
 from pyjvm315.regression_probe import normalize_reason, probe_files

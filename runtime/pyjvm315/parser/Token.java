@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception
 package pyjvm315.parser;
 
 /** A token with CPython tokenize-compatible type names and (line, column) positions (1-based lines, 0-based columns). */

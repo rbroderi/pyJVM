@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The Java tokenizer/parser must agree with CPython's tokenize and ast on real code (roadmap P1-04/P1-05)."""
 from __future__ import annotations
 
