@@ -8,6 +8,7 @@ from .classfile import DEFAULT_TARGET, ClassFile, CodeBuilder, Field, Method
 from .versions import feature_version, deferred_annotations
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
 from .annot import lower_annotations, ANNOTATION_MARKERS, CLASSDICT_INTRINSIC
+from .typeparams import lower_type_params, TP_PREFIX, HELPERS as TYPEPARAM_HELPERS
 
 
 def _preserve_codegen_state(compile_method):
@@ -58,7 +59,7 @@ BUILTIN_FUNCTIONS = {
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
     "aiter", "anext", "exec", "eval", "compile", "divmod", "ascii", "breakpoint", "input", "__import__",
     "__pyjvm_annotate__", "__pyjvm_annotations__", "__pyjvm_class_annotate__", "__pyjvm_cond_add__", "__pyjvm_not_implemented__",
-    "__pyjvm_global__",
+    "__pyjvm_global__", *TYPEPARAM_HELPERS,
 }
 
 
@@ -221,6 +222,7 @@ class Compiler:
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
+        tree = lower_type_params(tree, self.dynamic, self.module_name)
         tree = lower_annotations(tree, deferred_annotations(), self.dynamic)
         self.dynamic_reraise = self._bare_raise_outside_handler([tree], False)
         # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
@@ -436,7 +438,7 @@ class Compiler:
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
         if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
-                    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super", "frozendict"} | EXCEPTION_TYPES:
+                    "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super", "frozendict", "sentinel"} | EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         if self.has_implicit_exec:
             b.getstatic(self.class_name, "__py_extras", OBJ); b.getstatic(self.class_name, "__py_extras", OBJ)
@@ -641,6 +643,7 @@ class Compiler:
                     for d in n.args.kw_defaults:
                         if d is not None: self.visit(d)
                     for st in n.body: self.visit(st)
+                else: self._visit_header(n)
                 # nested body is a separate scope
             def visit_AsyncFunctionDef(self, n: ast.AsyncFunctionDef) -> None:
                 if n is node:
@@ -648,8 +651,27 @@ class Compiler:
                     for d in n.args.kw_defaults:
                         if d is not None: self.visit(d)
                     for st in n.body: self.visit(st)
-            def visit_ClassDef(self, n: ast.ClassDef) -> None: return
-            def visit_Lambda(self, n: ast.Lambda) -> None: return
+                else: self._visit_header(n)
+            def _visit_header(self, n) -> None:
+                # a nested definition's decorators and defaults run in this scope (typeparams.py relies on it)
+                for d in n.decorator_list: self.visit(d)
+                for d in n.args.defaults: self.visit(d)
+                for d in n.args.kw_defaults:
+                    if d is not None: self.visit(d)
+            def visit_ClassDef(self, n: ast.ClassDef) -> None:
+                for d in n.decorator_list + n.bases: self.visit(d)
+                for k in n.keywords: self.visit(k.value)
+                self._visit_body_names(n.body)
+            def visit_Lambda(self, n: ast.Lambda) -> None:
+                for d in n.args.defaults: self.visit(d)
+                for d in n.args.kw_defaults:
+                    if d is not None: self.visit(d)
+                self._visit_body_names([n.body])
+            def _visit_body_names(self, body) -> None:
+                # a nested class or lambda body may use variables of scopes further out: this scope must carry them
+                for st in body:
+                    for x in ast.walk(st):
+                        if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load): refs.add(x.id)
         Visitor().visit(node)
         return refs
 
@@ -708,8 +730,9 @@ class Compiler:
             self._alias_global_field(node.name, function_field)
 
         new_enclosing = enclosing_locals + [local_names]
-        self._register_definitions(node.body, new_enclosing,
-                                   qualname=(qualname or node.name) + ".<locals>.")
+        inner_qualname = (qualname or node.name) + ".<locals>."
+        if node.name.startswith(TP_PREFIX): inner_qualname = qualname[:len(qualname) - len(node.name)]  # implicit type-parameter scope (typeparams.py)
+        self._register_definitions(node.body, new_enclosing, qualname=inner_qualname)
 
     def _register_definitions(self, body, enclosing_locals, *, top_level=False, qualname=""):
         for stmt in body:

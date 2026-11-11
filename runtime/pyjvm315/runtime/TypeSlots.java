@@ -41,6 +41,7 @@ final class TypeSlots {
         add(Map.class, MapMethods::call);
         add(Set.class, SetMethods::call);
         add(PyInstance.class, PyInstanceMethods::call);
+        add(TypeParamsObject.class, (self, name, args) -> ((TypeParamsObject) self).callMethod(name, args));
     }
 
     private static final ClassValue<CallMethod> CALL_METHOD = new ClassValue<>() {

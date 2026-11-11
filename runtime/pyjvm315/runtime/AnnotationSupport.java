@@ -25,6 +25,7 @@ final class AnnotationSupport {
     static boolean isHelper(String name) { return name.startsWith("__pyjvm_"); }
 
     static Object callHelper(String name, List<Object> args) {
+        if (TypeParamsSupport.isHelper(name)) return TypeParamsSupport.callHelper(name, args);
         switch (name) {
             case "__pyjvm_annotate__": return decorator(name, args, true);
             case "__pyjvm_annotations__": return decorator(name, args, false);
