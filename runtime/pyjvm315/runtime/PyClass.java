@@ -31,6 +31,8 @@ final class PyClass {
     List<PyClass> mro = List.of(this);
     PyClass metaclass = null;
     String builtinBaseName = null;
+    /** Name of the built-in exception type this class ultimately derives from (user-defined exception classes), else null. */
+    String exceptionBase = null;
     final LinkedHashSet<String> ownSlots = new LinkedHashSet<>();
     boolean slotsDeclared = false;
     boolean instanceDictAllowed = true;

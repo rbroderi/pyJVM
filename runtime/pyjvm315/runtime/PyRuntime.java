@@ -126,6 +126,8 @@ public final class PyRuntime {
         PyModule module = switch(name){
             case "ast" -> AstModule.module();
             case "_ast" -> AstModule.privateModule();
+            case "sys" -> NativeModules.sys();
+            case "jvm_io" -> NativeModules.jvmIo();
             default -> throw new PyException("ImportError","No module named '"+name+"'");
         };
         MODULE_CACHE.put(name,module);
@@ -494,6 +496,10 @@ public final class PyRuntime {
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
             m=instance.cls.lookupMethod("__repr__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}
+            if(instance.cls.exceptionBase!=null && instance.fields.get("args") instanceof PyTuple a) {
+                if(a.items.isEmpty()) return "";
+                return a.items.size()==1 ? pyStr(a.items.get(0)) : pyRepr(a);
+            }
         }
         if (value instanceof List<?> xs) return seqRepr(xs, "[", "]");
         if(value instanceof PyFrozenSet frozen)return frozen.isEmpty()?"frozenset()":"frozenset("+seqRepr(frozen,"{","}")+")";
@@ -542,6 +548,10 @@ public final class PyRuntime {
         if (value instanceof String s) return stringRepr(s);
         if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
         if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
+        if(value instanceof PyInstance exc && exc.cls.exceptionBase!=null && exc.cls.lookupMethod("__repr__")==null && exc.fields.get("args") instanceof PyTuple a) {
+            String items=seqRepr(a.items,"","");
+            return exc.cls.name+"("+(a.items.size()==1?items:items)+")";
+        }
         if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__repr__");if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}}
         return pyStr(value);
     }
@@ -2477,6 +2487,7 @@ public final class PyRuntime {
     static boolean exceptionObjectIs(Object value,String name) {
         if(value instanceof PyExceptionValue e) return exceptionIsSubclass(e.typeName,name);
         if(value instanceof PyException e) return exceptionIsSubclass(e.typeName,name);
+        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return exceptionIsSubclass(inst.cls.name,name);
         return false;
     }
     public static boolean yieldFromDone(Object resultObj) { return ((PyYieldFromResult)resultObj).done; }
@@ -2549,7 +2560,19 @@ public final class PyRuntime {
         if (callable instanceof BuiltinBoundMethod method) {
             if(!kwargs.isEmpty()) {
                 if(method.self instanceof Map<?,?> && method.name.equals("update")) return callMethodDynamic(method.self,method.name,args,kwargs);
-                throw new PyException("TypeError","method takes no keyword arguments");
+                if(method.self instanceof List<?> && method.name.equals("sort")) return callMethodDynamic(method.self,method.name,args,kwargs);
+                List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : null;
+                if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
+                Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
+                for(int i=0;i<args.size();i++) positional[i]=args.get(i);
+                for(Map.Entry<Object,Object> e:kwargs.entrySet()) {
+                    int at=params.indexOf((String)e.getKey());
+                    if(at<0) throw new PyException("TypeError",method.name+"() got an unexpected keyword argument '"+e.getKey()+"'");
+                    if(at<args.size()) throw new PyException("TypeError",method.name+"() got multiple values for argument '"+e.getKey()+"'");
+                    positional[at]=e.getValue(); highest=Math.max(highest,at+1);
+                }
+                // skipped parameters keep their defaults (None here); none of these methods has a required parameter
+                return callMethod(method.self,method.name,Arrays.copyOf(positional,highest));
             }
             return callMethod(method.self,method.name,args.toArray());
         }
@@ -2717,7 +2740,15 @@ public final class PyRuntime {
         return new PyExceptionValue((String)typeObj, value);
     }
 
+    /** A PyException for a user-defined exception class or instance, or null when {@code value} is neither. */
+    static PyException userException(Object value) {
+        if(value instanceof PyClass cls && cls.exceptionBase!=null) value=instantiate(cls,new Object[0]);
+        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return new PyException(inst.cls.name,inst);
+        return null;
+    }
     public static void raiseObject(Object value) {
+        PyException user=userException(value);
+        if(user!=null) throw user;
         if (value instanceof PyExceptionValue e) throw new PyException(e.typeName, e.value, e.cause, e.context, e.suppressContext, e.traceback);
         if (value instanceof PyException e) throw e;
         if (value instanceof PyBuiltinType t && exceptionIsSubclass(t.name,"BaseException")) throw new PyException(t.name,null);
@@ -2730,8 +2761,9 @@ public final class PyRuntime {
         throw new PyException("RuntimeError", "no active exception to reraise");
     }
     public static void raiseObjectWithContext(Object value, Object contextObj) {
-        PyException raised;
-        if (value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback);
+        PyException raised=userException(value);
+        if (raised!=null) {}
+        else if (value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value,e.cause,e.context,e.suppressContext,e.traceback);
         else if (value instanceof PyException e) raised=e;
         else throw new PyException("TypeError", "exceptions must derive from BaseException");
         if(!raised.suppressContext && contextObj instanceof Throwable t) {
@@ -2740,15 +2772,18 @@ public final class PyRuntime {
         throw raised;
     }
     public static void raiseObjectFrom(Object value, Object causeObj) {
-        PyException raised;
-        if(value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value);
+        PyException raised=userException(value);
+        if(raised!=null) {}
+        else if(value instanceof PyExceptionValue e) raised=new PyException(e.typeName,e.value);
         else if(value instanceof PyException e) raised=e;
         else throw new PyException("TypeError","exceptions must derive from BaseException");
         if(causeObj == null) { raised.cause=null; raised.suppressContext=true; throw raised; }
         if(causeObj instanceof PyExceptionValue e) raised.cause=e;
-        else if(causeObj instanceof PyException e) raised.cause=new PyExceptionValue(e.typeName,e.value);
+        else if(causeObj instanceof PyException e) raised.cause=exceptionInstance(e);
+        else if(causeObj instanceof PyInstance ci && ci.cls.exceptionBase!=null) raised.cause=ci;
         else throw new PyException("TypeError","exception causes must derive from BaseException");
         raised.suppressContext=true;
+        if(raised.value instanceof PyInstance user) user.fields.put("__cause__",raised.cause);
         throw raised;
     }
 
@@ -2759,7 +2794,7 @@ public final class PyRuntime {
         return exceptionIsSubclass(actual, requested);
     }
 
-    static final Map<String,String> EXCEPTION_PARENTS = Map.ofEntries(
+    static final Map<String,String> EXCEPTION_PARENTS = new java.util.concurrent.ConcurrentHashMap<>(Map.ofEntries(
         Map.entry("Exception","BaseException"), Map.entry("GeneratorExit","BaseException"),
         Map.entry("KeyboardInterrupt","BaseException"), Map.entry("SystemExit","BaseException"),
         Map.entry("ArithmeticError","Exception"), Map.entry("LookupError","Exception"),
@@ -2787,7 +2822,7 @@ public final class PyRuntime {
         Map.entry("ConnectionError","OSError"), Map.entry("BlockingIOError","OSError"),
         Map.entry("ChildProcessError","OSError"), Map.entry("InterruptedError","OSError"),
         Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
-        Map.entry("ProcessLookupError","OSError"));
+        Map.entry("ProcessLookupError","OSError")));
     static boolean exceptionIsSubclass(String actual, String requested) {
         if(actual.equals(requested)) return actual.equals("BaseException") || EXCEPTION_PARENTS.containsKey(actual);
         for(String parent=EXCEPTION_PARENTS.get(actual);parent!=null;parent=EXCEPTION_PARENTS.get(parent))
@@ -2803,6 +2838,7 @@ public final class PyRuntime {
     }
     public static Object exceptionInstance(Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
+        if (t instanceof PyException p && p.value instanceof PyInstance user && user.cls.exceptionBase!=null) return user;
         if (t instanceof PyException p) return new PyExceptionValue(p.typeName,p.value,p.cause,p.context,p.suppressContext,p.traceback);
         return new PyExceptionValue(pythonExceptionType(t), exceptionValue(t));
     }
@@ -2827,7 +2863,15 @@ public final class PyRuntime {
     public static Object classCreate(Object name,Object module) { return new PyClass((String)module,(String)name); }
     public static void classAddBase(Object cls, Object base) {
         PyClass target=(PyClass)cls;
-        if(base instanceof PyClass pyBase){target.bases.add(pyBase);return;}
+        if(base instanceof PyClass pyBase){
+            target.bases.add(pyBase);
+            if(pyBase.exceptionBase!=null && target.exceptionBase==null){ target.exceptionBase=pyBase.exceptionBase; EXCEPTION_PARENTS.put(target.name,pyBase.name); }
+            return;
+        }
+        if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
+            if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
+            return;
+        }
         if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super"))) {
             target.builtinBaseName=builtin.name;
             return;
@@ -3168,6 +3212,7 @@ public final class PyRuntime {
         if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
+        if(exceptionIsSubclass(type,"BaseException") && name.equals("__init__"))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
             case "str" -> name.equals("__mod__");
@@ -3218,6 +3263,7 @@ public final class PyRuntime {
             created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
         } else {
             created=typeMro(cls).contains(builtinType("super"))?new PySuper(cls):new PyInstance(cls);
+            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); }
         }
 
         // __init__ is called only when __new__ produced an instance of cls or a
@@ -3229,7 +3275,7 @@ public final class PyRuntime {
                 if(initResult!=null) throw new PyException("TypeError","__init__() should return None, not '"+typeName(initResult)+"'");
             } else if(instance instanceof PySuper sup) {
                 initializeSuper(sup,new ArrayList<>(Arrays.asList(args)),kwargs);
-            } else if(args.length!=0 || !kwargs.isEmpty()) {
+            } else if((args.length!=0 || !kwargs.isEmpty()) && cls.exceptionBase==null) {
                 throw new PyException("TypeError",cls.name+"() takes no arguments");
             }
         }
@@ -3243,6 +3289,7 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> kwargs=(Map<Object,Object>)kwargsObj;
         String name=(String)nameObj;
         if(kwargs.isEmpty()) return callMethod(obj,name,args.toArray());
+        if(obj instanceof List<?> && name.equals("sort") && args.isEmpty()) { ListMethods.sortInPlace((List<Object>)obj,kwargs); return null; }
         if(obj instanceof Map<?,?> && name.equals("update")) {
             callMethod(obj,name,args.toArray());
             for(Map.Entry<Object,Object> e:kwargs.entrySet()) ((Map<Object,Object>)obj).put(e.getKey(),e.getValue());
@@ -3251,6 +3298,17 @@ public final class PyRuntime {
         if(obj instanceof PyInstance || obj instanceof PyClass || obj instanceof PySuper) {
             Object callable=getattr(obj,name);
             return callFunction(callable,args,kwargs);
+        }
+        if(obj instanceof PyBuiltinType t && t.name.equals("int") && name.equals("from_bytes")) {
+            List<String> params=IntMethods.STATIC_PARAMS.get(name);
+            Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
+            for(int i=0;i<args.size();i++) positional[i]=args.get(i);
+            for(Map.Entry<Object,Object> e:kwargs.entrySet()) {
+                int at=params.indexOf((String)e.getKey());
+                if(at<0) throw new PyException("TypeError","from_bytes() got an unexpected keyword argument '"+e.getKey()+"'");
+                positional[at]=e.getValue(); highest=Math.max(highest,at+1);
+            }
+            return IntMethods.fromBytes(Arrays.copyOf(positional,highest));
         }
         throw new PyException("TypeError",name+"() does not accept keyword arguments");
     }
@@ -3336,6 +3394,12 @@ public final class PyRuntime {
         if(builtin.name.equals("type") && name.equals("__call__")) {
             if(args.length<1 || !(args[0] instanceof PyClass cls)) throw new PyException("TypeError","type.__call__() requires a class");
             return instantiateDefault(cls,Arrays.copyOfRange(args,1,args.length),new LinkedHashMap<Object,Object>());
+        }
+        if(builtin.name.equals("int") && name.equals("from_bytes")) return IntMethods.fromBytes(args);
+        if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__init__")) {   // BaseException.__init__(self, *args)
+            if(args.length<1 || !(args[0] instanceof PyInstance self)) throw new PyException("TypeError","descriptor '__init__' requires an exception instance");
+            PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args).subList(1,args.length)); self.fields.put("args",t);
+            return null;
         }
         if((builtin.name.equals("dict")||builtin.name.equals("frozendict")) && name.equals("fromkeys")) {
             if(args.length<1||args.length>2) throw new PyException("TypeError","fromkeys expected 1 or 2 arguments");
@@ -3481,6 +3545,8 @@ public final class PyRuntime {
     }
 
     public static Object getattr(Object obj, Object nameObj) {
+        if(obj instanceof PyBuiltinType bt && bt.name.equals("int") && "from_bytes".equals(nameObj))
+            return new NativeFunction("from_bytes",(a,k)->callMethodDynamic(obj,"from_bytes",a,k));
         if(!(nameObj instanceof String))throw new PyException("TypeError","attribute name must be string");
         String name = (String)nameObj;
         if(obj==null && name.equals("__doc__"))return "The type of the None singleton.";
@@ -3529,6 +3595,9 @@ public final class PyRuntime {
         }
         if(obj instanceof Set<?> && setMethodKnown(name,obj instanceof PyFrozenSet))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof Map<?,?> && (obj instanceof PyDict fd && fd.isFrozen() ? FROZENDICT_METHODS : DICT_METHODS).contains(name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof String && StringMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof List<?> && ListMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
+        if((obj instanceof Long || obj instanceof BigInteger || obj instanceof Boolean) && IntMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
         if(name.equals("__round__") && (isIntLike(obj) || obj instanceof Double))return new BuiltinBoundMethod(obj,name);
@@ -3756,6 +3825,7 @@ public final class PyRuntime {
         if (clsObj instanceof PyBuiltinType bt) {
             if(obj instanceof PyExceptionValue error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
             if(obj instanceof PyException error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
+            if(obj instanceof PyInstance exc && exc.cls.exceptionBase!=null) return bt.name.equals("object") || exceptionIsSubclass(exc.cls.name,bt.name);
             return switch(bt.name) {
                 case "object" -> true;
                 case "super" -> obj instanceof PySuper;

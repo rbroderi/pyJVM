@@ -16,7 +16,7 @@ from .compiler import CompileError
 from .driver import compile_file
 from .cli import build_runtime
 from .classfile import DEFAULT_TARGET, JAVA_TARGETS
-from .versions import python_below, reference_version, required_python
+from .hostver import python_below, reference_version, required_python
 
 
 @dataclass

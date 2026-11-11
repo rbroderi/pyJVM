@@ -29,6 +29,12 @@ jobs:
         env:
           PYTHONPATH: .
         run: pytest -q
+      - name: Self-hosting bootstrap gate (stage 2 byte-identical to stage 1)
+        env:
+          PYTHONPATH: .
+        run: |
+          python tools/selfhost.py stage1 build/selfhost
+          python tools/selfhost.py stage2 build/selfhost
       - name: Runtime method-size lint (HotSpot huge-method limit)
         env:
           PYTHONPATH: .

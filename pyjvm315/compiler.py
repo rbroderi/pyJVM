@@ -44,7 +44,7 @@ EXCEPTION_TYPES = {
     "BytesWarning", "ResourceWarning", "KeyboardInterrupt", "SystemExit",
 }
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
-NATIVE_MODULES = {"ast", "_ast"}
+NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
@@ -2017,6 +2017,17 @@ class Compiler:
     def _emit_comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp, b: CodeBuilder, scope: Scope) -> None:
         if any(gen.is_async for gen in node.generators):
             raise CompileError("async comprehensions are not implemented yet")
+        if scope.env_mode and any(isinstance(inner, (ast.Lambda, ast.GeneratorExp)) for inner in ast.walk(node) if inner is not node):
+            # Inline comprehensions keep their loop variables in JVM locals, which nested closures (lambdas,
+            # generator expressions) cannot capture. When the comprehension contains such a closure, build the
+            # result from a generator expression instead: it is a real scope, so captures resolve through its
+            # environment. (Other comprehensions stay inline, as in CPython, so e.g. zero-argument super() works.)
+            elt = ast.Tuple(elts=[node.key, node.value], ctx=ast.Load()) if isinstance(node, ast.DictComp) else node.elt
+            generator = ast.copy_location(ast.GeneratorExp(elt=elt, generators=node.generators), node)
+            self._expr(generator, b, scope)
+            convert = {ast.ListComp: "listFrom", ast.SetComp: "setFrom", ast.DictComp: "dictFrom"}[type(node)]
+            b.invokestatic(RUNTIME, convert, f"({OBJ}){OBJ}")
+            return
         if isinstance(node, ast.ListComp):
             b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
             kind = "list"
@@ -2197,327 +2208,381 @@ class Compiler:
     def _stmt(self, node: ast.stmt, b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         if hasattr(node, "lineno"):
             self._emit_int(node.lineno, b); b.invokestatic(RUNTIME,"setCurrentLine",f"({OBJ})V")
+        if self._stmt_part0(node, b, scope, in_function):
+            return
+        if self._stmt_part1(node, b, scope, in_function):
+            return
+        if self._stmt_part2(node, b, scope, in_function):
+            return
+        if self._stmt_part3(node, b, scope, in_function):
+            return
+
+    def _stmt_part0(self, node, b, scope, in_function):
         match node:
-            case ast.Pass():
-                return
-            case ast.Expr(value=value):
-                self._expr(value, b, scope)
-                b.pop()
-            case ast.Assign(targets=targets, value=value):
-                self._expr(value, b, scope)
-                if len(targets) == 1:
-                    self._store_target(targets[0], b, scope)
-                else:
-                    tmp = scope.temp(); b.astore(tmp)
-                    for target in targets:
-                        b.aload(tmp); self._store_target(target, b, scope)
-            case ast.Assign(targets=[ast.Subscript(value=obj, slice=key)], value=value):
-                self._expr(obj, b, scope)
-                self._expr(key, b, scope)
-                self._expr(value, b, scope)
-                b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
-            case ast.Assign(targets=[ast.Attribute(value=obj, attr=attr)], value=value):
-                self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr)); self._expr(value, b, scope)
-                b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
-            case ast.FunctionDef() | ast.AsyncFunctionDef():
-                self._emit_function_definition(node, b, scope)
-            case ast.Import(names=names):
-                for alias in names:
-                    module_name = alias.name
-                    if module_name in NATIVE_MODULES:
-                        b.ldc_string(module_name); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
-                        self._store_name(alias.asname or module_name, b, scope)
-                        continue
-                    jvm_name = self.import_map.get(module_name)
-                    if jvm_name is None:
-                        raise CompileError(f"import of module {module_name!r} is not available")
-                    b.ldc_string(module_name); b.ldc_string(jvm_name.replace('/', '.'))
-                    b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
-                    if alias.asname:
-                        self._store_name(alias.asname, b, scope)
-                    elif '.' in module_name:
-                        b.pop()
-                        top=module_name.split('.')[0]; top_jvm=self.import_map.get(top)
-                        if top_jvm is None: raise CompileError(f"package {top!r} is not available")
-                        b.ldc_string(top); b.ldc_string(top_jvm.replace('/', '.'))
-                        b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
-                        self._store_name(top, b, scope)
+                case ast.Pass():
+                    return True
+                case ast.Expr(value=value):
+                    self._expr(value, b, scope)
+                    b.pop()
+                    return True
+                case ast.Assign(targets=targets, value=value):
+                    self._expr(value, b, scope)
+                    if len(targets) == 1:
+                        self._store_target(targets[0], b, scope)
                     else:
-                        self._store_name(module_name, b, scope)
-            case ast.ImportFrom(module="__future__", level=0, names=names):
-                known = {"annotations", "generators", "nested_scopes", "division", "absolute_import", "with_statement",
-                         "print_function", "unicode_literals", "generator_stop", "barry_as_FLUFL"}
-                for alias in names:
-                    if alias.name not in known:
-                        raise CompileError(f"future feature {alias.name} is not defined")
-            case ast.ImportFrom(module=module, names=names, level=level):
-                resolved = module
-                if level:
-                    parts = self.package_name.split('.') if self.package_name else []
-                    up = level - 1
-                    if up > len(parts):
-                        raise CompileError("attempted relative import beyond top-level package")
-                    base = parts[:len(parts)-up] if up else parts
-                    if module:
-                        base += module.split('.')
-                    resolved = '.'.join(base)
-                if not resolved:
-                    raise CompileError("relative import requires a resolvable package")
-                if resolved in NATIVE_MODULES and not level:
-                    if any(alias.name == '*' for alias in names):
-                        raise CompileError(f"star import from native module {resolved!r} is not implemented")
-                    b.ldc_string(resolved); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
+                        tmp = scope.temp(); b.astore(tmp)
+                        for target in targets:
+                            b.aload(tmp); self._store_target(target, b, scope)
+                    return True
+                case ast.Assign(targets=[ast.Subscript(value=obj, slice=key)], value=value):
+                    self._expr(obj, b, scope)
+                    self._expr(key, b, scope)
+                    self._expr(value, b, scope)
+                    b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
+                    return True
+                case ast.Assign(targets=[ast.Attribute(value=obj, attr=attr)], value=value):
+                    self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr)); self._expr(value, b, scope)
+                    b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
+                    return True
+                case ast.FunctionDef() | ast.AsyncFunctionDef():
+                    self._emit_function_definition(node, b, scope)
+                    return True
+                case ast.Import(names=names):
+                    for alias in names:
+                        module_name = alias.name
+                        if module_name in NATIVE_MODULES:
+                            b.ldc_string(module_name); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
+                            self._store_name(alias.asname or module_name, b, scope)
+                            continue
+                        jvm_name = self.import_map.get(module_name)
+                        if jvm_name is None:
+                            raise CompileError(f"import of module {module_name!r} is not available")
+                        b.ldc_string(module_name); b.ldc_string(jvm_name.replace('/', '.'))
+                        b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
+                        if alias.asname:
+                            self._store_name(alias.asname, b, scope)
+                        elif '.' in module_name:
+                            b.pop()
+                            top=module_name.split('.')[0]; top_jvm=self.import_map.get(top)
+                            if top_jvm is None: raise CompileError(f"package {top!r} is not available")
+                            b.ldc_string(top); b.ldc_string(top_jvm.replace('/', '.'))
+                            b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
+                            self._store_name(top, b, scope)
+                        else:
+                            self._store_name(module_name, b, scope)
+                    return True
+                case ast.ImportFrom(module="__future__", level=0, names=names):
+                    known = {"annotations", "generators", "nested_scopes", "division", "absolute_import", "with_statement",
+                             "print_function", "unicode_literals", "generator_stop", "barry_as_FLUFL"}
+                    for alias in names:
+                        if alias.name not in known:
+                            raise CompileError(f"future feature {alias.name} is not defined")
+                    return True
+                case _:
+                    return False
+
+    def _stmt_part1(self, node, b, scope, in_function):
+        match node:
+                case ast.ImportFrom(module=module, names=names, level=level):
+                    resolved = module
+                    if level:
+                        parts = self.package_name.split('.') if self.package_name else []
+                        up = level - 1
+                        if up > len(parts):
+                            raise CompileError("attempted relative import beyond top-level package")
+                        base = parts[:len(parts)-up] if up else parts
+                        if module:
+                            base += module.split('.')
+                        resolved = '.'.join(base)
+                    if not resolved:
+                        raise CompileError("relative import requires a resolvable package")
+                    if resolved in NATIVE_MODULES and not level:
+                        if any(alias.name == '*' for alias in names):
+                            raise CompileError(f"star import from native module {resolved!r} is not implemented")
+                        b.ldc_string(resolved); b.invokestatic(RUNTIME, "importNative", f"({OBJ}){OBJ}")
+                        module_slot = scope.temp(); b.astore(module_slot)
+                        for alias in names:
+                            b.aload(module_slot); b.ldc_string(alias.name)
+                            b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
+                            self._store_name(alias.asname or alias.name, b, scope)
+                        return True
+                    jvm_name = self.import_map.get(resolved)
+                    if jvm_name is None:
+                        raise CompileError(f"import from module {resolved!r} is not available")
+                    b.ldc_string(resolved); b.ldc_string(jvm_name.replace('/', '.'))
+                    b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
                     module_slot = scope.temp(); b.astore(module_slot)
                     for alias in names:
-                        b.aload(module_slot); b.ldc_string(alias.name)
-                        b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
-                        self._store_name(alias.asname or alias.name, b, scope)
-                    return
-                jvm_name = self.import_map.get(resolved)
-                if jvm_name is None:
-                    raise CompileError(f"import from module {resolved!r} is not available")
-                b.ldc_string(resolved); b.ldc_string(jvm_name.replace('/', '.'))
-                b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
-                module_slot = scope.temp(); b.astore(module_slot)
-                for alias in names:
-                    if alias.name == '*':
-                        exports = self.import_exports.get(resolved)
-                        if exports is None:
-                            raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
-                        for export_name in exports:
-                            b.aload(module_slot); b.ldc_string(export_name)
-                            b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
-                            self._store_name(export_name, b, scope)
-                        continue
-                    submodule = resolved + '.' + alias.name
-                    sub_jvm = self.import_map.get(submodule)
-                    if sub_jvm is not None:
-                        b.ldc_string(submodule); b.ldc_string(sub_jvm.replace('/', '.'))
-                        b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
-                    else:
-                        b.aload(module_slot); b.ldc_string(alias.name)
-                        b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
-                    self._store_name(alias.asname or alias.name, b, scope)
-            case ast.ClassDef(name=name, decorator_list=decorators):
-                info = self.class_infos[id(node)]
-                decorator_slots: list[int] = []
-                for decorator in decorators:
-                    self._expr(decorator, b, scope)
-                    slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
-                b.ldc_string(name); b.ldc_string(self.module_name)
-                b.invokestatic(RUNTIME, "classCreate", f"({OBJ}{OBJ}){OBJ}")
-                class_slot = scope.temp(); b.astore(class_slot)
-                b.aload(class_slot); b.ldc_string(info.qualname)
-                b.invokestatic(RUNTIME, "classSetQualname", f"({OBJ}{OBJ})V")
-                if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
-                else: b.aconst_null()
-                b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
-                closure_slot = scope.temp(); b.astore(closure_slot)
-                b.aload(closure_slot); b.ldc_string("__class__")
-                b.invokestatic(RUNTIME, "unbound", f"(){OBJ}")
-                b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
-                for base in info.bases:
-                    b.aload(class_slot); self._expr(base, b, scope)
-                    b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
-
-                b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
-                class_kw_slot = scope.temp(); b.astore(class_kw_slot)
-                metaclass_slot = scope.temp(); b.aconst_null(); b.astore(metaclass_slot)
-                for kw_name, kw_value in (info.keywords or []):
-                    if kw_name == "metaclass":
-                        self._expr(kw_value, b, scope); b.astore(metaclass_slot)
-                    else:
-                        b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
-                        b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
-
-                b.aload(class_slot)
-                b.aload(metaclass_slot)
-                b.aload(class_kw_slot)
-                b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}{OBJ}){OBJ}")
-                namespace_slot = scope.temp(); b.astore(namespace_slot)
-                body_scope = Scope(start_slot=scope.next_slot, parent=scope,
-                                   env_mode=True, env_slot=closure_slot)
-                body_scope.free_names = scope.local_names | scope.free_names
-                body_scope.local_names, body_scope.global_decl, body_scope.nonlocal_decl = self._function_locals(node)
-                body_scope.namespace_slot = namespace_slot
-                old_class = self.current_class
-                self.current_class = info
-                saved_control = self.loop_stack, self.cleanup_stack, self.finally_stack
-                self.loop_stack, self.cleanup_stack, self.finally_stack = [], [], []
-                b.ldc_string(name); b.ldc_string(self.filename); self._emit_int(node.lineno, b)
-                b.invokestatic(RUNTIME, "pushLogicalFrame", f"({OBJ * 3})V")
-                b.aload(namespace_slot); b.invokestatic(RUNTIME, "frameSetNamespace", f"({OBJ})V")
-                body_start, body_end, body_handler, body_done = b.label(), b.label(), b.label(), b.label()
-                body_exception = body_scope.temp()
-                b.mark(body_start); b.emit(0x00)  # non-empty protected range for literal-only suites
-                try:
-                    for item in node.body:
-                        if item is node.body[0] and isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
-                            self._expr(item.value, b, body_scope)
-                            self._store_name("__doc__", b, body_scope)
-                        elif not (isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant)):
-                            self._stmt(item, b, body_scope, in_function=False)
-                finally:
-                    self.current_class = old_class
-                    self.loop_stack, self.cleanup_stack, self.finally_stack = saved_control
-                b.mark(body_end)
-                b.invokestatic(RUNTIME, "popLogicalFrame", "()V"); b.goto(body_done)
-                b.mark(body_handler); b.astore(body_exception)
-                b.aload(body_exception); b.invokestatic(RUNTIME, "tracebackAddCurrentFrame", f"({OBJ})V")
-                b.invokestatic(RUNTIME, "popLogicalFrame", "()V")
-                b.aload(body_exception); b.athrow()
-                b.add_exception_handler(body_start, body_end, body_handler, "java/lang/Throwable")
-                b.mark(body_done)
-                scope.next_slot = max(scope.next_slot, body_scope.next_slot)
-
-                # Publish only an actual implicit class cell, after suite execution.
-                # Nested class cells belong to their own class construction.
-                needs_cell = self._class_needs_cell(node)
-                if needs_cell:
-                    b.aload(namespace_slot); b.aload(closure_slot)
-                    b.invokestatic(RUNTIME, "classPublishCell", f"({OBJ * 2})V")
-                b.aload(class_slot)
-                b.aload(metaclass_slot)
-                b.aload(namespace_slot); b.aload(class_kw_slot)
-                b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
-                b.astore(class_slot)
-                b.aload(closure_slot); b.aload(class_slot); self._boxed_bool(needs_cell, b)
-                b.invokestatic(RUNTIME, "classValidateCell", f"({OBJ * 3})V")
-                for decorator_slot in reversed(decorator_slots):
-                    b.aload(decorator_slot)
-                    b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
-                    b.dup(); b.aload(class_slot); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
-                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
-                    b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
-                    b.astore(class_slot)
-                b.aload(class_slot)
-                if info.local or self.dynamic: self._store_name(name, b, scope)
-                else: b.putstatic(self.class_name, info.class_field, OBJ)
-            case ast.AnnAssign(target=ast.Name(id=name), value=value):
-                if value is None:
-                    raise CompileError("annotation-only assignments are not implemented yet")
-                self._expr(value, b, scope)
-                self._store_name(name, b, scope)
-            case ast.AugAssign(target=ast.Name(id=name), op=op, value=value):
-                self._load_name(name, b, scope)
-                self._expr(value, b, scope)
-                self._binary_runtime(op, b, inplace=True)
-                self._store_name(name, b, scope)
-            case ast.AugAssign(target=ast.Attribute(value=obj, attr=attr), op=op, value=value):
-                obj_slot, result_slot = scope.temp(), scope.temp()
-                self._expr(obj, b, scope); b.astore(obj_slot)
-                b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
-                self._expr(value, b, scope); self._binary_runtime(op, b, inplace=True); b.astore(result_slot)
-                b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.aload(result_slot)
-                b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
-            case ast.AugAssign(target=ast.Subscript(value=obj, slice=key), op=op, value=value):
-                obj_slot, key_slot, result_slot = scope.temp(), scope.temp(), scope.temp()
-                self._expr(obj, b, scope); b.astore(obj_slot)
-                self._expr(key, b, scope); b.astore(key_slot)
-                b.aload(obj_slot); b.aload(key_slot); b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
-                self._expr(value, b, scope); self._binary_runtime(op, b, inplace=True); b.astore(result_slot)
-                b.aload(obj_slot); b.aload(key_slot); b.aload(result_slot)
-                b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
-            case ast.Global(names=names):
-                scope.global_decl.update(names)
-            case ast.Nonlocal(names=names):
-                scope.nonlocal_decl.update(names)
-            case ast.Return(value=value):
-                if not in_function: raise CompileError("return outside function")
-                if value is None: b.aconst_null()
-                else: self._expr(value, b, scope)
-                if self.finally_stack:
-                    ctx = self.finally_stack[-1]; b.astore(ctx.return_slot); b.goto(ctx.return_entry)
-                else:
-                    b.areturn()
-            case ast.If(test=test, body=body, orelse=orelse):
-                else_label, end_label = b.label(), b.label()
-                self._truthy(test, b, scope)
-                b.ifeq(else_label)
-                for s in body: self._stmt(s, b, scope, in_function)
-                b.goto(end_label)
-                b.mark(else_label)
-                for s in orelse: self._stmt(s, b, scope, in_function)
-                b.mark(end_label)
-            case ast.While(test=test, body=body, orelse=orelse):
-                start, normal_end, break_end = b.label(), b.label(), b.label()
-                b.mark(start)
-                self._truthy(test, b, scope); b.ifeq(normal_end)
-                self.loop_stack.append((start, break_end))
-                for s in body: self._stmt(s, b, scope, in_function)
-                self.loop_stack.pop(); b.goto(start)
-                b.mark(normal_end)
-                for s in orelse: self._stmt(s, b, scope, in_function)
-                b.mark(break_end)
-            case ast.For(target=target, iter=iterable, body=body, orelse=orelse):
-                iterator_slot = scope.temp()
-                self._expr(iterable, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
-                start, normal_end, break_end = b.label(), b.label(), b.label()
-                b.mark(start); b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterHasNext", f"({OBJ})Z"); b.ifeq(normal_end)
-                b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterNext", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
-                self.loop_stack.append((start, break_end))
-                for s in body: self._stmt(s, b, scope, in_function)
-                self.loop_stack.pop(); b.goto(start)
-                b.mark(normal_end)
-                for s in orelse: self._stmt(s, b, scope, in_function)
-                b.mark(break_end)
-            case ast.AsyncFor(target=target, iter=iterable, body=body, orelse=orelse):
-                iterator_slot, result_slot = scope.temp(), scope.temp()
-                self._expr(iterable, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
-                start, normal_end, break_end = b.label(), b.label(), b.label()
-                b.mark(start)
-                b.aload(iterator_slot); b.invokestatic(RUNTIME, "asyncIterNext", f"({OBJ}){OBJ}"); b.astore(result_slot)
-                b.aload(result_slot); b.invokestatic(RUNTIME, "asyncNextDone", f"({OBJ})Z"); b.ifne(normal_end)
-                b.aload(result_slot); b.invokestatic(RUNTIME, "asyncNextValue", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
-                self.loop_stack.append((start, break_end))
-                for s in body: self._stmt(s, b, scope, in_function)
-                self.loop_stack.pop(); b.goto(start)
-                b.mark(normal_end)
-                for s in orelse: self._stmt(s, b, scope, in_function)
-                b.mark(break_end)
-            case ast.Break():
-                if not self.loop_stack: raise CompileError("break outside loop")
-                target = self.loop_stack[-1][1]
-                if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
-                else: b.goto(target)
-            case ast.Continue():
-                if not self.loop_stack: raise CompileError("continue outside loop")
-                target = self.loop_stack[-1][0]
-                if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
-                else: b.goto(target)
-            case ast.Delete(targets=targets):
-                for target in targets: self._delete_target(target, b, scope)
-            case ast.Assert(test=test, msg=msg):
-                ok = b.label(); self._truthy(test, b, scope); b.ifne(ok)
-                if msg is None: b.aconst_null()
-                else: self._expr(msg, b, scope)
-                b.invokestatic(RUNTIME, "assertFail", f"({OBJ})V")
-                b.mark(ok)
-            case ast.Raise(exc=exc, cause=cause):
-                if exc is None:
-                    if not self.exception_stack: raise CompileError("No active exception to reraise")
-                    b.aload(self.exception_stack[-1]); b.athrow()
-                else:
-                    self._expr(exc, b, scope)
-                    if cause is None:
-                        if self.exception_stack:
-                            b.aload(self.exception_stack[-1])
-                            b.invokestatic(RUNTIME, "raiseObjectWithContext", f"({OBJ}{OBJ})V")
+                        if alias.name == '*':
+                            exports = self.import_exports.get(resolved)
+                            if exports is None:
+                                raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
+                            for export_name in exports:
+                                b.aload(module_slot); b.ldc_string(export_name)
+                                b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
+                                self._store_name(export_name, b, scope)
+                            continue
+                        submodule = resolved + '.' + alias.name
+                        sub_jvm = self.import_map.get(submodule)
+                        if sub_jvm is not None:
+                            b.ldc_string(submodule); b.ldc_string(sub_jvm.replace('/', '.'))
+                            b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
                         else:
-                            b.invokestatic(RUNTIME, "raiseObject", f"({OBJ})V")
+                            b.aload(module_slot); b.ldc_string(alias.name)
+                            b.invokestatic(RUNTIME, "moduleGetattr", f"({OBJ}{OBJ}){OBJ}")
+                        self._store_name(alias.asname or alias.name, b, scope)
+                    return True
+                case ast.ClassDef(name=name, decorator_list=decorators):
+                    info = self.class_infos[id(node)]
+                    decorator_slots: list[int] = []
+                    for decorator in decorators:
+                        self._expr(decorator, b, scope)
+                        slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
+                    b.ldc_string(name); b.ldc_string(self.module_name)
+                    b.invokestatic(RUNTIME, "classCreate", f"({OBJ}{OBJ}){OBJ}")
+                    class_slot = scope.temp(); b.astore(class_slot)
+                    b.aload(class_slot); b.ldc_string(info.qualname)
+                    b.invokestatic(RUNTIME, "classSetQualname", f"({OBJ}{OBJ})V")
+                    if scope.env_mode and scope.env_slot is not None: b.aload(scope.env_slot)
+                    else: b.aconst_null()
+                    b.invokestatic(RUNTIME, "envChild", f"({OBJ}){OBJ}")
+                    closure_slot = scope.temp(); b.astore(closure_slot)
+                    b.aload(closure_slot); b.ldc_string("__class__")
+                    b.invokestatic(RUNTIME, "unbound", f"(){OBJ}")
+                    b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
+                    for base in info.bases:
+                        b.aload(class_slot); self._expr(base, b, scope)
+                        b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
+
+                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                    class_kw_slot = scope.temp(); b.astore(class_kw_slot)
+                    metaclass_slot = scope.temp(); b.aconst_null(); b.astore(metaclass_slot)
+                    for kw_name, kw_value in (info.keywords or []):
+                        if kw_name == "metaclass":
+                            self._expr(kw_value, b, scope); b.astore(metaclass_slot)
+                        else:
+                            b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
+                            b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
+
+                    b.aload(class_slot)
+                    b.aload(metaclass_slot)
+                    b.aload(class_kw_slot)
+                    b.invokestatic(RUNTIME, "classPrepare", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    namespace_slot = scope.temp(); b.astore(namespace_slot)
+                    body_scope = Scope(start_slot=scope.next_slot, parent=scope,
+                                       env_mode=True, env_slot=closure_slot)
+                    body_scope.free_names = scope.local_names | scope.free_names
+                    body_scope.local_names, body_scope.global_decl, body_scope.nonlocal_decl = self._function_locals(node)
+                    body_scope.namespace_slot = namespace_slot
+                    old_class = self.current_class
+                    self.current_class = info
+                    saved_control = self.loop_stack, self.cleanup_stack, self.finally_stack
+                    self.loop_stack, self.cleanup_stack, self.finally_stack = [], [], []
+                    b.ldc_string(name); b.ldc_string(self.filename); self._emit_int(node.lineno, b)
+                    b.invokestatic(RUNTIME, "pushLogicalFrame", f"({OBJ * 3})V")
+                    b.aload(namespace_slot); b.invokestatic(RUNTIME, "frameSetNamespace", f"({OBJ})V")
+                    body_start, body_end, body_handler, body_done = b.label(), b.label(), b.label(), b.label()
+                    body_exception = body_scope.temp()
+                    b.mark(body_start); b.emit(0x00)  # non-empty protected range for literal-only suites
+                    try:
+                        for item in node.body:
+                            if item is node.body[0] and isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+                                self._expr(item.value, b, body_scope)
+                                self._store_name("__doc__", b, body_scope)
+                            elif not (isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant)):
+                                self._stmt(item, b, body_scope, in_function=False)
+                    finally:
+                        self.current_class = old_class
+                        self.loop_stack, self.cleanup_stack, self.finally_stack = saved_control
+                    b.mark(body_end)
+                    b.invokestatic(RUNTIME, "popLogicalFrame", "()V"); b.goto(body_done)
+                    b.mark(body_handler); b.astore(body_exception)
+                    b.aload(body_exception); b.invokestatic(RUNTIME, "tracebackAddCurrentFrame", f"({OBJ})V")
+                    b.invokestatic(RUNTIME, "popLogicalFrame", "()V")
+                    b.aload(body_exception); b.athrow()
+                    b.add_exception_handler(body_start, body_end, body_handler, "java/lang/Throwable")
+                    b.mark(body_done)
+                    scope.next_slot = max(scope.next_slot, body_scope.next_slot)
+
+                    # Publish only an actual implicit class cell, after suite execution.
+                    # Nested class cells belong to their own class construction.
+                    needs_cell = self._class_needs_cell(node)
+                    if needs_cell:
+                        b.aload(namespace_slot); b.aload(closure_slot)
+                        b.invokestatic(RUNTIME, "classPublishCell", f"({OBJ * 2})V")
+                    b.aload(class_slot)
+                    b.aload(metaclass_slot)
+                    b.aload(namespace_slot); b.aload(class_kw_slot)
+                    b.invokestatic(RUNTIME, "classFinish", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
+                    b.astore(class_slot)
+                    b.aload(closure_slot); b.aload(class_slot); self._boxed_bool(needs_cell, b)
+                    b.invokestatic(RUNTIME, "classValidateCell", f"({OBJ * 3})V")
+                    for decorator_slot in reversed(decorator_slots):
+                        b.aload(decorator_slot)
+                        b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                        b.dup(); b.aload(class_slot); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+                        b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                        b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                        b.astore(class_slot)
+                    b.aload(class_slot)
+                    if info.local or self.dynamic: self._store_name(name, b, scope)
+                    else: b.putstatic(self.class_name, info.class_field, OBJ)
+                    return True
+                case ast.AnnAssign(target=ast.Name(id=name), value=value):
+                    if value is None:
+                        raise CompileError("annotation-only assignments are not implemented yet")
+                    self._expr(value, b, scope)
+                    self._store_name(name, b, scope)
+                    return True
+                case ast.AugAssign(target=ast.Name(id=name), op=op, value=value):
+                    self._load_name(name, b, scope)
+                    self._expr(value, b, scope)
+                    self._binary_runtime(op, b, inplace=True)
+                    self._store_name(name, b, scope)
+                    return True
+                case ast.AugAssign(target=ast.Attribute(value=obj, attr=attr), op=op, value=value):
+                    obj_slot, result_slot = scope.temp(), scope.temp()
+                    self._expr(obj, b, scope); b.astore(obj_slot)
+                    b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
+                    self._expr(value, b, scope); self._binary_runtime(op, b, inplace=True); b.astore(result_slot)
+                    b.aload(obj_slot); b.ldc_string(self._class_attr_name(attr)); b.aload(result_slot)
+                    b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V")
+                    return True
+                case ast.AugAssign(target=ast.Subscript(value=obj, slice=key), op=op, value=value):
+                    obj_slot, key_slot, result_slot = scope.temp(), scope.temp(), scope.temp()
+                    self._expr(obj, b, scope); b.astore(obj_slot)
+                    self._expr(key, b, scope); b.astore(key_slot)
+                    b.aload(obj_slot); b.aload(key_slot); b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
+                    self._expr(value, b, scope); self._binary_runtime(op, b, inplace=True); b.astore(result_slot)
+                    b.aload(obj_slot); b.aload(key_slot); b.aload(result_slot)
+                    b.invokestatic(RUNTIME, "setitem", f"({OBJ}{OBJ}{OBJ})V")
+                    return True
+                case ast.Global(names=names):
+                    scope.global_decl.update(names)
+                    return True
+                case ast.Nonlocal(names=names):
+                    scope.nonlocal_decl.update(names)
+                    return True
+                case _:
+                    return False
+
+    def _stmt_part2(self, node, b, scope, in_function):
+        match node:
+                case ast.Return(value=value):
+                    if not in_function: raise CompileError("return outside function")
+                    if value is None: b.aconst_null()
+                    else: self._expr(value, b, scope)
+                    if self.finally_stack:
+                        ctx = self.finally_stack[-1]; b.astore(ctx.return_slot); b.goto(ctx.return_entry)
                     else:
-                        self._expr(cause, b, scope)
-                        b.invokestatic(RUNTIME, "raiseObjectFrom", f"({OBJ}{OBJ})V")
-            case ast.Try(body=body, handlers=handlers, orelse=orelse, finalbody=[]):
-                self._compile_try_except(body, handlers, orelse, b, scope, in_function)
-            case ast.Try(body=body, handlers=handlers, orelse=orelse, finalbody=finalbody):
-                self._compile_try_finally(body, handlers, orelse, finalbody, b, scope, in_function)
-            case ast.With(items=items, body=body):
-                self._compile_with(items, body, b, scope, in_function)
-            case ast.AsyncWith(items=items, body=body):
-                self._compile_with(items, body, b, scope, in_function, is_async=True)
-            case _:
-                raise CompileError(f"Unsupported statement: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
+                        b.areturn()
+                    return True
+                case ast.If(test=test, body=body, orelse=orelse):
+                    else_label, end_label = b.label(), b.label()
+                    self._truthy(test, b, scope)
+                    b.ifeq(else_label)
+                    for s in body: self._stmt(s, b, scope, in_function)
+                    b.goto(end_label)
+                    b.mark(else_label)
+                    for s in orelse: self._stmt(s, b, scope, in_function)
+                    b.mark(end_label)
+                    return True
+                case ast.While(test=test, body=body, orelse=orelse):
+                    start, normal_end, break_end = b.label(), b.label(), b.label()
+                    b.mark(start)
+                    self._truthy(test, b, scope); b.ifeq(normal_end)
+                    self.loop_stack.append((start, break_end))
+                    for s in body: self._stmt(s, b, scope, in_function)
+                    self.loop_stack.pop(); b.goto(start)
+                    b.mark(normal_end)
+                    for s in orelse: self._stmt(s, b, scope, in_function)
+                    b.mark(break_end)
+                    return True
+                case ast.For(target=target, iter=iterable, body=body, orelse=orelse):
+                    iterator_slot = scope.temp()
+                    self._expr(iterable, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
+                    start, normal_end, break_end = b.label(), b.label(), b.label()
+                    b.mark(start); b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterHasNext", f"({OBJ})Z"); b.ifeq(normal_end)
+                    b.aload(iterator_slot); b.invokestatic(RUNTIME, "iterNext", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
+                    self.loop_stack.append((start, break_end))
+                    for s in body: self._stmt(s, b, scope, in_function)
+                    self.loop_stack.pop(); b.goto(start)
+                    b.mark(normal_end)
+                    for s in orelse: self._stmt(s, b, scope, in_function)
+                    b.mark(break_end)
+                    return True
+                case ast.AsyncFor(target=target, iter=iterable, body=body, orelse=orelse):
+                    iterator_slot, result_slot = scope.temp(), scope.temp()
+                    self._expr(iterable, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}"); b.astore(iterator_slot)
+                    start, normal_end, break_end = b.label(), b.label(), b.label()
+                    b.mark(start)
+                    b.aload(iterator_slot); b.invokestatic(RUNTIME, "asyncIterNext", f"({OBJ}){OBJ}"); b.astore(result_slot)
+                    b.aload(result_slot); b.invokestatic(RUNTIME, "asyncNextDone", f"({OBJ})Z"); b.ifne(normal_end)
+                    b.aload(result_slot); b.invokestatic(RUNTIME, "asyncNextValue", f"({OBJ}){OBJ}"); self._store_target(target, b, scope)
+                    self.loop_stack.append((start, break_end))
+                    for s in body: self._stmt(s, b, scope, in_function)
+                    self.loop_stack.pop(); b.goto(start)
+                    b.mark(normal_end)
+                    for s in orelse: self._stmt(s, b, scope, in_function)
+                    b.mark(break_end)
+                    return True
+                case ast.Break():
+                    if not self.loop_stack: raise CompileError("break outside loop")
+                    target = self.loop_stack[-1][1]
+                    if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
+                    else: b.goto(target)
+                    return True
+                case ast.Continue():
+                    if not self.loop_stack: raise CompileError("continue outside loop")
+                    target = self.loop_stack[-1][0]
+                    if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
+                    else: b.goto(target)
+                    return True
+                case ast.Delete(targets=targets):
+                    for target in targets: self._delete_target(target, b, scope)
+                    return True
+                case _:
+                    return False
+
+    def _stmt_part3(self, node, b, scope, in_function):
+        match node:
+                case ast.Assert(test=test, msg=msg):
+                    ok = b.label(); self._truthy(test, b, scope); b.ifne(ok)
+                    if msg is None: b.aconst_null()
+                    else: self._expr(msg, b, scope)
+                    b.invokestatic(RUNTIME, "assertFail", f"({OBJ})V")
+                    b.mark(ok)
+                    return True
+                case ast.Raise(exc=exc, cause=cause):
+                    if exc is None:
+                        if not self.exception_stack: raise CompileError("No active exception to reraise")
+                        b.aload(self.exception_stack[-1]); b.athrow()
+                    else:
+                        self._expr(exc, b, scope)
+                        if cause is None:
+                            if self.exception_stack:
+                                b.aload(self.exception_stack[-1])
+                                b.invokestatic(RUNTIME, "raiseObjectWithContext", f"({OBJ}{OBJ})V")
+                            else:
+                                b.invokestatic(RUNTIME, "raiseObject", f"({OBJ})V")
+                        else:
+                            self._expr(cause, b, scope)
+                            b.invokestatic(RUNTIME, "raiseObjectFrom", f"({OBJ}{OBJ})V")
+                    return True
+                case ast.Try(body=body, handlers=handlers, orelse=orelse, finalbody=[]):
+                    self._compile_try_except(body, handlers, orelse, b, scope, in_function)
+                    return True
+                case ast.Try(body=body, handlers=handlers, orelse=orelse, finalbody=finalbody):
+                    self._compile_try_finally(body, handlers, orelse, finalbody, b, scope, in_function)
+                    return True
+                case ast.With(items=items, body=body):
+                    self._compile_with(items, body, b, scope, in_function)
+                    return True
+                case ast.AsyncWith(items=items, body=body):
+                    self._compile_with(items, body, b, scope, in_function, is_async=True)
+                    return True
+                case _:
+                    raise CompileError(f"Unsupported statement: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
     def _expr(self, node: ast.expr, b: CodeBuilder, scope: Scope) -> None:
         if self.dynamic and isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
@@ -2548,228 +2613,351 @@ class Compiler:
             if name in {"min", "max", "sorted", "hex", "oct", "bin", "super"} or scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
                 self._emit_dynamic_call(node.func, node.args, node.keywords, b, scope)
                 return
+        if self._expr_part0(node, b, scope):
+            return
+        if self._expr_part1(node, b, scope):
+            return
+        if self._expr_part2(node, b, scope):
+            return
+        if self._expr_part3(node, b, scope):
+            return
+        if self._expr_part4(node, b, scope):
+            return
+        if self._expr_part5(node, b, scope):
+            return
+        if self._expr_part6(node, b, scope):
+            return
+
+    def _expr_part0(self, node, b, scope):
         match node:
-            case ast.Constant(value=value) if value is Ellipsis:
-                b.invokestatic(RUNTIME, "ellipsis", f"(){OBJ}")
-            case ast.Constant(value=None):
-                b.aconst_null()
-            case ast.Constant(value=True): self._boxed_bool(True, b)
-            case ast.Constant(value=False): self._boxed_bool(False, b)
-            case ast.Constant(value=int() as value) if not isinstance(value, bool):
-                self._emit_int(value, b)
-            case ast.Constant(value=float() as value):
-                b.ldc_string({"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}.get(repr(value), repr(value)))
-                b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
-            case ast.Constant(value=complex() as value):
-                for part in (value.real, value.imag):
-                    text = repr(part)
-                    b.ldc_string({"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}.get(text, text))
+                case ast.Constant(value=value) if value is Ellipsis:
+                    b.invokestatic(RUNTIME, "ellipsis", f"(){OBJ}")
+                    return True
+                case ast.Constant(value=None):
+                    b.aconst_null()
+                    return True
+                case ast.Constant(value=True):
+                    self._boxed_bool(True, b)
+                    return True
+                case ast.Constant(value=False):
+                    self._boxed_bool(False, b)
+                    return True
+                case ast.Constant(value=int() as value) if not isinstance(value, bool):
+                    self._emit_int(value, b)
+                    return True
+                case ast.Constant(value=float() as value):
+                    b.ldc_string({"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}.get(repr(value), repr(value)))
                     b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
-                b.invokestatic(RUNTIME, "complexLiteral", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Constant(value=str() as value):
-                b.ldc_string(value)
-            case ast.Constant(value=bytes() as value):
-                b.ldc_string(value.hex())
-                b.invokestatic(RUNTIME, "bytesFromHexLiteral", f"({OBJ}){OBJ}")
-            case ast.Name(id=name):
-                self._load_name(name, b, scope)
-            case ast.NamedExpr(target=ast.Name(id=name), value=value):
-                self._expr(value, b, scope); b.dup()
-                target_scope = getattr(scope, "comprehension_outer", None) or scope
-                self._store_name(name, b, target_scope, temp_scope=scope)
-            case ast.Lambda():
-                self._emit_lambda(node, b, scope)
-            case ast.ListComp() | ast.SetComp() | ast.DictComp():
-                self._emit_comprehension(node, b, scope)
-            case ast.GeneratorExp():
-                self._emit_generator_expression(node, b, scope)
-            case ast.Await(value=value):
-                self._expr(value, b, scope)
-                b.invokestatic(RUNTIME, "awaitValue", f"({OBJ}){OBJ}")
-            case ast.List(elts=elts):
-                b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
-                for elt in elts:
-                    b.dup()
-                    if isinstance(elt, ast.Starred):
-                        self._expr(elt.value, b, scope); b.invokestatic(RUNTIME, "listExtend", f"({OBJ}{OBJ})V")
-                    else:
-                        self._expr(elt, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
-            case ast.Tuple(elts=elts):
-                b.invokestatic(RUNTIME, "tuple0", f"(){OBJ}")
-                for elt in elts:
-                    b.dup()
-                    if isinstance(elt, ast.Starred):
-                        self._expr(elt.value, b, scope); b.invokestatic(RUNTIME, "tupleExtend", f"({OBJ}{OBJ})V")
-                    else:
-                        self._expr(elt, b, scope); b.invokestatic(RUNTIME, "tupleAppend", f"({OBJ}{OBJ})V")
-            case ast.Set(elts=elts):
-                b.invokestatic(RUNTIME, "set0", f"(){OBJ}")
-                for elt in elts:
-                    b.dup()
-                    if isinstance(elt, ast.Starred):
-                        self._expr(elt.value, b, scope); b.invokestatic(RUNTIME, "setUpdate", f"({OBJ}{OBJ})V")
-                    else:
-                        self._expr(elt, b, scope); b.invokestatic(RUNTIME, "setAdd", f"({OBJ}{OBJ})V")
-            case ast.Dict(keys=keys, values=values):
-                b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
-                for key, value in zip(keys, values):
-                    b.dup()
-                    if key is None:
-                        self._expr(value, b, scope); b.invokestatic(RUNTIME, "dictUpdate", f"({OBJ}{OBJ})V")
-                    else:
-                        self._expr(key, b, scope); self._expr(value, b, scope)
-                        b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
-            case ast.Subscript(value=value, slice=key):
-                self._expr(value, b, scope); self._expr(key, b, scope)
-                b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Attribute(value=value, attr=attr):
-                self._expr(value, b, scope); b.ldc_string(self._class_attr_name(attr))
-                b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Slice(lower=lower, upper=upper, step=step):
-                (b.aconst_null() if lower is None else self._expr(lower, b, scope))
-                (b.aconst_null() if upper is None else self._expr(upper, b, scope))
-                (b.aconst_null() if step is None else self._expr(step, b, scope))
-                b.invokestatic(RUNTIME, "slice", f"({OBJ}{OBJ}{OBJ}){OBJ}")
-            case ast.IfExp(test=test, body=body, orelse=orelse):
-                no, end = b.label(), b.label(); self._truthy(test, b, scope); b.ifeq(no)
-                self._expr(body, b, scope); b.goto(end); b.mark(no); self._expr(orelse, b, scope); b.mark(end)
-            case ast.JoinedStr(values=values):
-                b.ldc_string("")
-                for value in values:
-                    if isinstance(value, ast.Constant): self._expr(value, b, scope)
-                    elif isinstance(value, ast.FormattedValue):
-                        self._expr(value.value, b, scope)
-                        if value.conversion != -1:
-                            method = {ord('r'): "repr_", ord('s'): "str_", ord('a'): "ascii_"}[value.conversion]
-                            b.invokestatic(RUNTIME, method, f"({OBJ}){OBJ}")
-                        if value.format_spec is None: b.ldc_string("")
-                        else: self._expr(value.format_spec, b, scope)
-                        b.invokestatic(RUNTIME, "formatValue", f"({OBJ * 2}){OBJ}")
-                    else: raise CompileError("unsupported f-string component")
-                    b.invokestatic(RUNTIME, "add", f"({OBJ}{OBJ}){OBJ}")
-            case ast.BinOp(left=left, op=op, right=right):
-                self._expr(left, b, scope); self._expr(right, b, scope); self._binary_runtime(op, b)
-            case ast.UnaryOp(op=ast.USub(), operand=operand):
-                self._expr(operand, b, scope); b.invokestatic(RUNTIME, "neg", f"({OBJ}){OBJ}")
-            case ast.UnaryOp(op=ast.Not(), operand=operand):
-                self._expr(operand, b, scope); b.invokestatic(RUNTIME, "not_", f"({OBJ}){OBJ}")
-            case ast.UnaryOp(op=ast.UAdd(), operand=operand):
-                self._expr(operand, b, scope); b.invokestatic(RUNTIME, "pos", f"({OBJ}){OBJ}")
-            case ast.UnaryOp(op=ast.Invert(), operand=operand):
-                self._expr(operand, b, scope); b.invokestatic(RUNTIME, "invert", f"({OBJ}){OBJ}")
-            case ast.BoolOp(op=ast.And(), values=values): self._boolop(values, True, b, scope)
-            case ast.BoolOp(op=ast.Or(), values=values): self._boolop(values, False, b, scope)
-            case ast.Compare(left=left, ops=ops, comparators=comparators):
-                self._compare_chain(left, ops, comparators, b, scope)
-            case ast.Call(func=ast.Name(id="print"), args=args, keywords=keywords):
-                b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
-                for arg in args:
-                    b.dup(); self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
-                sep = next((kw.value for kw in keywords if kw.arg == "sep"), None)
-                endv = next((kw.value for kw in keywords if kw.arg == "end"), None)
-                if any(kw.arg not in {"sep", "end"} for kw in keywords): raise CompileError("print() only supports sep= and end= keywords")
-                (b.aconst_null() if sep is None else self._expr(sep, b, scope))
-                (b.aconst_null() if endv is None else self._expr(endv, b, scope))
-                b.invokestatic(RUNTIME, "printArgs", f"({OBJ}{OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id=pm_name), args=pm_args, keywords=[]) if (
-                    pm_name.startswith(PATMA_PREFIX) and PATMA_HELPERS.get(pm_name[len(PATMA_PREFIX):]) == len(pm_args)):
-                for pm_arg in pm_args: self._expr(pm_arg, b, scope)
-                b.invokestatic(PATMA_RUNTIME, pm_name[len(PATMA_PREFIX):], f"({OBJ * len(pm_args)}){OBJ}")
-            case ast.Call(func=ast.Name(id="len"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "len", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"abs", "bool", "str", "repr", "int", "float", "sum", "min", "max", "any", "all"}:
-                self._expr(arg, b, scope)
-                runtime_name = {"bool":"bool_", "str":"str_", "repr":"repr_", "int":"int_", "float":"float_"}.get(name, name)
-                b.invokestatic(RUNTIME, runtime_name, f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="bytes"), args=[], keywords=[]):
-                b.invokestatic(RUNTIME, "bytes0", f"(){OBJ}")
-            case ast.Call(func=ast.Name(id="bytes"), args=[arg], keywords=[]):
-                self._expr(arg,b,scope); b.invokestatic(RUNTIME, "bytes1", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="bytes"), args=[arg, enc], keywords=[]):
-                self._expr(arg,b,scope); self._expr(enc,b,scope); b.invokestatic(RUNTIME, "bytes2", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="bytearray"), args=[], keywords=[]):
-                b.invokestatic(RUNTIME, "bytearray0", f"(){OBJ}")
-            case ast.Call(func=ast.Name(id="bytearray"), args=[arg], keywords=[]):
-                self._expr(arg,b,scope); b.invokestatic(RUNTIME, "bytearray1", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="bytearray"), args=[arg, enc], keywords=[]):
-                self._expr(arg,b,scope); self._expr(enc,b,scope); b.invokestatic(RUNTIME, "bytearray2", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="memoryview"), args=[arg], keywords=[]):
-                self._expr(arg,b,scope); b.invokestatic(RUNTIME, "memoryview1", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="list"), args=[], keywords=[]):
-                b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
-            case ast.Call(func=ast.Name(id="list"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listFrom", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="tuple"), args=[], keywords=[]):
-                b.invokestatic(RUNTIME, "tuple0", f"(){OBJ}")
-            case ast.Call(func=ast.Name(id="tuple"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "tupleFrom", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="set"), args=[], keywords=[]):
-                b.invokestatic(RUNTIME, "set0", f"(){OBJ}")
-            case ast.Call(func=ast.Name(id="set"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "setFrom", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="dict"), args=[], keywords=[]):
-                b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
-            case ast.Call(func=ast.Name(id="dict"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "dictFrom", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"sorted", "reversed"}:
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, name, f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="__py_async_comp_internal"), args=[ast.Constant(value=int() as token)], keywords=[]):
-                self._emit_async_comprehension_coroutine(token, b, scope)
-            case ast.Call(func=ast.Name(id="aiter"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="anext"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "anext_", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="iter"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="next"), args=[arg], keywords=[]):
-                self._expr(arg, b, scope); b.invokestatic(RUNTIME, "next_", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in EXCEPTION_TYPES:
-                if len(args) > 1: raise CompileError("exception constructors currently accept zero or one positional argument")
-                b.ldc_string(name)
-                if args: self._expr(args[0], b, scope)
-                else: b.aconst_null()
-                b.invokestatic(RUNTIME, "makeException", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="range"), args=args, keywords=[]):
-                if not 1 <= len(args) <= 3: raise CompileError("range() currently accepts 1-3 positional args")
-                for arg in args: self._expr(arg, b, scope)
-                b.invokestatic(RUNTIME, f"range{len(args)}", f"({OBJ * len(args)}){OBJ}")
-            case ast.Call(func=ast.Name(id="type"), args=[obj], keywords=[]):
-                self._expr(obj, b, scope); b.invokestatic(RUNTIME, "typeOf", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="callable"), args=[obj], keywords=[]):
-                self._expr(obj, b, scope); b.invokestatic(RUNTIME, "callable_", f"({OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="getattr"), args=[obj, name], keywords=[]):
-                self._expr(obj, b, scope); self._expr(name, b, scope); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="getattr"), args=[obj, name, default], keywords=[]):
-                self._expr(obj, b, scope); self._expr(name, b, scope); self._expr(default, b, scope); b.invokestatic(RUNTIME, "getattrDefault", f"({OBJ}{OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="hasattr"), args=[obj, name], keywords=[]):
-                self._expr(obj, b, scope); self._expr(name, b, scope); b.invokestatic(RUNTIME, "hasattr", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="setattr"), args=[obj, name, value], keywords=[]):
-                self._expr(obj, b, scope); self._expr(name, b, scope); self._expr(value, b, scope); b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V"); b.aconst_null()
-            case ast.Call(func=ast.Name(id="delattr"), args=[obj, name], keywords=[]):
-                self._expr(obj, b, scope); self._expr(name, b, scope); b.invokestatic(RUNTIME, "delattr", f"({OBJ}{OBJ})V"); b.aconst_null()
-            case ast.Call(func=ast.Name(id="isinstance"), args=[obj, cls], keywords=[]):
-                self._expr(obj, b, scope); self._expr(cls, b, scope)
-                b.invokestatic(RUNTIME, "isInstance", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Name(id="issubclass"), args=[sub, cls], keywords=[]):
-                self._expr(sub, b, scope); self._expr(cls, b, scope); b.invokestatic(RUNTIME, "isSubclass", f"({OBJ}{OBJ}){OBJ}")
-            case ast.Call(func=ast.Attribute(value=obj, attr=attr), args=args, keywords=[]):
-                self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr))
-                if len(args) <= 4 and not any(isinstance(arg, ast.Starred) for arg in args):
+                    return True
+                case ast.Constant(value=complex() as value):
+                    for part in (value.real, value.imag):
+                        text = repr(part)
+                        b.ldc_string({"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}.get(text, text))
+                        b.invokestatic("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;")
+                    b.invokestatic(RUNTIME, "complexLiteral", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Constant(value=str() as value):
+                    b.ldc_string(value)
+                    return True
+                case ast.Constant(value=bytes() as value):
+                    b.ldc_string(value.hex())
+                    b.invokestatic(RUNTIME, "bytesFromHexLiteral", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Name(id=name):
+                    self._load_name(name, b, scope)
+                    return True
+                case ast.NamedExpr(target=ast.Name(id=name), value=value):
+                    self._expr(value, b, scope); b.dup()
+                    target_scope = getattr(scope, "comprehension_outer", None) or scope
+                    self._store_name(name, b, target_scope, temp_scope=scope)
+                    return True
+                case ast.Lambda():
+                    self._emit_lambda(node, b, scope)
+                    return True
+                case _:
+                    return False
+
+    def _expr_part1(self, node, b, scope):
+        match node:
+                case ast.ListComp() | ast.SetComp() | ast.DictComp():
+                    self._emit_comprehension(node, b, scope)
+                    return True
+                case ast.GeneratorExp():
+                    self._emit_generator_expression(node, b, scope)
+                    return True
+                case ast.Await(value=value):
+                    self._expr(value, b, scope)
+                    b.invokestatic(RUNTIME, "awaitValue", f"({OBJ}){OBJ}")
+                    return True
+                case ast.List(elts=elts):
+                    b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                    for elt in elts:
+                        b.dup()
+                        if isinstance(elt, ast.Starred):
+                            self._expr(elt.value, b, scope); b.invokestatic(RUNTIME, "listExtend", f"({OBJ}{OBJ})V")
+                        else:
+                            self._expr(elt, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+                    return True
+                case ast.Tuple(elts=elts):
+                    b.invokestatic(RUNTIME, "tuple0", f"(){OBJ}")
+                    for elt in elts:
+                        b.dup()
+                        if isinstance(elt, ast.Starred):
+                            self._expr(elt.value, b, scope); b.invokestatic(RUNTIME, "tupleExtend", f"({OBJ}{OBJ})V")
+                        else:
+                            self._expr(elt, b, scope); b.invokestatic(RUNTIME, "tupleAppend", f"({OBJ}{OBJ})V")
+                    return True
+                case ast.Set(elts=elts):
+                    b.invokestatic(RUNTIME, "set0", f"(){OBJ}")
+                    for elt in elts:
+                        b.dup()
+                        if isinstance(elt, ast.Starred):
+                            self._expr(elt.value, b, scope); b.invokestatic(RUNTIME, "setUpdate", f"({OBJ}{OBJ})V")
+                        else:
+                            self._expr(elt, b, scope); b.invokestatic(RUNTIME, "setAdd", f"({OBJ}{OBJ})V")
+                    return True
+                case ast.Dict(keys=keys, values=values):
+                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                    for key, value in zip(keys, values):
+                        b.dup()
+                        if key is None:
+                            self._expr(value, b, scope); b.invokestatic(RUNTIME, "dictUpdate", f"({OBJ}{OBJ})V")
+                        else:
+                            self._expr(key, b, scope); self._expr(value, b, scope)
+                            b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
+                    return True
+                case ast.Subscript(value=value, slice=key):
+                    self._expr(value, b, scope); self._expr(key, b, scope)
+                    b.invokestatic(RUNTIME, "getitem", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Attribute(value=value, attr=attr):
+                    self._expr(value, b, scope); b.ldc_string(self._class_attr_name(attr))
+                    b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Slice(lower=lower, upper=upper, step=step):
+                    (b.aconst_null() if lower is None else self._expr(lower, b, scope))
+                    (b.aconst_null() if upper is None else self._expr(upper, b, scope))
+                    (b.aconst_null() if step is None else self._expr(step, b, scope))
+                    b.invokestatic(RUNTIME, "slice", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.IfExp(test=test, body=body, orelse=orelse):
+                    no, end = b.label(), b.label(); self._truthy(test, b, scope); b.ifeq(no)
+                    self._expr(body, b, scope); b.goto(end); b.mark(no); self._expr(orelse, b, scope); b.mark(end)
+                    return True
+                case ast.JoinedStr(values=values):
+                    b.ldc_string("")
+                    for value in values:
+                        if isinstance(value, ast.Constant): self._expr(value, b, scope)
+                        elif isinstance(value, ast.FormattedValue):
+                            self._expr(value.value, b, scope)
+                            if value.conversion != -1:
+                                method = {ord('r'): "repr_", ord('s'): "str_", ord('a'): "ascii_"}[value.conversion]
+                                b.invokestatic(RUNTIME, method, f"({OBJ}){OBJ}")
+                            if value.format_spec is None: b.ldc_string("")
+                            else: self._expr(value.format_spec, b, scope)
+                            b.invokestatic(RUNTIME, "formatValue", f"({OBJ * 2}){OBJ}")
+                        else: raise CompileError("unsupported f-string component")
+                        b.invokestatic(RUNTIME, "add", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case _:
+                    return False
+
+    def _expr_part2(self, node, b, scope):
+        match node:
+                case ast.BinOp(left=left, op=op, right=right):
+                    self._expr(left, b, scope); self._expr(right, b, scope); self._binary_runtime(op, b)
+                    return True
+                case ast.UnaryOp(op=ast.USub(), operand=operand):
+                    self._expr(operand, b, scope); b.invokestatic(RUNTIME, "neg", f"({OBJ}){OBJ}")
+                    return True
+                case ast.UnaryOp(op=ast.Not(), operand=operand):
+                    self._expr(operand, b, scope); b.invokestatic(RUNTIME, "not_", f"({OBJ}){OBJ}")
+                    return True
+                case ast.UnaryOp(op=ast.UAdd(), operand=operand):
+                    self._expr(operand, b, scope); b.invokestatic(RUNTIME, "pos", f"({OBJ}){OBJ}")
+                    return True
+                case ast.UnaryOp(op=ast.Invert(), operand=operand):
+                    self._expr(operand, b, scope); b.invokestatic(RUNTIME, "invert", f"({OBJ}){OBJ}")
+                    return True
+                case ast.BoolOp(op=ast.And(), values=values):
+                    self._boolop(values, True, b, scope)
+                    return True
+                case ast.BoolOp(op=ast.Or(), values=values):
+                    self._boolop(values, False, b, scope)
+                    return True
+                case ast.Compare(left=left, ops=ops, comparators=comparators):
+                    self._compare_chain(left, ops, comparators, b, scope)
+                    return True
+                case ast.Call(func=ast.Name(id="print"), args=args, keywords=keywords):
+                    b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                    for arg in args:
+                        b.dup(); self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+                    sep = next((kw.value for kw in keywords if kw.arg == "sep"), None)
+                    endv = next((kw.value for kw in keywords if kw.arg == "end"), None)
+                    if any(kw.arg not in {"sep", "end"} for kw in keywords): raise CompileError("print() only supports sep= and end= keywords")
+                    (b.aconst_null() if sep is None else self._expr(sep, b, scope))
+                    (b.aconst_null() if endv is None else self._expr(endv, b, scope))
+                    b.invokestatic(RUNTIME, "printArgs", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id=pm_name), args=pm_args, keywords=[]) if (
+                        pm_name.startswith(PATMA_PREFIX) and PATMA_HELPERS.get(pm_name[len(PATMA_PREFIX):]) == len(pm_args)):
+                    for pm_arg in pm_args: self._expr(pm_arg, b, scope)
+                    b.invokestatic(PATMA_RUNTIME, pm_name[len(PATMA_PREFIX):], f"({OBJ * len(pm_args)}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="len"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "len", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"abs", "bool", "str", "repr", "int", "float", "sum", "min", "max", "any", "all"}:
+                    self._expr(arg, b, scope)
+                    runtime_name = {"bool":"bool_", "str":"str_", "repr":"repr_", "int":"int_", "float":"float_"}.get(name, name)
+                    b.invokestatic(RUNTIME, runtime_name, f"({OBJ}){OBJ}")
+                    return True
+                case _:
+                    return False
+
+    def _expr_part3(self, node, b, scope):
+        match node:
+                case ast.Call(func=ast.Name(id="bytes"), args=[], keywords=[]):
+                    b.invokestatic(RUNTIME, "bytes0", f"(){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="bytes"), args=[arg], keywords=[]):
+                    self._expr(arg,b,scope); b.invokestatic(RUNTIME, "bytes1", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="bytes"), args=[arg, enc], keywords=[]):
+                    self._expr(arg,b,scope); self._expr(enc,b,scope); b.invokestatic(RUNTIME, "bytes2", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="bytearray"), args=[], keywords=[]):
+                    b.invokestatic(RUNTIME, "bytearray0", f"(){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="bytearray"), args=[arg], keywords=[]):
+                    self._expr(arg,b,scope); b.invokestatic(RUNTIME, "bytearray1", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="bytearray"), args=[arg, enc], keywords=[]):
+                    self._expr(arg,b,scope); self._expr(enc,b,scope); b.invokestatic(RUNTIME, "bytearray2", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="memoryview"), args=[arg], keywords=[]):
+                    self._expr(arg,b,scope); b.invokestatic(RUNTIME, "memoryview1", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="list"), args=[], keywords=[]):
+                    b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="list"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listFrom", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="tuple"), args=[], keywords=[]):
+                    b.invokestatic(RUNTIME, "tuple0", f"(){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="tuple"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "tupleFrom", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="set"), args=[], keywords=[]):
+                    b.invokestatic(RUNTIME, "set0", f"(){OBJ}")
+                    return True
+                case _:
+                    return False
+
+    def _expr_part4(self, node, b, scope):
+        match node:
+                case ast.Call(func=ast.Name(id="set"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "setFrom", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="dict"), args=[], keywords=[]):
+                    b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="dict"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "dictFrom", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"sorted", "reversed"}:
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, name, f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="__py_async_comp_internal"), args=[ast.Constant(value=int() as token)], keywords=[]):
+                    self._emit_async_comprehension_coroutine(token, b, scope)
+                    return True
+                case ast.Call(func=ast.Name(id="aiter"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "aiter", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="anext"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "anext_", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="iter"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "iter", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="next"), args=[arg], keywords=[]):
+                    self._expr(arg, b, scope); b.invokestatic(RUNTIME, "next_", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in EXCEPTION_TYPES:
+                    if len(args) > 1: raise CompileError("exception constructors currently accept zero or one positional argument")
+                    b.ldc_string(name)
+                    if args: self._expr(args[0], b, scope)
+                    else: b.aconst_null()
+                    b.invokestatic(RUNTIME, "makeException", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="range"), args=args, keywords=[]):
+                    if not 1 <= len(args) <= 3: raise CompileError("range() currently accepts 1-3 positional args")
                     for arg in args: self._expr(arg, b, scope)
-                    b.invokestatic(RUNTIME, f"callMethod{len(args)}", f"({OBJ * (2 + len(args))}){OBJ}")
-                else:
-                    self._emit_call_parts(args, [], b, scope)
-                    b.invokestatic(RUNTIME, "callMethodDynamic", f"({OBJ * 4}){OBJ}")
-            case ast.Call(func=ast.Name(id=name) as func, args=args, keywords=[]) if name in self.classes:
-                self._emit_dynamic_call(func, args, [], b, scope)
-            case ast.Call(func=ast.Name(id=name) as func, args=args, keywords=keywords) if name in self.functions or scope.has(name):
-                self._emit_dynamic_call(func, args, keywords, b, scope)
-            case ast.Call(func=func, args=args, keywords=keywords):
-                self._emit_dynamic_call(func, args, keywords, b, scope)
-            case _:
-                raise CompileError(f"Unsupported expression: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
+                    b.invokestatic(RUNTIME, f"range{len(args)}", f"({OBJ * len(args)}){OBJ}")
+                    return True
+                case _:
+                    return False
+
+    def _expr_part5(self, node, b, scope):
+        match node:
+                case ast.Call(func=ast.Name(id="type"), args=[obj], keywords=[]):
+                    self._expr(obj, b, scope); b.invokestatic(RUNTIME, "typeOf", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="callable"), args=[obj], keywords=[]):
+                    self._expr(obj, b, scope); b.invokestatic(RUNTIME, "callable_", f"({OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="getattr"), args=[obj, name], keywords=[]):
+                    self._expr(obj, b, scope); self._expr(name, b, scope); b.invokestatic(RUNTIME, "getattr", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="getattr"), args=[obj, name, default], keywords=[]):
+                    self._expr(obj, b, scope); self._expr(name, b, scope); self._expr(default, b, scope); b.invokestatic(RUNTIME, "getattrDefault", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="hasattr"), args=[obj, name], keywords=[]):
+                    self._expr(obj, b, scope); self._expr(name, b, scope); b.invokestatic(RUNTIME, "hasattr", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="setattr"), args=[obj, name, value], keywords=[]):
+                    self._expr(obj, b, scope); self._expr(name, b, scope); self._expr(value, b, scope); b.invokestatic(RUNTIME, "setattr", f"({OBJ}{OBJ}{OBJ})V"); b.aconst_null()
+                    return True
+                case ast.Call(func=ast.Name(id="delattr"), args=[obj, name], keywords=[]):
+                    self._expr(obj, b, scope); self._expr(name, b, scope); b.invokestatic(RUNTIME, "delattr", f"({OBJ}{OBJ})V"); b.aconst_null()
+                    return True
+                case ast.Call(func=ast.Name(id="isinstance"), args=[obj, cls], keywords=[]):
+                    self._expr(obj, b, scope); self._expr(cls, b, scope)
+                    b.invokestatic(RUNTIME, "isInstance", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id="issubclass"), args=[sub, cls], keywords=[]):
+                    self._expr(sub, b, scope); self._expr(cls, b, scope); b.invokestatic(RUNTIME, "isSubclass", f"({OBJ}{OBJ}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Attribute(value=obj, attr=attr), args=args, keywords=[]):
+                    self._expr(obj, b, scope); b.ldc_string(self._class_attr_name(attr))
+                    if len(args) <= 4 and not any(isinstance(arg, ast.Starred) for arg in args):
+                        for arg in args: self._expr(arg, b, scope)
+                        b.invokestatic(RUNTIME, f"callMethod{len(args)}", f"({OBJ * (2 + len(args))}){OBJ}")
+                    else:
+                        self._emit_call_parts(args, [], b, scope)
+                        b.invokestatic(RUNTIME, "callMethodDynamic", f"({OBJ * 4}){OBJ}")
+                    return True
+                case ast.Call(func=ast.Name(id=name) as func, args=args, keywords=[]) if name in self.classes:
+                    self._emit_dynamic_call(func, args, [], b, scope)
+                    return True
+                case ast.Call(func=ast.Name(id=name) as func, args=args, keywords=keywords) if name in self.functions or scope.has(name):
+                    self._emit_dynamic_call(func, args, keywords, b, scope)
+                    return True
+                case _:
+                    return False
+
+    def _expr_part6(self, node, b, scope):
+        match node:
+                case ast.Call(func=func, args=args, keywords=keywords):
+                    self._emit_dynamic_call(func, args, keywords, b, scope)
+                    return True
+                case _:
+                    raise CompileError(f"Unsupported expression: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
     @staticmethod
     def _handler_body(handler: ast.ExceptHandler) -> list[ast.stmt]:

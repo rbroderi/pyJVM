@@ -151,36 +151,56 @@ def _build_import_exports(modules: dict[str, Path]) -> dict[str, list[str] | Non
     return cache
 
 
-def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None,
-                 *, target: int = DEFAULT_TARGET) -> Path:
-    source_path=Path(source_path); output_dir=Path(output_dir)
-    class_name=class_name or source_path.stem.title().replace("_","")
+class CompilePlan:
+    """Everything needed to compile a program's modules: the import map/exports and one job per module."""
+
+    def __init__(self, import_map, import_exports, jobs):
+        self.import_map = import_map
+        self.import_exports = import_exports
+        self.jobs = jobs   # (source path, jvm class name, module name, package name)
+
+
+def plan_compile(source_path, class_name=None) -> CompilePlan:
+    source_path = Path(source_path)
+    class_name = class_name or source_path.stem.title().replace("_", "")
     # Walk upward through package markers so imports are resolved from the package root.
-    root=source_path.parent
-    probe=source_path.parent
-    while (probe/'__init__.py').exists():
-        root=probe.parent; probe=probe.parent
-    main_module, main_is_package=_module_context(source_path,root)
-    modules: dict[str,Path]={}
-    _scan_local_imports(source_path,root,modules,main_module,main_is_package)
+    root = source_path.parent
+    probe = source_path.parent
+    while (probe / '__init__.py').exists():
+        root = probe.parent; probe = probe.parent
+    main_module, main_is_package = _module_context(source_path, root)
+    modules: dict[str, Path] = {}
+    _scan_local_imports(source_path, root, modules, main_module, main_is_package)
     # Include package parents so `import pkg.sub` can expose pkg.
     for name in list(modules):
-        parts=name.split('.')
-        for i in range(1,len(parts)):
-            parent='.'.join(parts[:i])
-            path=_find_module(root,parent)
-            if path is not None: modules.setdefault(parent,path)
-    import_map={name:"pyjvm315/imports/"+name.replace('.','/') for name in modules}
-    import_exports=_build_import_exports(modules)
-
-    def emit(path:Path,jvm_name:str,module_name:str)->Path:
+        parts = name.split('.')
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[:i])
+            path = _find_module(root, parent)
+            if path is not None: modules.setdefault(parent, path)
+    import_map = {name: "pyjvm315/imports/" + name.replace('.', '/') for name in modules}
+    import_exports = _build_import_exports(modules)
+    jobs = []
+    for name, path in list(modules.items()) + [("__main__", source_path)]:
         is_pkg = path.name == "__init__.py"
-        package_name = module_name if is_pkg else module_name.rpartition('.')[0]
-        data=compile_source(path.read_text(encoding="utf-8"),jvm_name,str(path),
-                            import_map=import_map,import_exports=import_exports,
-                            module_name=module_name,package_name=package_name,target=target)
-        rel=Path(*jvm_name.replace('/','.').split('.')); out=output_dir/rel.with_suffix('.class')
-        out.parent.mkdir(parents=True,exist_ok=True); out.write_bytes(data); return out
+        package_name = name if is_pkg else name.rpartition('.')[0]
+        jobs.append((path, import_map[name] if name != "__main__" else class_name, name, package_name))
+    return CompilePlan(import_map, import_exports, jobs)
 
-    for name,path in modules.items(): emit(path,import_map[name],name)
-    return emit(source_path,class_name,"__main__")
+
+def class_file_path(output_dir, jvm_name):
+    return Path(output_dir) / Path(*jvm_name.replace('/', '.').split('.')).with_suffix('.class')
+
+
+def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None,
+                 *, target: int = DEFAULT_TARGET) -> Path:
+    plan = plan_compile(source_path, class_name)
+    out = None
+    for path, jvm_name, module_name, package_name in plan.jobs:
+        data = compile_source(path.read_text(encoding="utf-8"), jvm_name, str(path),
+                              import_map=plan.import_map, import_exports=plan.import_exports,
+                              module_name=module_name, package_name=package_name, target=target)
+        out = class_file_path(output_dir, jvm_name)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+    return out

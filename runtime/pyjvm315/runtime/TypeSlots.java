@@ -33,6 +33,9 @@ final class TypeSlots {
         add(PyByteArray.class, PyByteArrayMethods::call);
         add(PyMemoryView.class, PyMemoryViewMethods::call);
         add(String.class, StringMethods::call);
+        add(Long.class, IntMethods::call);
+        add(java.math.BigInteger.class, IntMethods::call);
+        add(Boolean.class, IntMethods::call);
         add(List.class, ListMethods::call);
         add(Map.class, MapMethods::call);
         add(Set.class, SetMethods::call);

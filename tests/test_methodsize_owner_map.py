@@ -47,8 +47,8 @@ if __name__ == "__main__":
 
 class VersionPolicyTests(unittest.TestCase):
     def test_gate_header_and_feature_version(self):
-        from pyjvm315 import versions
+        from pyjvm315 import hostver, versions
         self.assertEqual(versions.MIN_PYTHON, (3, 13))
-        self.assertEqual(versions.required_python("# pyjvm: requires-python >= 3.15\nprint(1)\n"), (3, 15))
-        self.assertIsNone(versions.required_python("print(1)\n"))
+        self.assertEqual(hostver.required_python("# pyjvm: requires-python >= 3.15\nprint(1)\n"), (3, 15))
+        self.assertIsNone(hostver.required_python("print(1)\n"))
         self.assertGreaterEqual(versions.feature_version(), versions.MIN_PYTHON)

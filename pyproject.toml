@@ -20,3 +20,4 @@ pyjvm315-regression-probe = "pyjvm315.regression_probe:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["selfhost: runs the compiler on the JVM to compile itself (about a minute)"]
