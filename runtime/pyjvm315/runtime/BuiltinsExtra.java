@@ -113,6 +113,7 @@ public final class BuiltinsExtra {
 
     // ---------- range() ----------
     static BigInteger rangeIndex(Object value) {
+        value = NativeSubclass.indexValue(value);
         if (isIntLike(value)) return bigInt(value);
         if (value instanceof PyInstance instance) {
             PyMethod method = instance.cls.lookupMethod("__index__");

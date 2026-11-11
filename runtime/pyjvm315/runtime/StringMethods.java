@@ -222,6 +222,7 @@ final class StringMethods {
 
     static Object call(Object obj, String name, Object[] args) {
         String str=(String)obj;
+        if(!name.startsWith("format") && !name.equals("__mod__") && !name.equals("join")) args=NativeSubclass.unwrapArgs(args);
         return switch(name) {
             case "__mod__" -> { requireArgs(name,args,1); yield new PercentFormatter(str,args[0]).run(); }
             case "upper" -> { requireArgs(name,args,0); yield str.toUpperCase(Locale.ROOT); }
@@ -270,6 +271,7 @@ final class StringMethods {
                 requireArgs(name,args,1);
                 StringBuilder sb = new StringBuilder(); int k = 0;
                 for (Object x : iterable(args[0])) {
+                    x = NativeSubclass.unwrap(x);
                     if (!(x instanceof String part)) throw new PyException("TypeError", "sequence item " + k + ": expected str instance, " + PyRuntime.typeName(x) + " found");
                     if (k++ > 0) sb.append(str);
                     sb.append(part);
