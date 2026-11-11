@@ -15,21 +15,32 @@ final class Tracing {
     /** The global fast-path gate: some thread has a trace/profile function, or monitoring is active. */
     static volatile boolean enabled;
     /** sys.settrace / sys.setprofile are per thread (threading.settrace installs the hook in each new thread). */
-    private static final class TS { Object traceFn, profileFn; boolean busy; }
-    private static final ThreadLocal<TS> STATE = ThreadLocal.withInitial(TS::new);
+    private static final class TS { volatile Object traceFn, profileFn; boolean busy; }
+    private static final java.util.Set<TS> ALL = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final ThreadLocal<TS> STATE = ThreadLocal.withInitial(() -> { TS s = new TS(); ALL.add(s); return s; });
     private static final java.util.concurrent.atomic.AtomicInteger HOOKED = new java.util.concurrent.atomic.AtomicInteger();
 
+    static void touch() { STATE.get(); }
     static Object traceFn() { return STATE.get().traceFn; }
     static Object profileFn() { return STATE.get().profileFn; }
 
     static void refresh() { enabled = HOOKED.get() > 0 || Monitoring.active(); }
 
     private static void setHooks(TS s, Object trace, Object profile) {
-        boolean was = s.traceFn != null || s.profileFn != null;
-        s.traceFn = trace; s.profileFn = profile;
-        boolean now = trace != null || profile != null;
-        if (was != now) HOOKED.addAndGet(now ? 1 : -1);
+        synchronized (s) {
+            boolean was = s.traceFn != null || s.profileFn != null;
+            s.traceFn = trace; s.profileFn = profile;
+            boolean now = trace != null || profile != null;
+            if (was != now) HOOKED.addAndGet(now ? 1 : -1);
+        }
         refresh();
+    }
+
+    /** sys._settraceallthreads / sys._setprofileallthreads: every thread that has run Python code, and the caller. */
+    static Object setAllThreads(Object fn, boolean trace) {
+        STATE.get();
+        for (TS s : ALL) { if (trace) setHooks(s, fn, s.profileFn); else setHooks(s, s.traceFn, fn); }
+        return null;
     }
 
     static Object settrace(Object fn) { TS s = STATE.get(); setHooks(s, fn, s.profileFn); return null; }
@@ -39,6 +50,7 @@ final class Tracing {
     static void threadFinished() {
         TS s = STATE.get();
         if (s.traceFn != null || s.profileFn != null) setHooks(s, null, null);
+        ALL.remove(s);
         STATE.remove();
     }
 

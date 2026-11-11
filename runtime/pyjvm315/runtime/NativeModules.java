@@ -38,6 +38,8 @@ public final class NativeModules {
         ImportSupport.installSys(m);
         fn(m, "_getframe", (a, k) -> PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)));
         fn(m, "settrace", (a, k) -> Tracing.settrace(a.get(0)));
+        fn(m, "_settraceallthreads", (a, k) -> Tracing.setAllThreads(a.get(0), true));
+        fn(m, "_setprofileallthreads", (a, k) -> Tracing.setAllThreads(a.get(0), false));
         fn(m, "gettrace", (a, k) -> Tracing.traceFn());
         fn(m, "setprofile", (a, k) -> Tracing.setprofile(a.get(0)));
         fn(m, "getprofile", (a, k) -> Tracing.profileFn());

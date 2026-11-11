@@ -2975,6 +2975,7 @@ public final class PyRuntime {
     public static void classAddBase(Object cls, Object base) {
         PyClass target=(PyClass)cls;
         if(base instanceof PyClass pyBase){
+            if(pyBase.name.equals("lock") && "_thread".equals(pyBase.moduleName)) throw new PyException("TypeError","type '_thread.lock' is not an acceptable base type");
             target.bases.add(pyBase);
             if(pyBase.exceptionBase!=null && target.exceptionBase==null){ target.exceptionBase=pyBase.exceptionBase; EXCEPTION_PARENTS.put(target.name,pyBase.name); }
             return;
@@ -3683,7 +3684,7 @@ public final class PyRuntime {
         if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable || obj instanceof NativeFunction)
             return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         TypeSlots.CallMethod slot = TypeSlots.callMethodSlot(obj);
-        if (slot == null) throw typeError("method call on non-instance", obj);
+        if (slot == null) throw new PyException("AttributeError", "'" + typeName(obj) + "' object has no attribute '" + name + "'");
         return slot.call(obj, name, args);
     }
 

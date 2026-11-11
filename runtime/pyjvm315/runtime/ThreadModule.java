@@ -132,7 +132,10 @@ public final class ThreadModule {
         fn(m, "_get_main_thread_ident", (a, k) -> MAIN.threadId());
         fn(m, "set_name", (a, k) -> { if (!a.isEmpty() && a.get(0) instanceof String s) Thread.currentThread().setName(s); return null; });
         fn(m, "_get_name", (a, k) -> Thread.currentThread().getName());
-        fn(m, "interrupt_main", (a, k) -> { MAIN.interrupt(); return null; });
+        fn(m, "interrupt_main", (a, k) -> {
+            if (Thread.currentThread() == MAIN) throw new PyException("KeyboardInterrupt", null);
+            MAIN.interrupt(); return null;
+        });
         fn(m, "start_new_thread", (a, k) -> startNew(a));
         fn(m, "start_joinable_thread", (a, k) -> startJoinable(a, k));
         fn(m, "_make_thread_handle", (a, k) -> {
@@ -199,7 +202,7 @@ public final class ThreadModule {
         SyncSupport.enterMultiThreaded();
         RUNNING.incrementAndGet();
         Thread t = newThread(() -> {
-            try { runBody(fn, argv, kw); }
+            try { Tracing.touch(); runBody(fn, argv, kw); }
             finally { RUNNING.decrementAndGet(); SyncSupport.threadExit(); }
         }, true, null);
         t.start();
@@ -217,7 +220,7 @@ public final class ThreadModule {
         RUNNING.incrementAndGet();
         h.started = true;
         Thread t = newThread(() -> {
-            try { runBody(fn, new ArrayList<>(), new LinkedHashMap<>()); }
+            try { Tracing.touch(); runBody(fn, new ArrayList<>(), new LinkedHashMap<>()); }
             finally { RUNNING.decrementAndGet(); SyncSupport.threadExit(); h.done.countDown(); JOINABLE.remove(h); }
         }, daemon, null);
         h.thread = t; h.ident = t.threadId();
