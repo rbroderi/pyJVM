@@ -3359,8 +3359,31 @@ class Compiler:
                 case ast.Call(func=func, args=args, keywords=keywords):
                     self._emit_dynamic_call(func, args, keywords, b, scope)
                     return True
+                case _ if type(node).__name__ == "TemplateStr":
+                    self._template_str(node, b, scope)
+                    return True
                 case _:
                     raise CompileError(f"Unsupported expression: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
+
+    def _template_str(self, node, b, scope):
+        """PEP 750 t-string: a list of str parts and Interpolation objects handed to the runtime's Template constructor."""
+        b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+        for value in node.values:
+            b.dup()
+            if isinstance(value, ast.Constant):
+                self._expr(value, b, scope)
+            elif type(value).__name__ == "Interpolation":
+                self._expr(value.value, b, scope)
+                b.ldc_string(value.str)
+                if value.conversion == -1: b.aconst_null()
+                else: b.ldc_string(chr(value.conversion))
+                if value.format_spec is None: b.ldc_string("")
+                else: self._expr(value.format_spec, b, scope)
+                b.invokestatic(RUNTIME, "interpolation", f"({OBJ * 4}){OBJ}")
+            else:
+                raise CompileError("unsupported t-string component")
+            b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+        b.invokestatic(RUNTIME, "template", f"({OBJ}){OBJ}")
 
     @staticmethod
     def _handler_body(handler: ast.ExceptHandler) -> list[ast.stmt]:

@@ -27,6 +27,7 @@ final class PyInstanceMethods {
         if(instance.fields.containsKey(name))return callFunction(getattr(instance,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         PyMethod method = instance.cls.lookupMethod(name);
         if (method == null) {
+            if(name.equals("__init__") && instance.payload!=null && instance.cls.lookupAttr("__init__")==PyRuntime.MISSING) return null;
             Object callable=getattr(instance,name);
             return callFunction(callable,new ArrayList<Object>(Arrays.asList(args)),new LinkedHashMap<Object,Object>());
         }

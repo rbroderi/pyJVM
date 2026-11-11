@@ -1481,6 +1481,8 @@ public final class PyRuntime {
 
     // ---------- Containers ----------
     public static Object list0() { return new ArrayList<Object>(); }
+    public static Object interpolation(Object value,Object expression,Object conversion,Object formatSpec){return TemplateSupport.interpolation(value,expression,conversion,formatSpec);}
+    public static Object template(Object parts){return TemplateSupport.template(parts);}
     @SuppressWarnings("unchecked")
     public static void listAppend(Object list, Object value) { ((List<Object>) list).add(value); }
     @SuppressWarnings("unchecked")
