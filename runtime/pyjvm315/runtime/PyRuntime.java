@@ -3809,6 +3809,14 @@ public final class PyRuntime {
             LinkedHashMap<Object,Object> view=new LinkedHashMap<>();
             for(Object n:names)if(n instanceof String s)view.put(s,new BuiltinBoundMethod(type,s));
             for(String n:switch(type.name){case "dict"->List.of("fromkeys");case "int"->List.of("from_bytes");case "float"->List.of("fromhex");case "str","bytes"->List.of("maketrans");default->List.<String>of();})view.putIfAbsent(n,new BuiltinBoundMethod(type,n));
+            if(type.name.equals("type")) for(String attr:new String[]{"__annotations__","__annotate__"}){
+                NativeFunction descriptor=new NativeFunction(attr,(a,k)->{throw new PyException("TypeError","'"+attr+"' attribute descriptor of 'type' objects cannot be called");});
+                descriptor.attrs.put("__get__",new NativeFunction("__get__",(a,k)->{
+                    if(a.isEmpty()||!(a.get(0) instanceof PyClass owner))throw new PyException("AttributeError","type object '"+(a.isEmpty()?"?":typeName(a.get(0)))+"' has no attribute '"+attr+"'");
+                    return AnnotationSupport.classGet(owner,attr);
+                }));
+                view.putIfAbsent(attr,descriptor);
+            }
             if(!EXCEPTION_PARENTS.containsKey(type.name) || type.name.equals("BaseException")) view.putIfAbsent("__new__",new BuiltinBoundMethod(type,"__new__"));
             return view;
         }
