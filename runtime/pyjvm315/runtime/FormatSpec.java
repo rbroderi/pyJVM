@@ -18,6 +18,7 @@ final class FormatSpec {
     int precision = -1;
     int type;
     char group;          // 0, ',', '_', or 'F' for underscores every four digits (b/o/x/X)
+    char fracGroup;      // separator inside the fractional digits (3.15: ".3_f")
     boolean alternate, noNeg0, fillSpecified, alignSpecified;
 
     private FormatSpec() {}
@@ -50,8 +51,14 @@ final class FormatSpec {
         if (pos[0] < cp.length && cp[pos[0]] == '.') {
             pos[0]++;
             int p = integer(cp, pos, "precision");
-            if (p < 0) throw new PyException("ValueError", "Format specifier missing precision");
+            boolean fracNext = pos[0] < cp.length && (cp[pos[0]] == ',' || cp[pos[0]] == '_');
+            if (p < 0 && !fracNext) throw new PyException("ValueError", "Format specifier missing precision");
             f.precision = p;
+            if (fracNext) {
+                f.fracGroup = (char) cp[pos[0]++];
+                if (pos[0] < cp.length && (cp[pos[0]] == ',' || cp[pos[0]] == '_') && cp[pos[0]] != f.fracGroup)
+                    throw new PyException("ValueError", "Cannot specify both ',' and '_'.");
+            }
         }
         if (cp.length - pos[0] > 1)
             throw new PyException("ValueError", "Invalid format specifier '" + spec + "' for object of type '" + typeName + "'");
@@ -83,6 +90,7 @@ final class FormatSpec {
     }
 
     private void checkGrouping() {
+        if (fracGroup != 0 && type == 'n') throw new PyException("ValueError", "Cannot specify '" + fracGroup + "' with 'n'.");
         if (group == 0) return;
         switch (type) {
             case 'd', 'e', 'f', 'g', 'E', 'G', '%', 'F', 0 -> { }
@@ -169,11 +177,11 @@ final class FormatSpec {
 
     static String formatString(String text, String spec, String typeName) {
         FormatSpec f = parse(spec, typeName, 's', '<');
+        if (f.type != 's') throw unknownCode(f.type, typeName);
         if (f.sign != 0) throw new PyException("ValueError", (f.sign == ' ' ? "Space" : "Sign") + " not allowed in string format specifier");
         if (f.noNeg0) throw new PyException("ValueError", "Negative zero coercion (z) not allowed in string format specifier");
         if (f.alternate) throw new PyException("ValueError", "Alternate form (#) not allowed in string format specifier");
         if (f.align == '=') throw new PyException("ValueError", "'=' alignment not allowed in string format specifier");
-        if (f.type != 's') throw unknownCode(f.type, typeName);
         if (f.precision >= 0 && cpLen(text) > f.precision) text = text.substring(0, text.offsetByCodePoints(0, f.precision));
         return f.pad("", text, '<');
     }
@@ -240,7 +248,7 @@ final class FormatSpec {
         if (!Double.isFinite(abs)) return new String[]{body, ""};
         int end = 0;
         while (end < body.length() && Character.isDigit(body.charAt(end))) end++;
-        return new String[]{body.substring(0, end), body.substring(end)};
+        return new String[]{body.substring(0, end), groupFraction(body.substring(end))};
     }
 
     // ---------------------------------------------------------------- complex
@@ -294,6 +302,19 @@ final class FormatSpec {
         if (!Double.isFinite(abs)) return new String[]{body, ""};
         int end = 0;
         while (end < body.length() && Character.isDigit(body.charAt(end))) end++;
-        return new String[]{body.substring(0, end), body.substring(end)};
+        return new String[]{body.substring(0, end), groupFraction(body.substring(end))};
+    }
+
+    /** 3.15: group the digits after the decimal point of {@code rest} in threes with {@link #fracGroup}. */
+    private String groupFraction(String rest) {
+        if (fracGroup == 0 || rest.isEmpty() || rest.charAt(0) != '.') return rest;
+        int e = 1;
+        while (e < rest.length() && Character.isDigit(rest.charAt(e))) e++;
+        StringBuilder sb = new StringBuilder(".");
+        for (int i = 1; i < e; i++) {
+            if (i > 1 && (i - 1) % 3 == 0) sb.append(fracGroup);
+            sb.append(rest.charAt(i));
+        }
+        return sb.append(rest, e, rest.length()).toString();
     }
 }

@@ -1,4 +1,4 @@
-# pyjvm: requires-python >= 3.14
+# pyjvm: requires-python >= 3.15
 def t(f, a):
     try:
         print(repr(f % a))

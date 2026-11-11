@@ -180,8 +180,6 @@ final class FormatTemplate {
             String text = (String) part[1];
             if ((Boolean) part[0]) { value = getattr(value, text); continue; }
             long k = fieldIndex(text);
-            if (k >= 0 && NativeSubclass.unwrap(value) instanceof Map)
-                throw new PyException("TypeError", "'" + typeName(value) + "' object does not support indexing");
             value = getitem(value, k >= 0 ? (Object) k : text);
         }
         return value;
