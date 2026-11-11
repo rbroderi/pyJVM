@@ -124,22 +124,22 @@ public final class PyRuntime {
     /** `import ast` / `import _ast`: modules implemented in Java rather than compiled from Python. */
     public static Object importNative(Object nameObj) {
         String name=(String)nameObj;
-        PyModule cached=MODULE_CACHE.get(name); if(cached!=null) return cached;
+        PyModule cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
         PyModule module = switch(name){
             case "ast" -> AstModule.module();
             case "_ast" -> AstModule.privateModule();
             case "sys" -> NativeModules.sys();
             case "builtins" -> Namespaces.builtinsModule();
             case "jvm_io" -> NativeModules.jvmIo();
-            default -> throw new PyException("ImportError","No module named '"+name+"'");
+            default -> ImportSupport.createNative(name);
         };
-        MODULE_CACHE.put(name,module);
+        MODULE_CACHE.put(name,module); ImportSupport.register(name,module);
         return module;
     }
     public static Object importModule(Object nameObj,Object classObj) {
         String name=(String)nameObj, className=(String)classObj;
-        PyModule cached=MODULE_CACHE.get(name); if(cached!=null) return cached;
-        PyModule module=new PyModule(name,className); MODULE_CACHE.put(name,module);
+        PyModule cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
+        PyModule module=new PyModule(name,className); MODULE_CACHE.put(name,module); ImportSupport.register(name,module);
         int dot=name.lastIndexOf('.');
         if(dot>0){ PyModule parent=MODULE_CACHE.get(name.substring(0,dot)); if(parent!=null) parent.attrs.put(name.substring(dot+1),module); }
         for(var e:MODULE_CACHE.entrySet()) {
@@ -152,15 +152,16 @@ public final class PyRuntime {
             main.invoke(null,(Object)new String[0]);
             return module;
         } catch(java.lang.reflect.InvocationTargetException exc) {
-            MODULE_CACHE.remove(name); Throwable cause=exc.getCause();
+            MODULE_CACHE.remove(name); ImportSupport.unregister(name,module); Throwable cause=exc.getCause();
             if(cause instanceof RuntimeException r) throw r;
             if(cause instanceof Error e) throw e;
             throw new RuntimeException(cause);
         } catch(ReflectiveOperationException exc) {
-            MODULE_CACHE.remove(name); throw new PyException("ImportError","cannot import module '"+name+"': "+exc.getMessage());
+            MODULE_CACHE.remove(name); ImportSupport.unregister(name,module); throw new PyException("ImportError","cannot import module '"+name+"': "+exc.getMessage());
         }
     }
     static Object moduleDict(PyModule module) {
+        if(module.dict!=null) return module.dict;
         if(module.name.equals("builtins") && module.className.equals("pyjvm315.runtime.Namespaces"))return Namespaces.builtinsDict();
         LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
         out.putAll(module.attrs);
@@ -178,6 +179,8 @@ public final class PyRuntime {
     }
     public static Object moduleGetattr(Object moduleObj,Object nameObj) {
         PyModule module=(PyModule)moduleObj; String name=(String)nameObj;
+        if(module.lazyAttrs!=null) module.lazyAttrs.accept(name);
+        if(module.dict!=null) return ImportSupport.dictGetattr(module,name);
         if(name.equals("__dict__")) return moduleDict(module);
         if(module.attrs.containsKey(name)) return module.attrs.get(name);
         String[] fields={"__py_global_"+name,"__py_function_"+name,"__py_class_"+name};
@@ -192,6 +195,7 @@ public final class PyRuntime {
 
     /** module.name = value: a statically compiled module's own field when it has one, else the module's attribute table. */
     static void moduleSetattr(PyModule module,String name,Object value) {
+        if(module.dict!=null){module.dict.put(name,value);return;}
         if(!module.attrs.containsKey(name) && !module.className.startsWith("pyjvm315.runtime.")) {
             try {
                 Class<?> cls=Class.forName(module.className);
@@ -790,6 +794,7 @@ public final class PyRuntime {
         if(a instanceof PyComplex x){if(b instanceof PyComplex y)return new PyComplex(x.real+y.real,x.imag+y.imag);return new PyComplex(x.real+complexReal(b,false),x.imag);}
         if(b instanceof PyComplex y)return new PyComplex(complexReal(a,false)+y.real,y.imag);
         if (a instanceof String sa && b instanceof String sb) return sa + sb;
+        if (a instanceof PyTuple ta && b instanceof PyTuple tb) { PyTuple out=new PyTuple(); out.items.addAll(ta.items); out.items.addAll(tb.items); return out; }
         if((a instanceof PyBytes || a instanceof PyByteArray) && b instanceof PyByteSequence bb) {
             byte[] x=((PyByteSequence)a).toByteArray(),y=bb.toByteArray(),out=new byte[x.length+y.length];
             System.arraycopy(x,0,out,0,x.length);System.arraycopy(y,0,out,x.length,y.length);
@@ -2595,6 +2600,7 @@ public final class PyRuntime {
             return callMethod(method.self,method.name,args.toArray());
         }
         if (callable instanceof PyBuiltinType type) {
+            if(type.name.equals("module")) return ImportSupport.moduleCall(args,kwargs);
             if(type.name.equals("object")){
                 if(!args.isEmpty() || !kwargs.isEmpty())throw new PyException("TypeError","object() takes no arguments");
                 return new PyObject();
@@ -2896,6 +2902,7 @@ public final class PyRuntime {
             return;
         }
         if(base instanceof TypeParamsGeneric generic && generic.origin instanceof PyClass origin){ classAddBase(cls,origin); return; }
+        if(base instanceof PyBuiltinType lb && lb.name.equals("list")){ classAddBase(cls,ListBase.get()); return; }
         if(base instanceof PyBuiltinType sealed && sealed.name.equals("sentinel")) throw new PyException("TypeError","type 'sentinel' is not an acceptable base type");
         if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
@@ -3594,6 +3601,7 @@ public final class PyRuntime {
             if(function.metadata.containsKey(name))return function.metadata.get(name);
             if(function.attrs.containsKey(name))return function.attrs.get(name);
             if(name.equals("__type_params__"))return TypeParamsSupport.emptyTypeParams();
+            if(name.equals("__code__"))return new PyCode(function.displayName,function.filename,function.firstlineno);
             if(!name.equals("__class__"))throw new PyException("AttributeError","function has no attribute '"+name+"'");
         }
         if(obj instanceof PyMethodDescriptor method){
@@ -3661,6 +3669,7 @@ public final class PyRuntime {
             if (name.equals("__context__")) return exc.context;
             if (name.equals("__suppress_context__")) return exc.suppressContext;
             if (name.equals("__traceback__")) return exc.traceback;
+            Object importAttr=ImportSupport.exceptionAttr(exc,name); if(importAttr!=MISSING) return importAttr;
             throw new PyException("AttributeError", "'"+exc.typeName+"' object has no attribute '"+name+"'");
         }
         if(obj instanceof PyMemoryView view) {
@@ -3844,6 +3853,7 @@ public final class PyRuntime {
         if(obj instanceof PyMethodDescriptor method){if(!method.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");method.attrs.remove(nameObj);return;}
         if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
         if(obj instanceof PyModule module){
+            if(module.dict!=null){ImportSupport.dictDelattr(module,(String)nameObj);return;}
             if(!module.attrs.containsKey(nameObj)) throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+nameObj+"'");
             module.attrs.remove(nameObj);return;
         }

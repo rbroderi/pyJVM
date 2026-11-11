@@ -52,7 +52,7 @@ EXCEPTION_TYPES = {
     "FileExistsError", "BrokenPipeError", "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError",
 }
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
-NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins"}
+NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
@@ -68,6 +68,7 @@ BUILTIN_TYPES = {
     "list", "tuple", "dict", "set", "frozenset", "range", "type", "map", "zip", "enumerate", "filter", "slice", "super", "frozendict", "sentinel",
 }
 NAMESPACES = "pyjvm315/runtime/Namespaces"
+IMPORT_SUPPORT = "pyjvm315/runtime/ImportSupport"
 
 
 class FunctionInfo:
@@ -364,6 +365,29 @@ class Compiler:
                 b.ldc_string(self.class_name.replace("/", ".")); b.invokestatic(NAMESPACES, "moduleNamespace", f"({OBJ}){OBJ}")
         else:
             b.invokestatic(NAMESPACES, "localsCall", f"(){OBJ}")
+
+    def _emit_module_name(self, b: CodeBuilder) -> None:
+        """Push the module name for __module__: exec'd code takes it from the globals it runs in."""
+        if self.dynamic:
+            b.getstatic(self.class_name, "__py_globals", OBJ); b.ldc_string(self.module_name)
+            b.invokestatic(IMPORT_SUPPORT, "dynamicModuleName", f"({OBJ}{OBJ}){OBJ}")
+        else:
+            b.ldc_string(self.module_name)
+
+    def _emit_run_time_import(self, name: str, fromlist: str | None, level: int, b: CodeBuilder, scope: Scope) -> None:
+        """Leave the result of __import__(name, globals, None, fromlist, level) on the stack (ImportSupport.importName)."""
+        b.ldc_string(name)
+        if self.dynamic:
+            b.getstatic(self.class_name, "__py_globals", OBJ)
+        else:
+            b.aconst_null()
+        b.ldc_string(self.module_name); b.ldc_string(self.package_name or "")
+        if fromlist is None:
+            b.aconst_null()
+        else:
+            b.ldc_string(fromlist)
+        b.ldc_string(str(level))
+        b.invokestatic(IMPORT_SUPPORT, "importName", f"({OBJ*6}){OBJ}")
 
     def _emit_implicit_namespace_call(self, node: ast.Call, b: CodeBuilder, scope: Scope) -> None:
         """exec(x)/eval(x) in a statically compiled module: run in a snapshot of the caller's namespaces.
@@ -2024,7 +2048,7 @@ class Compiler:
         b.dup(); b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
 
-        b.dup(); b.ldc_string(self.module_name); b.ldc_string(info.qualname or info.name)
+        b.dup(); self._emit_module_name(b); b.ldc_string(info.qualname or info.name)
         if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant) and isinstance(node.body[0].value.value, str):
             b.ldc_string(node.body[0].value.value)
         else: b.aconst_null()
@@ -2145,7 +2169,7 @@ class Compiler:
         b.invokestatic(RUNTIME,"makeFunctionEx",f"({OBJ*10}){OBJ}")
         b.dup(); b.ldc_string("<lambda>"); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         b.invokestatic(RUNTIME,"setFunctionMeta",f"({OBJ*4})V")
-        b.dup(); b.ldc_string(self.module_name); b.ldc_string("<lambda>"); b.aconst_null()
+        b.dup(); self._emit_module_name(b); b.ldc_string("<lambda>"); b.aconst_null()
         b.invokestatic(RUNTIME,"setFunctionAttributes",f"({OBJ*4})V")
         b.dup(); self._boxed_bool("__class__" in info.free_names, b)
         b.invokestatic(RUNTIME, "setFunctionClassCell", f"({OBJ * 2})V")
@@ -2576,7 +2600,15 @@ class Compiler:
                             continue
                         jvm_name = self.import_map.get(module_name)
                         if jvm_name is None:
-                            raise CompileError(f"import of module {module_name!r} is not available")
+                            # not known at compile time: sys.meta_path decides when the statement runs
+                            self._emit_run_time_import(module_name, None, 0, b, scope)
+                            if alias.asname:
+                                for part in module_name.split('.')[1:]:
+                                    b.ldc_string(part); b.invokestatic(IMPORT_SUPPORT, "importFrom", f"({OBJ}{OBJ}){OBJ}")
+                                self._store_name(alias.asname, b, scope)
+                            else:
+                                self._store_name(module_name.split('.')[0], b, scope)
+                            continue
                         b.ldc_string(module_name); b.ldc_string(jvm_name.replace('/', '.'))
                         b.invokestatic(RUNTIME, "importModule", f"({OBJ}{OBJ}){OBJ}")
                         if alias.asname:
@@ -2609,13 +2641,27 @@ class Compiler:
                         parts = self.package_name.split('.') if self.package_name else []
                         up = level - 1
                         if up > len(parts):
-                            raise CompileError("attempted relative import beyond top-level package")
-                        base = parts[:len(parts)-up] if up else parts
-                        if module:
-                            base += module.split('.')
-                        resolved = '.'.join(base)
-                    if not resolved:
-                        raise CompileError("relative import requires a resolvable package")
+                            resolved = None
+                        else:
+                            base = parts[:len(parts)-up] if up else parts
+                            if module:
+                                base += module.split('.')
+                            resolved = '.'.join(base)
+                    if not resolved or (resolved not in NATIVE_MODULES and self.import_map.get(resolved) is None):
+                        # not known at compile time (or a relative import that only fails when it runs)
+                        self._emit_run_time_import(module or '', ','.join(alias.name for alias in names), level, b, scope)
+                        module_slot = scope.temp(); b.astore(module_slot)
+                        for alias in names:
+                            if alias.name == '*':
+                                if not (self.dynamic and scope.module):
+                                    raise CompileError(f"star import from {module or '.'!r} is resolved when the program runs; that is only supported in exec'd or imported-at-run-time code")
+                                b.aload(module_slot); self._emit_namespace_call("locals", b, scope)
+                                b.invokestatic(IMPORT_SUPPORT, "importStar", f"({OBJ}{OBJ}){OBJ}"); b.pop()
+                                continue
+                            b.aload(module_slot); b.ldc_string(alias.name)
+                            b.invokestatic(IMPORT_SUPPORT, "importFrom", f"({OBJ}{OBJ}){OBJ}")
+                            self._store_name(alias.asname or alias.name, b, scope)
+                        return True
                     if resolved in NATIVE_MODULES and not level:
                         if any(alias.name == '*' for alias in names):
                             raise CompileError(f"star import from native module {resolved!r} is not implemented")
@@ -2658,7 +2704,7 @@ class Compiler:
                     for decorator in decorators:
                         self._expr(decorator, b, scope)
                         slot = scope.temp(); b.astore(slot); decorator_slots.append(slot)
-                    b.ldc_string(name); b.ldc_string(self.module_name)
+                    b.ldc_string(name); self._emit_module_name(b)
                     b.invokestatic(RUNTIME, "classCreate", f"({OBJ}{OBJ}){OBJ}")
                     class_slot = scope.temp(); b.astore(class_slot)
                     b.aload(class_slot); b.ldc_string(info.qualname)

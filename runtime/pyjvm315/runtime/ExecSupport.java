@@ -211,7 +211,7 @@ final class ExecSupport {
         PYCF_KNOWN = 0x20000L | 0x40000L | 0x80000L | 0x100000L | 0x200000L | 0x400000L | 0x800000L | PYCF_FUTURE_ANNOTATIONS
             | 0x10L | 0x200L | 0x1000L | 0x4000L | PYCF_TOP_LEVEL_AWAIT | PYCF_OPTIMIZED_AST;
 
-    private static final java.util.Set<String> COMPILE_PARAMS = java.util.Set.of("source", "filename", "mode", "flags", "dont_inherit", "optimize", "_feature_version");
+    private static final java.util.Set<String> COMPILE_PARAMS = java.util.Set.of("source", "filename", "mode", "flags", "dont_inherit", "optimize", "_feature_version", "module");
 
     /**
      * The compile() builtin: source text, bytes or an AST, to a code object (or, with PyCF_ONLY_AST, an AST).

@@ -264,28 +264,7 @@ public final class BuiltinsExtra {
         throw new PyException("ImportError", "breakpoint() cannot import '" + module + "': no debugger or import system is available in this runtime");
     }
 
-    static Object importBuiltin(List<Object> args, Map<Object,Object> kwargs) {
-        for (Object key : kwargs.keySet())
-            if (!Set.of("name", "globals", "locals", "fromlist", "level").contains(key))
-                throw new PyException("TypeError", "__import__() got an unexpected keyword argument '" + key + "'");
-        if (args.size() > 5) throw new PyException("TypeError", "__import__() takes at most 5 arguments (" + args.size() + " given)");
-        Object name = args.size() > 0 ? args.get(0) : kwargs.get("name");
-        Object fromlist = args.size() > 3 ? args.get(3) : kwargs.get("fromlist");
-        Object level = args.size() > 4 ? args.get(4) : kwargs.getOrDefault("level", 0L);
-        if (name == null) throw new PyException("TypeError", "__import__() missing required argument 'name' (pos 1)");
-        if (!(name instanceof String text)) throw new PyException("TypeError", "__import__() argument 1 must be str, not " + typeName(name));
-        if (!isIntLike(level) || !bigInt(level).equals(BigInteger.ZERO)) {
-            if (isIntLike(level) && bigInt(level).signum() < 0) throw new PyException("ValueError", "level must be >= 0");
-            throw new PyException("ImportError", "relative __import__ is not supported: it needs the package context of the importing module");
-        }
-        if (text.isEmpty()) throw new PyException("ValueError", "Empty module name");
-        boolean wantLeaf = fromlist != null && truth(fromlist);
-        String lookup = wantLeaf ? text : text.substring(0, text.indexOf('.') < 0 ? text.length() : text.indexOf('.'));
-        PyModule cached = MODULE_CACHE.get(lookup);
-        if (cached != null) return cached;
-        try { return importNative(lookup); }
-        catch (PyException e) { throw new PyException("ModuleNotFoundError", "No module named '" + lookup + "'"); }
-    }
+    static Object importBuiltin(List<Object> args, Map<Object,Object> kwargs) { return ImportSupport.importBuiltin(args, kwargs); }
 
     // ---------- Exceptions ----------
     static void registerExceptionTypes(Map<String,String> parents) {
@@ -310,7 +289,8 @@ public final class BuiltinsExtra {
 
     static Object newExceptionCall(String type, List<Object> args, Map<Object,Object> kwargs) {
         if (!kwargs.isEmpty()) {
-            if (Set.of("ImportError", "ModuleNotFoundError", "SyntaxError", "IndentationError", "TabError", "OSError", "StopIteration").contains(type))
+            if (ImportSupport.isImportErrorType(type)) return ImportSupport.newImportError(type, args, kwargs);
+            if (Set.of("SyntaxError", "IndentationError", "TabError", "OSError", "StopIteration").contains(type))
                 throw new PyException("TypeError", type + "() keyword arguments are not supported by this runtime");
             throw new PyException("TypeError", type + "() takes no keyword arguments");
         }

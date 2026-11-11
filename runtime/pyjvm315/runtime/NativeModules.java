@@ -32,6 +32,7 @@ public final class NativeModules {
         for (String a : argv) args.add(a);
         m.attrs.put("argv", args);
         BuiltinsExtra.installSys(m);
+        ImportSupport.installSys(m);
         fn(m, "_getframe", (a, k) -> PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)));
         fn(m, "settrace", (a, k) -> Tracing.settrace(a.get(0)));
         fn(m, "gettrace", (a, k) -> Tracing.traceFn);

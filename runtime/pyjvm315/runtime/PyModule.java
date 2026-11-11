@@ -24,6 +24,10 @@ import java.util.Set;
 final class PyModule {
     final String name, className;
     final LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
+    /** The live {@code __dict__} of a module created at run time (types.ModuleType(name), import system); null for compiled/native modules. */
+    PyDict dict;
+    /** Run once before the first read of one of these attribute names (lazily installed state such as sys.meta_path); null for most modules. */
+    java.util.function.Consumer<String> lazyAttrs;
     PyModule(String name,String className){this.name=name;this.className=className;}
-    @Override public String toString(){return "<module '"+name+"'>";}
+    @Override public String toString(){return ImportSupport.moduleRepr(this);}
 }

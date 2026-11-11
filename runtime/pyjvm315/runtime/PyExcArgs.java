@@ -9,7 +9,10 @@ package pyjvm315.runtime;
 final class PyExcArgs {
     final PyTuple args;
     final PyTuple group;
-    PyExcArgs(PyTuple args, PyTuple group) { this.args = args; this.group = group; }
+    /** Keyword-only attributes (ImportError.name/path/name_from); null for most exceptions. */
+    final java.util.Map<String,Object> attrs;
+    PyExcArgs(PyTuple args, PyTuple group) { this(args, group, null); }
+    PyExcArgs(PyTuple args, PyTuple group, java.util.Map<String,Object> attrs) { this.args = args; this.group = group; this.attrs = attrs; }
 
     PyTuple copyArgs() { PyTuple out = new PyTuple(); out.items.addAll(args.items); return out; }
 
@@ -18,6 +21,9 @@ final class PyExcArgs {
             int n = group.items.size();
             return PyRuntime.pyStr(args.items.get(0)) + " (" + n + " sub-exception" + (n == 1 ? "" : "s") + ")";
         }
+        if (attrs != null && attrs.containsKey("errno") && attrs.get("strerror") != null && args.items.size() >= 2)
+            return "[Errno " + PyRuntime.pyStr(attrs.get("errno")) + "] " + PyRuntime.pyStr(attrs.get("strerror"))
+                + (attrs.get("filename") == null ? "" : ": " + PyRuntime.pyRepr(attrs.get("filename")));
         if (args.items.isEmpty()) return "";
         if (args.items.size() == 1) return PyRuntime.pyStr(args.items.get(0));
         return args.pyRepr();
