@@ -3320,8 +3320,8 @@ public final class PyRuntime {
         if(exceptionIsSubclass(type,"BaseException") && name.equals("__init__"))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
-            case "str" -> name.equals("__mod__");
-            case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__","__getattribute__").contains(name);
+            case "str" -> name.equals("__mod__") || name.equals("maketrans");
+            case "object" -> Set.of("__new__","__init__","__init_subclass__","__setattr__","__delattr__","__getattribute__","__eq__","__ne__").contains(name);
             case "type" -> Set.of("__new__","__init__","__call__","__setattr__","__delattr__").contains(name);
             case "super" -> Set.of("__new__","__init__","__get__").contains(name);
             case "classmethod","staticmethod","property" -> name.equals("__init__");
@@ -3384,7 +3384,7 @@ public final class PyRuntime {
                 NativeSubclass.defaultInit(instance,args,kwargs);
             } else if(instance instanceof PySuper sup) {
                 initializeSuper(sup,new ArrayList<>(Arrays.asList(args)),kwargs);
-            } else if((args.length!=0 || !kwargs.isEmpty()) && cls.exceptionBase==null) {
+            } else if((args.length!=0 || !kwargs.isEmpty()) && cls.exceptionBase==null && newMethod==null) {
                 throw new PyException("TypeError",cls.name+"() takes no arguments");
             }
         }
@@ -3493,6 +3493,12 @@ public final class PyRuntime {
             alias.fields.put("__parameters__",new PyTuple());
             return alias;
         }
+        if(builtin.name.equals("object") && (name.equals("__eq__") || name.equals("__ne__"))){
+            requireArgs(name,args,2);
+            if(name.equals("__eq__"))return args[0]==args[1]?(Object)Boolean.TRUE:NOT_IMPLEMENTED;
+            Object r=eq(args[0],args[1]);
+            return r==NOT_IMPLEMENTED?r:(Object)Boolean.valueOf(!truth(r));
+        }
         if(builtin.name.equals("object") && name.equals("__init__")){requireArgs(name,args,1);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__delattr__")){requireArgs(name,args,2);delattr(args[0],args[1]);return null;}
@@ -3528,6 +3534,31 @@ public final class PyRuntime {
             PyDict out=new PyDict();
             for(Object key:iterable(args[0])) out.put(key,args.length==2?args[1]:null);
             return builtin.name.equals("frozendict")?out.freeze():out;
+        }
+        if(builtin.name.equals("str") && name.equals("maketrans")){
+            if(args.length<1 || args.length>3)throw new PyException("TypeError","maketrans expected at most 3 arguments, got "+args.length);
+            PyDict table=new PyDict();
+            if(args.length==1){
+                if(!(args[0] instanceof Map<?,?> source))throw new PyException("TypeError","if you give only one argument to maketrans it must be a dict");
+                for(Map.Entry<?,?> e:source.entrySet()){
+                    Object key=e.getKey();
+                    if(key instanceof String ks){
+                        if(ks.codePointCount(0,ks.length())!=1)throw new PyException("ValueError","string keys in translate table must be of length 1");
+                        key=(long)ks.codePointAt(0);
+                    }else if(!(key instanceof Long || key instanceof BigInteger))throw new PyException("TypeError","keys in translate table must be strings or integers");
+                    table.put(key,e.getValue());
+                }
+                return table;
+            }
+            if(!(args[0] instanceof String from) || !(args[1] instanceof String to))throw new PyException("TypeError","maketrans() argument 1 must be str, not "+typeName(args[0]));
+            int[] a=from.codePoints().toArray(), b=to.codePoints().toArray();
+            if(a.length!=b.length)throw new PyException("ValueError","the first two maketrans arguments must have equal length");
+            for(int i=0;i<a.length;i++)table.put((long)a[i],(long)b[i]);
+            if(args.length==3){
+                if(!(args[2] instanceof String drop))throw new PyException("TypeError","maketrans() argument 3 must be str, not "+typeName(args[2]));
+                drop.codePoints().forEach(c->table.put((long)c,null));
+            }
+            return table;
         }
         if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
             requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
@@ -3858,6 +3889,7 @@ public final class PyRuntime {
             if(cls.nativeKind!=null || name.equals("__base__")){Object nativeValue=NativeSubclassMethods.classAttribute(cls,name);if(nativeValue!=MISSING)return nativeValue;}
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
+            if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {

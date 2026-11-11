@@ -51,6 +51,12 @@ final class NativeTypes {
         add(cls, pyName, owner, javaName, "instance", params, vararg, new PyDict());
     }
 
+    /** {@code def pyName(params, *vararg, **kwarg)}: the Java method receives the fixed parameters, the PyTuple of extras and the PyDict of keywords. */
+    static void methodVarKw(PyClass cls, Class<?> owner, String pyName, String javaName, String params, String vararg, String kwarg, PyDict defaults) {
+        PyRuntime.classAddMethodEx(cls, pyName, owner, javaName, "instance", "", params, "", vararg, kwarg, defaults, "<native>", 0L);
+        PyRuntime.classAddAttr(cls, pyName, cls.methods.get(pyName).function);
+    }
+
     static void staticMethod(PyClass cls, Class<?> owner, String pyName, String javaName, String params, PyDict defaults) {
         add(cls, pyName, owner, javaName, "static", params, null, defaults);
     }
