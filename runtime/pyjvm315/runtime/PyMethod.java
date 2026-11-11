@@ -21,15 +21,15 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyMethod {
-    final String owner;
+    final Object owner;
     final String javaName;
     final String kind;
     final PyFunction function;
-    PyMethod(String owner, String javaName, String kind, PyFunction function){this.owner=owner;this.javaName=javaName;this.kind=kind;this.function=function;}
+    PyMethod(Object owner, String javaName, String kind, PyFunction function){this.owner=owner;this.javaName=javaName;this.kind=kind;this.function=function;}
     @Override public boolean equals(Object o){return o instanceof PyMethod r && java.util.Objects.equals(owner,r.owner) && java.util.Objects.equals(javaName,r.javaName) && java.util.Objects.equals(kind,r.kind) && java.util.Objects.equals(function,r.function);}
     @Override public int hashCode(){return java.util.Objects.hash(owner,javaName,kind,function);}
     @Override public String toString(){return "PyMethod["+"owner="+owner+", "+"javaName="+javaName+", "+"kind="+kind+", "+"function="+function+"]";}
 
-    PyMethod(String owner,String javaName){this(owner,javaName,"instance",null);}
-    PyMethod(String owner,String javaName,String kind){this(owner,javaName,kind,null);}
+    PyMethod(Object owner,String javaName){this(owner,javaName,"instance",null);}
+    PyMethod(Object owner,String javaName,String kind){this(owner,javaName,kind,null);}
 }

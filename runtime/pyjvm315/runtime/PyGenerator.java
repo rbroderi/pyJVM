@@ -21,7 +21,7 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyGenerator implements Iterator<Object>, Iterable<Object> {
-    final String owner, resumeMethod;
+    final Object owner; final String resumeMethod;
     final PyEnv env;
     long state = 0;
     boolean finished = false;
@@ -34,10 +34,10 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
     String displayName, filename; long firstlineno;
     String firstArgument; boolean hasClassCell;
 
-    PyGenerator(String owner, String resumeMethod, PyEnv env) {
-        this(owner,resumeMethod,env,resumeMethod,owner,0);
+    PyGenerator(Object owner, String resumeMethod, PyEnv env) {
+        this(owner,resumeMethod,env,resumeMethod,String.valueOf(owner),0);
     }
-    PyGenerator(String owner,String resumeMethod,PyEnv env,String displayName,String filename,long firstlineno) {
+    PyGenerator(Object owner,String resumeMethod,PyEnv env,String displayName,String filename,long firstlineno) {
         this.owner=owner; this.resumeMethod=resumeMethod; this.env=env; this.displayName=displayName; this.filename=filename; this.firstlineno=firstlineno;
         ActiveFrame frame=currentLogicalFrame();
         if(frame!=null){firstArgument=frame.firstArgument;hasClassCell=frame.classEnv!=null;}
@@ -50,7 +50,7 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
         logical.inspectSupported=false;logical.firstArgument=firstArgument;logical.argumentEnv=env;logical.classEnv=hasClassCell?env:null;
         LOGICAL_FRAMES.get().push(logical);
         try {
-            Class<?> cls=Class.forName(owner);
+            Class<?> cls=ownerClass(owner);
             var reflected=cls.getDeclaredMethod(resumeMethod, Object.class);
             Object value=reflected.invoke(null, this);
             if (value == GENERATOR_DONE) { finished=true; throw new PyGeneratorEnd(returnValue); }

@@ -51,7 +51,7 @@ BUILTIN_FUNCTIONS = {
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
-    "aiter", "anext",
+    "aiter", "anext", "exec", "eval", "compile",
 }
 
 
@@ -171,7 +171,12 @@ class Compiler:
     def __init__(self, class_name: str, import_map: dict[str, str] | None = None,
                  import_exports: dict[str, list[str] | None] | None = None, *,
                  module_name: str = "__main__", package_name: str | None = None,
-                 target: int = DEFAULT_TARGET) -> None:
+                 target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> None:
+        # dynamic: exec()/eval() compilation. Module-level names live in caller-supplied
+        # namespace mappings (static fields __py_globals/__py_locals) instead of static fields.
+        self.dynamic = dynamic
+        self.mode = mode
+        self.eval_expr: ast.expr | None = None
         self.class_name = class_name.replace(".", "/")
         self.import_map = dict(import_map or {})
         self.import_exports = dict(import_exports or {})
@@ -201,7 +206,10 @@ class Compiler:
 
     def compile(self, source: str, filename: str = "<string>") -> bytes:
         self.filename = filename
-        tree = ast.parse(source, filename=filename, mode="exec", feature_version=feature_version())
+        tree = ast.parse(source, filename=filename, mode="eval" if self.mode == "eval" else "exec", feature_version=feature_version())
+        if self.mode == "eval":
+            self.eval_expr = tree.body
+            tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
         self.deleted_names = {name for n in ast.walk(tree) if isinstance(n, ast.Delete)
                               for t in n.targets for name in self._target_names(t)}
@@ -215,7 +223,10 @@ class Compiler:
         for node in self.class_nodes:
             self._compile_class_methods(node)
 
-        self._compile_main(tree.body)
+        if self.dynamic:
+            self._compile_dynamic_main(tree.body)
+        else:
+            self._compile_main(tree.body)
         return self.cf.to_bytes()
 
     def _register_module_globals(self, body: list[ast.stmt]) -> None:
@@ -278,7 +289,24 @@ class Compiler:
             self.global_fields[name] = field_name
             self.cf.add_field(Field(field_name))
 
-    def _load_name(self, name: str, b: CodeBuilder, scope: Scope) -> None:
+    def _emit_owner(self, b: CodeBuilder) -> None:
+        """The class holding compiled function bodies: its name, or (dynamic code) the Class itself."""
+        if self.dynamic:
+            b.ldc_class(self.class_name)
+        else:
+            b.ldc_string(self.class_name.replace("/", "."))
+
+    def _ns_field(self, scope: Scope, name: str) -> str:
+        """Module-level names live in the exec locals mapping; function-level globals in the globals mapping."""
+        return "__py_locals" if scope.module and name not in scope.global_decl else "__py_globals"
+
+    def _emit_ns_load(self, name: str, b: CodeBuilder, scope: Scope, via_function: bool) -> None:
+        local_first = scope.module and not via_function and name not in scope.global_decl
+        b.getstatic(self.class_name, "__py_locals" if local_first else "__py_globals", OBJ)
+        b.getstatic(self.class_name, "__py_globals", OBJ)
+        b.ldc_string(name); b.invokestatic(RUNTIME, "nsLoad", f"({OBJ*3}){OBJ}")
+
+    def _load_name(self, name: str, b: CodeBuilder, scope: Scope, via_function: bool = False) -> None:
         if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
             key = self._class_attr_name(name)
             missing, done = b.label(), b.label()
@@ -315,13 +343,15 @@ class Compiler:
                 b.invokestatic(RUNTIME, "envGet", f"({OBJ}{OBJ}){OBJ}")
                 return
         elif scope.parent is not None and not scope.has_local(name):
-            self._load_name(name, b, scope.parent)
+            self._load_name(name, b, scope.parent, via_function or not scope.module)
             return
         elif scope.has(name):
             b.aload(scope.get(name))
             if name in scope.checked_names:
                 b.ldc_string(name); b.invokestatic(RUNTIME, "requireLocal", f"({OBJ}{OBJ}){OBJ}")
             return
+        if self.dynamic:
+            self._emit_ns_load(name, b, scope, via_function); return
         if name in self.functions:
             info = self.functions[name]
             assert info.function_field is not None
@@ -349,6 +379,9 @@ class Compiler:
             value_slot = (temp_scope or scope).temp(); b.astore(value_slot)
             b.aload(scope.namespace_slot); b.ldc_string(self._class_attr_name(name)); b.aload(value_slot)
             b.invokestatic(RUNTIME, "classNamespacePut", f"({OBJ}{OBJ}{OBJ})V")
+        elif self.dynamic and (scope.module or name in scope.global_decl):
+            b.getstatic(self.class_name, self._ns_field(scope, name), OBJ); b.ldc_string(name)
+            b.invokestatic(RUNTIME, "nsStore", f"({OBJ*3})V")
         elif scope.module or name in scope.global_decl:
             if name not in self.global_fields:
                 self.global_names.add(name)
@@ -393,6 +426,9 @@ class Compiler:
             if scope.namespace_slot is not None and name not in scope.global_decl and name not in scope.nonlocal_decl:
                 b.aload(scope.namespace_slot); b.ldc_string(self._class_attr_name(name))
                 b.invokestatic(RUNTIME, "classNamespaceDelete", f"({OBJ}{OBJ})V")
+            elif self.dynamic and (scope.module or name in scope.global_decl):
+                b.getstatic(self.class_name, self._ns_field(scope, name), OBJ); b.ldc_string(name)
+                b.invokestatic(RUNTIME, "nsDelete", f"({OBJ*2})V")
             elif scope.module or name in scope.global_decl:
                 field = self._global_field(name)
                 b.getstatic(self.class_name, field, OBJ); b.ldc_string(name)
@@ -746,6 +782,30 @@ class Compiler:
         code = b.finish()
         self.cf.add_method(Method("main", "([Ljava/lang/String;)V", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
 
+    def _compile_dynamic_main(self, body: list[ast.stmt]) -> None:
+        """public static Object run(Object globals, Object locals): exec()/eval() entry point."""
+        for name in ("__py_globals", "__py_locals"):
+            self.cf.add_field(Field(name))
+        self.current_frame_name, self.current_frame_firstlineno = "<module>", 1
+        b = CodeBuilder(self.cf.cp)
+        scope = Scope(start_slot=2, module=True)
+        b.aload(0); b.putstatic(self.class_name, "__py_globals", OBJ)
+        b.aload(1); b.putstatic(self.class_name, "__py_locals", OBJ)
+        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1, b)
+        b.invokestatic(RUNTIME, "pushLogicalFrame", f"({OBJ*3})V")
+        if self.mode == "eval":
+            assert self.eval_expr is not None
+            self._expr(self.eval_expr, b, scope)
+        else:
+            for stmt in body:
+                self._stmt(stmt, b, scope, in_function=False)
+            b.aconst_null()
+        b.invokestatic(RUNTIME, "popLogicalFrame", "()V")
+        b.areturn()
+        code = b.finish()
+        self.cf.add_method(Method("run", f"({OBJ*2}){OBJ}", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
+
     @_preserve_codegen_state
     def _compile_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         info = self.function_infos[id(node)]
@@ -1062,7 +1122,7 @@ class Compiler:
             b.aload(env_slot); b.ldc_string(name); b.aload(scope.get(name))
             b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
         resume_name=info.java_name+"$resume"
-        b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
+        self._emit_owner(b); b.ldc_string(resume_name); b.aload(env_slot)
         b.ldc_string(info.name); b.ldc_string(self.filename); self._emit_int(node.lineno,b)
         maker = "makeAsyncGeneratorEx" if as_async_generator else ("makeSuspendableCoroutineEx" if as_coroutine else "makeGeneratorEx")
         b.invokestatic(RUNTIME,maker,f"({OBJ*6}){OBJ}"); b.areturn()
@@ -1628,7 +1688,7 @@ class Compiler:
             b.aload(defaults_slot); b.ldc_string(param); self._expr(expr, b, scope)
             b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
 
-        b.ldc_string(self.class_name.replace('/', '.'))
+        self._emit_owner(b)
         b.ldc_string(info.java_name)
         b.ldc_string(",".join(info.posonly)); b.ldc_string(",".join(info.poskw)); b.ldc_string(",".join(info.kwonly))
         if info.vararg is None: b.aconst_null()
@@ -1673,7 +1733,7 @@ class Compiler:
                 b.astore(fn_slot)
             b.aload(fn_slot)
 
-        if info.top_level:
+        if info.top_level and not self.dynamic:
             assert info.function_field is not None
             b.dup(); b.putstatic(self.class_name, info.function_field, OBJ)
             if scope.module: b.pop()
@@ -1731,7 +1791,7 @@ class Compiler:
         b.invokestatic(RUNTIME,"dict0",f"(){OBJ}"); defaults_slot=scope.temp(); b.astore(defaults_slot)
         for param,expr in [*info.defaults.items(),*info.kw_defaults.items()]:
             b.aload(defaults_slot); b.ldc_string(param); self._expr(expr,b,scope); b.invokestatic(RUNTIME,"dictPut",f"({OBJ}{OBJ}{OBJ})V")
-        b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(info.java_name)
+        self._emit_owner(b); b.ldc_string(info.java_name)
         b.ldc_string(",".join(info.posonly)); b.ldc_string(",".join(info.poskw)); b.ldc_string(",".join(info.kwonly))
         if info.vararg is None: b.aconst_null()
         else: b.ldc_string(info.vararg)
@@ -1829,7 +1889,7 @@ class Compiler:
         value_slot=scope.temp(); b.astore(value_slot)
         b.aload(env_slot); b.ldc_string(outer_name); b.aload(value_slot)
         b.invokestatic(RUNTIME,"envSetLocal",f"({OBJ}{OBJ}{OBJ})V")
-        b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
+        self._emit_owner(b); b.ldc_string(resume_name); b.aload(env_slot)
         if is_async:
             b.ldc_string("<asyncgenexpr>"); b.ldc_string(self.filename); self._emit_int(getattr(node,"lineno",1),b)
             b.invokestatic(RUNTIME,"makeAsyncGeneratorEx",f"({OBJ*6}){OBJ}")
@@ -1904,7 +1964,7 @@ class Compiler:
         else: b.aconst_null()
         b.invokestatic(RUNTIME,"envChild",f"({OBJ}){OBJ}")
         env_slot=scope.temp(); b.astore(env_slot)
-        b.ldc_string(self.class_name.replace('/','.')); b.ldc_string(resume_name); b.aload(env_slot)
+        self._emit_owner(b); b.ldc_string(resume_name); b.aload(env_slot)
         b.ldc_string("<asynccomp>"); b.ldc_string(self.filename); self._emit_int(getattr(node,"lineno",1),b)
         b.invokestatic(RUNTIME,"makeSuspendableCoroutineEx",f"({OBJ*6}){OBJ}")
 
@@ -2265,7 +2325,7 @@ class Compiler:
                     b.invokestatic(RUNTIME, "callFunction", f"({OBJ}{OBJ}{OBJ}){OBJ}")
                     b.astore(class_slot)
                 b.aload(class_slot)
-                if info.local: self._store_name(name, b, scope)
+                if info.local or self.dynamic: self._store_name(name, b, scope)
                 else: b.putstatic(self.class_name, info.class_field, OBJ)
             case ast.AnnAssign(target=ast.Name(id=name), value=value):
                 if value is None:
@@ -2394,6 +2454,24 @@ class Compiler:
                 raise CompileError(f"Unsupported statement: {type(node).__name__} at line {getattr(node, 'lineno', '?')}")
 
     def _expr(self, node: ast.expr, b: CodeBuilder, scope: Scope) -> None:
+        if self.dynamic and isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+            fname = node.func.id
+            bound_here = scope.has(fname) or fname in scope.local_names or fname in scope.free_names or fname in self.global_names
+            if fname in ("globals", "locals") and not node.args and not bound_here:
+                if fname == "locals" and not scope.module:
+                    raise CompileError("locals() inside a function of exec/eval code is not implemented")
+                b.getstatic(self.class_name, "__py_globals" if fname == "globals" else self._ns_field(scope, "locals"), OBJ)
+                return
+            if fname in ("exec", "eval") and len(node.args) == 1 and not bound_here:
+                # exec(x) / eval(x) run in the calling code's own namespaces
+                namespaced = ast.Call(func=node.func, keywords=[], args=[
+                    node.args[0],
+                    ast.Call(func=ast.Name(id="globals", ctx=ast.Load()), args=[], keywords=[]),
+                    ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[]) if scope.module
+                    else ast.Call(func=ast.Name(id="globals", ctx=ast.Load()), args=[], keywords=[])])
+                ast.copy_location(namespaced, node)
+                self._expr(namespaced, b, scope)
+                return
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id
             if name in {"min", "max", "sorted", "hex", "oct", "bin", "super"} or scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
@@ -2713,9 +2791,10 @@ def compile_source(source: str, class_name: str = "Main", filename: str = "<stri
                    import_map: dict[str,str] | None = None,
                    import_exports: dict[str, list[str] | None] | None = None,
                    module_name: str = "__main__", package_name: str | None = None,
-                   *, target: int = DEFAULT_TARGET) -> bytes:
+                   *, target: int = DEFAULT_TARGET, dynamic: bool = False, mode: str = "exec") -> bytes:
     return Compiler(class_name, import_map=import_map, import_exports=import_exports,
-                    module_name=module_name, package_name=package_name, target=target).compile(source, filename)
+                    module_name=module_name, package_name=package_name, target=target,
+                    dynamic=dynamic, mode=mode).compile(source, filename)
 
 
 def _module_context(path: Path, root: Path) -> tuple[str, bool]:

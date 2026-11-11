@@ -92,6 +92,7 @@ public final class PyRuntime {
         if (value instanceof BoundCallable) return "method";
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
         if (value instanceof BuiltinBoundMethod) return "builtin_function_or_method";
+        if (value instanceof PyCode) return "code";
         if (value instanceof PyLazyIterator it) return it.pyTypeName();
         if(value instanceof PySlice)return "slice";
         if(value==NOT_IMPLEMENTED)return "NotImplementedType";
@@ -183,6 +184,21 @@ public final class PyRuntime {
         if(name.equals("min") || name.equals("max")) return extreme(args,kwargs,name.equals("min"));
         if(name.equals("sorted")) return sortedCall(args,kwargs);
         if(name.equals("round"))return roundCall(args,kwargs);
+        if(name.equals("exec") || name.equals("eval")) {
+            for(Object key:kwargs.keySet()) if(!key.equals("globals") && !key.equals("locals") && !key.equals("closure"))
+                throw new PyException("TypeError",name+"() got an unexpected keyword argument '"+key+"'");
+            if(args.isEmpty() || args.size()>3) throw new PyException("TypeError",name+" expected at most 3 arguments, got "+args.size());
+            Object globals=args.size()>1?args.get(1):kwargs.get("globals"), locals=args.size()>2?args.get(2):kwargs.get("locals");
+            Object result=ExecSupport.run(name,args.get(0),globals,locals,name);
+            return name.equals("exec")?null:result;
+        }
+        if(name.equals("compile")) {
+            for(Object key:kwargs.keySet()) if(!Set.of("source","filename","mode","flags","dont_inherit","optimize").contains(key))
+                throw new PyException("TypeError","compile() got an unexpected keyword argument '"+key+"'");
+            Object source=args.size()>0?args.get(0):kwargs.get("source"), file=args.size()>1?args.get(1):kwargs.get("filename"), mode=args.size()>2?args.get(2):kwargs.get("mode");
+            if(source==null || file==null || mode==null) throw new PyException("TypeError","compile() missing required argument");
+            return ExecSupport.compileCode(source,file,mode);
+        }
         if(name.equals("zip")) {
             for(Object key:kwargs.keySet()) if(!key.equals("strict")) throw new PyException("TypeError","zip() got an unexpected keyword argument '"+key+"'");
             return new PyZip(args,truth(kwargs.getOrDefault("strict",false)));
@@ -2237,12 +2253,32 @@ public final class PyRuntime {
         if(value==UNBOUND) throw new PyException("NameError","name '"+name+"' is not defined");
         return value;
     }
+    // ---- namespaces for exec()/eval() code (see ExecSupport) ----
+    static Class<?> ownerClass(Object owner) throws ClassNotFoundException { return owner instanceof Class<?> c ? c : Class.forName((String)owner); }
+    public static Object nsLoad(Object locals,Object globals,Object nameObj) {
+        Map<?,?> l=(Map<?,?>)locals, g=(Map<?,?>)globals;
+        Object value=UNBOUND;
+        if(l!=g && l.containsKey(nameObj)) value=l.get(nameObj);
+        else if(g.containsKey(nameObj)) value=g.get(nameObj);
+        return globalGet(value,nameObj);
+    }
+    @SuppressWarnings("unchecked")
+    public static void nsStore(Object value,Object namespace,Object name) { ((Map<Object,Object>)namespace).put(name,value); }
+    public static void nsDelete(Object namespace,Object name) {
+        Map<?,?> map=(Map<?,?>)namespace;
+        if(!map.containsKey(name)) throw new PyException("NameError","name '"+name+"' is not defined");
+        map.remove(name);
+    }
+    static int logicalFrameDepth(){ return LOGICAL_FRAMES.get().size(); }
+    static void truncateLogicalFrames(int depth){ ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get(); while(stack.size()>depth) stack.pop(); }
+    /** Value of globals["__builtins__"]: builtins are resolved by name in the runtime, so this is a marker. */
+    static Object builtinModuleStandIn(){ return builtinFunction("print"); }
     public static Object globalGet(Object value,Object nameObj) {
         if(value!=UNBOUND) return value;
         String name=(String)nameObj;
         if(name.equals("NotImplemented")) return NOT_IMPLEMENTED;
         if(name.equals("Ellipsis")) return ELLIPSIS;
-        if(Set.of("ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
+        if(Set.of("exec","eval","compile","aiter","anext","ord","chr","repr","print","hash","id","len","iter","next","reversed","getattr","hasattr","setattr","delattr","callable","isinstance","issubclass","pow","abs","any","all","sum","min","max","sorted","hex","oct","bin","format","dir","vars","round").contains(name)) return builtinFunction(name);
         if(Set.of("object","int","bool","float","complex","classmethod","staticmethod","property","str","bytes","bytearray","memoryview","list","tuple","dict","set","frozenset","frozendict","range","type","map","zip","enumerate","filter","slice","super").contains(name) || exceptionIsSubclass(name,"BaseException")) return builtinType(name);
         return requireGlobal(value,name);
     }
@@ -2279,19 +2315,19 @@ public final class PyRuntime {
 
 
     public static Object makeGenerator(Object ownerObj, Object methodObj, Object envObj) {
-        return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj);
+        return new PyGenerator(ownerObj,(String)methodObj,(PyEnv)envObj);
     }
     public static Object makeGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
-        return new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
+        return new PyGenerator(ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
     }
     public static Object makeSuspendableCoroutineEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
-        PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
+        PyGenerator frame=new PyGenerator(ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyCoroutine(frame,(String)nameObj);
     }
     public static Object asyncGeneratorYield(Object value){return new PyAsyncGeneratorYield(value);}
 
     public static Object makeAsyncGeneratorEx(Object ownerObj,Object methodObj,Object envObj,Object nameObj,Object filenameObj,Object firstlineObj) {
-        PyGenerator frame=new PyGenerator((String)ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
+        PyGenerator frame=new PyGenerator(ownerObj,(String)methodObj,(PyEnv)envObj,(String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
         return new PyAsyncGenerator(frame,(String)nameObj);
     }
     public static void setGeneratorFirstArgument(Object generator,Object name){
@@ -2410,7 +2446,7 @@ public final class PyRuntime {
         LinkedHashMap<String,Object> defaults = new LinkedHashMap<>();
         for (var e : rawDefaults.entrySet()) defaults.put((String)e.getKey(), e.getValue());
         return new PyFunction(
-            (String)ownerObj, (String)methodObj,
+            ownerObj, (String)methodObj,
             splitNames((String)posonlyObj), splitNames((String)poskwObj), splitNames((String)kwonlyObj),
             (String)varargObj, (String)kwargObj, defaults
         );
@@ -2424,7 +2460,7 @@ public final class PyRuntime {
         LinkedHashMap<String,Object> defaults = new LinkedHashMap<>();
         for (var e : rawDefaults.entrySet()) defaults.put((String)e.getKey(), e.getValue());
         return new PyFunction(
-            (String)ownerObj, (String)methodObj,
+            ownerObj, (String)methodObj,
             splitNames((String)posonlyObj), splitNames((String)poskwObj), splitNames((String)kwonlyObj),
             (String)varargObj, (String)kwargObj, defaults, (PyEnv)closureObj, (Boolean)envModeObj
         );
@@ -2881,7 +2917,7 @@ public final class PyRuntime {
         classAddMethodKind(cls,pyName,owner,javaName,"instance");
     }
     public static void classAddMethodKind(Object cls, Object pyName, Object owner, Object javaName, Object kind) {
-        ((PyClass)cls).methods.put((String)pyName, new PyMethod((String)owner, (String)javaName, (String)kind));
+        ((PyClass)cls).methods.put((String)pyName, new PyMethod(owner, (String)javaName, (String)kind));
     }
     public static void classAddMethodEx(Object cls, Object pyName, Object owner, Object javaName, Object kind,
                                         Object posonlyObj, Object poskwObj, Object kwonlyObj,
@@ -2889,11 +2925,11 @@ public final class PyRuntime {
         @SuppressWarnings("unchecked") Map<Object,Object> rawDefaults=(Map<Object,Object>)defaultsObj;
         LinkedHashMap<String,Object> defaults=new LinkedHashMap<>();
         for(var e:rawDefaults.entrySet()) defaults.put((String)e.getKey(),e.getValue());
-        PyFunction function=new PyFunction((String)owner,(String)javaName,
+        PyFunction function=new PyFunction(owner,(String)javaName,
             splitNames((String)posonlyObj),splitNames((String)poskwObj),splitNames((String)kwonlyObj),
             (String)varargObj,(String)kwargObj,defaults);
         function.displayName=(String)pyName; function.filename=(String)filenameObj; function.firstlineno=bigInt(firstlineObj).longValue();
-        ((PyClass)cls).methods.put((String)pyName,new PyMethod((String)owner,(String)javaName,(String)kind,function));
+        ((PyClass)cls).methods.put((String)pyName,new PyMethod(owner,(String)javaName,(String)kind,function));
     }
     public static void classAddMethodClosure(Object cls, Object pyName, Object owner, Object javaName, Object kind,
                                              Object posonly, Object poskw, Object kwonly,
@@ -2904,7 +2940,7 @@ public final class PyRuntime {
         function.displayName=(String)pyName; function.filename=(String)filename;
         function.firstlineno=bigInt(firstline).longValue();
         ((PyClass)cls).methods.put((String)pyName,
-            new PyMethod((String)owner,(String)javaName,(String)kind,function));
+            new PyMethod(owner,(String)javaName,(String)kind,function));
     }
     public static void classSetQualname(Object cls,Object qualname) {
         ((PyClass)cls).qualname=(String)qualname;
@@ -3310,7 +3346,7 @@ public final class PyRuntime {
 
     static Object invokeReflective(PyMethod method,Object[] actual) {
         try {
-            Class<?> owner = Class.forName(method.owner);
+            Class<?> owner = ownerClass(method.owner);
             Class<?>[] types = new Class<?>[actual.length];
             Arrays.fill(types, Object.class);
             var reflected = owner.getDeclaredMethod(method.javaName, types);

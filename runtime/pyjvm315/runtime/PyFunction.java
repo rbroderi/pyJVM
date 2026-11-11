@@ -23,7 +23,7 @@ import java.util.Set;
 final class PyFunction {
     final LinkedHashMap<Object,Object> attrs=new LinkedHashMap<>();
     final LinkedHashMap<Object,Object> metadata=new LinkedHashMap<>();
-    final String owner, method;
+    final Object owner; final String method;
     final List<String> posonly, poskw, kwonly;
     final String vararg, kwarg;
     final LinkedHashMap<String,Object> defaults;
@@ -34,16 +34,16 @@ final class PyFunction {
     List<String> freeNames=List.of();
     PyTuple closureTuple;
 
-    PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
+    PyFunction(Object owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                String vararg, String kwarg, LinkedHashMap<String,Object> defaults) {
         this(owner, method, posonly, poskw, kwonly, vararg, kwarg, defaults, null, false);
     }
 
-    PyFunction(String owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
+    PyFunction(Object owner, String method, List<String> posonly, List<String> poskw, List<String> kwonly,
                String vararg, String kwarg, LinkedHashMap<String,Object> defaults, PyEnv closure, boolean envMode) {
         this.owner=owner; this.method=method; this.posonly=posonly; this.poskw=poskw; this.kwonly=kwonly;
         this.vararg=vararg; this.kwarg=kwarg; this.defaults=defaults; this.closure=closure; this.envMode=envMode;
-        this.displayName=method; this.filename=owner; this.firstlineno=0;
+        this.displayName=method; this.filename=String.valueOf(owner); this.firstlineno=0;
     }
 
     Object call(List<Object> args, Map<Object,Object> kwargsRaw) {
@@ -110,7 +110,7 @@ final class PyFunction {
         for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
         LOGICAL_FRAMES.get().push(logical);
         try {
-            Class<?> cls=Class.forName(owner);
+            Class<?> cls=ownerClass(owner);
             int hidden = envMode ? 1 : 0;
             Class<?>[] types=new Class<?>[bound.length + hidden]; Arrays.fill(types, Object.class);
             var reflected=cls.getDeclaredMethod(method, types);

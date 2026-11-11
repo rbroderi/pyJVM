@@ -172,6 +172,14 @@ class CodeBuilder:
             self.emit(0xC4, opcode)
             self.code.extend(u2(slot))
 
+    def ldc_class(self, name: str) -> None:
+        """Push the java.lang.Class constant for ``name``; for the class being defined this is the class itself (also when hidden)."""
+        idx = self.cp.class_(name)
+        if idx <= 0xFF:
+            self.emit(0x12, idx)
+        else:
+            self.emit_u2(0x13, idx)
+
     def ldc_string(self, value: str) -> None:
         idx = self.cp.string(value)
         if idx <= 0xFF:

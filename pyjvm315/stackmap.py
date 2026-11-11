@@ -199,6 +199,7 @@ def analyze(cp, owner, method):
             entry = cp.info[operand]
             if entry[0] == 'string': stack.append((7, 'java/lang/String'))
             elif entry[0] == 'int': stack.append(INT)
+            elif entry[0] == 'class': stack.append((7, 'java/lang/Class'))
             else: raise FrameError(f"Unsupported ldc constant at {pc}")
         elif op == 0x57:
             if width(pop()) != 1: raise FrameError(f"pop of category-2 value at {pc}")

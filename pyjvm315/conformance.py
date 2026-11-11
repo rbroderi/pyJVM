@@ -25,8 +25,9 @@ class Result:
     detail: str = ""
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(cmd: list[str], *, cwd: Path | None = None, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env.update(extra_env or {})
     env.setdefault("PYTHONHASHSEED", "0")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
@@ -87,7 +88,10 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
             return Result(source.name, "UNSUPPORTED", str(exc))
         except Exception as exc:
             return Result(source.name, "ERROR", f"build failed: {exc}")
-        jvm = _run([java_exe, "-Xverify:all", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", str(out), "ConformanceMain"], cwd=source.parent)
+        # exec()/eval()/compile() compile through the host-Python backend (until the compiler is self-hosted)
+        backend_env = {"PYJVM_HOME": str(Path(__file__).resolve().parent.parent), "PYJVM_PYTHON": python_exe}
+        jvm = _run([java_exe, "-Xverify:all", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", str(out), "ConformanceMain"],
+                   cwd=source.parent, extra_env=backend_env)
 
     if _stdout(jvm) != _stdout(py):
         return Result(source.name, "FAIL", f"stdout differs\nCPython: {py.stdout!r}\nJVM:     {jvm.stdout!r}\nJVM stderr: {jvm.stderr!r}")

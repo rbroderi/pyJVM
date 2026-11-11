@@ -22,6 +22,8 @@ import java.util.Set;
 
 final class PyCode {
     final String coName, coFilename; final long coFirstlineno;
+    /** Class file for code created by compile(); null for function code objects. */
+    byte[] classBytes; String mode="exec";
     PyCode(String name,String filename,long firstlineno){this.coName=name;this.coFilename=filename;this.coFirstlineno=firstlineno;}
     @Override public String toString(){return "<code object "+coName+">";}
 }
