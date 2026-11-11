@@ -22,7 +22,9 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyExceptionValue {
-    final String typeName; final Object value; SyntaxInfo syntax; final Object cause; final Object context; final boolean suppressContext; final PyTraceback traceback;
+    final String typeName; Object value; SyntaxInfo syntax; Object cause; Object context; boolean suppressContext; PyTraceback traceback;
+    /** User-visible attribute dict (``__notes__`` and anything assigned to the exception); created on first write. */
+    LinkedHashMap<Object,Object> dict;
     PyExceptionValue(String typeName, Object value) { this(typeName,value,null,null,false,null); }
     PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
     PyExceptionValue(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }

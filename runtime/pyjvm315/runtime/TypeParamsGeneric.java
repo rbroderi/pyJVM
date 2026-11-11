@@ -60,7 +60,7 @@ final class TypeParamsGeneric extends TypeParamsObject {
         return new TypeParamsGeneric(cls, keyArgs(key), false);
     }
 
-    private static final Set<String> SUBSCRIPTABLE = Set.of("list", "dict", "tuple", "set", "frozenset", "type");
+    private static final Set<String> SUBSCRIPTABLE = Set.of("list", "dict", "tuple", "set", "frozenset", "type", "ExceptionGroup", "BaseExceptionGroup");
 
     /** list[int] and friends. */
     static Object subscriptBuiltin(PyBuiltinType type, Object key) {

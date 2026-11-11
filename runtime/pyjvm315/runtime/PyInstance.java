@@ -27,6 +27,8 @@ class PyInstance {
     final LinkedHashMap<String,Object> slotValues = new LinkedHashMap<>();
     /** Native value of a builtin-backed instance (class derives from int/str/list/dict/...): BigInteger/Long, String, ArrayList, PyDict, ...; null for plain instances. */
     Object payload;
+    /** __cause__/__context__/__traceback__ of an exception instance; null for every other object. */
+    ExcState exc;
     PyInstance(PyClass cls) { this.cls = cls; }
     @Override public String toString() { return "<" + cls.name + " object>"; }
 }

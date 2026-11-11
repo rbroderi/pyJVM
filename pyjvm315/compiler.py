@@ -9,13 +9,15 @@ from .stackmap import FrameError
 from .versions import feature_version, deferred_annotations
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
 from .annot import lower_annotations, ANNOTATION_MARKERS, CLASSDICT_INTRINSIC
+from .carets import build_caret_table
+from .excstar import check_except_star_flow, lower_try_star
 from .typeparams import lower_type_params, TP_PREFIX, HELPERS as TYPEPARAM_HELPERS
 
 
 def _preserve_codegen_state(compile_method):
     """Synthetic/nested methods must not consume the caller's control stacks."""
     def wrapped(self, *args, **kwargs):
-        names = ("loop_stack", "exception_stack", "cleanup_stack", "finally_stack",
+        names = ("loop_stack", "exception_stack", "handler_depths", "cleanup_stack", "finally_stack",
                  "current_frame_name", "current_frame_firstlineno")
         saved = {name: getattr(self, name) for name in names}
         try:
@@ -222,6 +224,7 @@ class Compiler:
         self._async_comp_compiled: dict[int, str] = {}
         self.loop_stack: list[tuple[object, object]] = []  # (continue, break)
         self.exception_stack: list[int] = []
+        self.handler_depths: list[tuple[int, int]] = []
         self.dynamic_reraise = False
         self.cleanup_stack: list[tuple[str, object]] = []
         self.finally_stack: list[FinallyContext] = []
@@ -237,6 +240,9 @@ class Compiler:
         else:
             level = feature_version() if self.feature_version_override is None else self.feature_version_override
             tree = ast.parse(source, filename=filename, mode=self.mode, feature_version=level)
+        self.caret_table = ""
+        if not self.dynamic and not filename.startswith("<"):
+            self.caret_table = build_caret_table(tree, source)
         if self.mode == "eval":
             self.eval_expr = tree.body
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
@@ -245,6 +251,8 @@ class Compiler:
         if self.optimize >= 2:
             strip_docstrings(tree)
         check_async_scopes(tree)
+        check_except_star_flow(tree)
+        tree = lower_try_star(tree)
         tree = lower_match(tree)
         tree = lower_type_params(tree, self.dynamic, self.module_name)
         tree = lower_annotations(tree, deferred_annotations(), self.dynamic)
@@ -921,9 +929,12 @@ class Compiler:
             b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.putstatic(self.class_name, self._global_field(name), OBJ)
         if self.has_implicit_exec:
             b.invokestatic(RUNTIME, "dict0", f"(){OBJ}"); b.putstatic(self.class_name, "__py_extras", OBJ)
-        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b); self._emit_owner(b)
         b.invokestatic(RUNTIME,"pushModuleFrame",f"({OBJ*4})V")
+        for chunk_start in range(0, len(self.caret_table), 16000):
+            b.ldc_string(self.filename); b.ldc_string(self.caret_table[chunk_start:chunk_start + 16000])
+            b.invokestatic(RUNTIME2, "registerCarets", f"({OBJ}{OBJ})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         if self.module_name == "__main__":
             b.aconst_null()
@@ -944,9 +955,19 @@ class Compiler:
             b.aload(loader_slot)
             b.invokestatic(RUNTIME, "makeModuleSpec", f"({OBJ*5}){OBJ}")
             self._store_name("__spec__", b, scope)
+        guard_start, guard_end, guard_handler = b.label(), b.label(), b.label()
+        b.mark(guard_start)
         scope = self._emit_module_body(body, b, scope)
+        b.mark(guard_end)
         b.invokestatic(RUNTIME,"popLogicalFrame",f"()V")
         b.return_()
+        if self.module_name == "__main__":
+            # an exception leaving the program is reported like CPython does (sys.excepthook) and sets the exit status
+            guard_slot = scope.temp()
+            b.mark(guard_handler); b.astore(guard_slot)
+            b.aload(guard_slot); b.invokestatic("pyjvm315/runtime/ExceptionGroupSupport", "handleUncaught", f"({OBJ})V")
+            b.return_()
+            b.add_exception_handler(guard_start, guard_end, guard_handler, "java/lang/Throwable")
         code = b.finish()
         self.cf.add_method(Method("main", "([Ljava/lang/String;)V", code, max_locals=max(8, scope.next_slot + 2), exception_table=b.exception_table))
 
@@ -960,7 +981,7 @@ class Compiler:
         scope = Scope(start_slot=2, module=True)
         b.aload(0); b.putstatic(self.class_name, "__py_globals", OBJ)
         b.aload(1); b.putstatic(self.class_name, "__py_locals", OBJ)
-        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1, b); self._emit_owner(b)
         b.invokestatic(RUNTIME, "pushModuleFrame", f"({OBJ*4})V")
         b.ldc_class(self.class_name); b.aload(1)
@@ -1033,7 +1054,7 @@ class Compiler:
                 if not scope.has_local(name):
                     b.invokestatic(RUNTIME, "unbound", f"(){OBJ}"); b.astore(scope.define(name))
                 scope.checked_names.add(name)
-        self.loop_stack = []; self.exception_stack = []; self.cleanup_stack = []; self.finally_stack = []; self.cleanup_stack = []; self.finally_stack = []
+        self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []; self.cleanup_stack = []; self.finally_stack = []
         for stmt in node.body:
             self._stmt(stmt, b, scope, in_function=True)
         b.aconst_null(); b.areturn()
@@ -1366,7 +1387,7 @@ class Compiler:
             b.invokestatic(RUNTIME,"truth",f"({OBJ})Z"); b.ifne(label)
         b.goto(invalid)
         b.mark(labels[0])
-        self.loop_stack=[]; self.exception_stack=[]; self.cleanup_stack=[]; self.finally_stack=[]
+        self.loop_stack=[]; self.exception_stack=[]; self.handler_depths=[]; self.cleanup_stack=[]; self.finally_stack=[]
         gen_finally_stack: list[list[ast.stmt]] = []
         gen_cleanup_order: list[tuple[str, object]] = []
         gen_active_exception_env: list[str] = []
@@ -1688,11 +1709,16 @@ class Compiler:
                 # one or more yields.
                 exc_env = f"$active_exc_{synthetic_counter[0]}"; synthetic_counter[0] += 1
                 self._gen_env_store(exc_env, exc_slot, b, scope)
+                depth_env = f"$active_depth_{synthetic_counter[0]}"; synthetic_counter[0] += 1
+                depth_tmp = scope.temp()
+                b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_tmp)
+                self._gen_env_store(depth_env, depth_tmp, b, scope)
                 self.exception_stack.append(exc_slot)
                 gen_active_exception_env.append(exc_env)
                 for x in self._handler_body(handler): gen_stmt(x)
                 gen_active_exception_env.pop()
                 self.exception_stack.pop()
+                self._gen_env_load(depth_env, b, scope); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
                 b.goto(done)
                 b.mark(next_handler)
             b.aload(exc_slot); b.athrow()
@@ -2857,12 +2883,14 @@ class Compiler:
                 case ast.Break():
                     if not self.loop_stack: raise CompileError("break outside loop")
                     target = self.loop_stack[-1][1]
+                    self._leave_handlers_for_branch(b)
                     if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
                     else: b.goto(target)
                     return True
                 case ast.Continue():
                     if not self.loop_stack: raise CompileError("continue outside loop")
                     target = self.loop_stack[-1][0]
+                    self._leave_handlers_for_branch(b)
                     if self.finally_stack: b.goto(self._branch_cleanup_entry(self.finally_stack[-1], target, b))
                     else: b.goto(target)
                     return True
@@ -2899,7 +2927,11 @@ class Compiler:
                                 b.invokestatic(RUNTIME, "raiseObject", f"({OBJ})V")
                         else:
                             self._expr(cause, b, scope)
-                            b.invokestatic(RUNTIME, "raiseObjectFrom", f"({OBJ}{OBJ})V")
+                            if self.exception_stack:
+                                b.aload(self.exception_stack[-1])
+                                b.invokestatic(RUNTIME, "raiseObjectFromWithContext", f"({OBJ}{OBJ}{OBJ})V")
+                            else:
+                                b.invokestatic(RUNTIME, "raiseObjectFrom", f"({OBJ}{OBJ})V")
                     return True
                 case ast.Try(body=body, handlers=handlers, orelse=orelse, finalbody=[]):
                     self._compile_try_except(body, handlers, orelse, b, scope, in_function)
@@ -3214,6 +3246,11 @@ class Compiler:
                 case ast.Call(func=ast.Name(id="__py_exc_leave_internal"), args=[ast.Constant(value=int() as depth_slot)], keywords=[]):
                     b.aload(depth_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V"); b.aconst_null()
                     return True
+                case ast.Call(func=ast.Name(id="__py_eg_internal"), args=eg_args, keywords=[]):
+                    for eg_arg in eg_args: self._expr(eg_arg, b, scope)
+                    for _pad in range(4 - len(eg_args)): b.aconst_null()
+                    b.invokestatic("pyjvm315/runtime/ExceptionGroupSupport", "egOp", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
+                    return True
                 case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
                     self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
                     return True
@@ -3317,17 +3354,31 @@ class Compiler:
         delete = ast.Delete(targets=[ast.Name(id=handler.name, ctx=ast.Del())])
         wrapped = ast.Try(body=handler.body, handlers=[], orelse=[], finalbody=[clear, delete])
         ast.copy_location(wrapped, handler)
-        return [ast.fix_missing_locations(wrapped)]
+        ast.fix_missing_locations(wrapped)
+        # the implicit cleanup must not move the frame's current line (a traceback raised through it keeps the raise line)
+        del clear.lineno, delete.lineno
+        return [wrapped]
 
     def _compile_try_except(self, body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         start, protected_end, dispatch, done = b.label(), b.label(), b.label(), b.label()
         exc_slot = scope.temp()
+        # an exception that left an except clause of this try body leaves that clause's entry on the handled stack
+        reset_slot = -1
+        if self._contains_handler(body):
+            reset_slot = scope.temp()
+            b.invokestatic(RUNTIME2, "excDepth", f"(){OBJ}"); b.astore(reset_slot)
         b.mark(start)
         for stmt in body: self._stmt(stmt, b, scope, in_function)
         b.mark(protected_end)
         for stmt in orelse: self._stmt(stmt, b, scope, in_function)
         b.goto(done)
-        b.mark(dispatch); b.astore(exc_slot)
+        b.mark(dispatch)
+        if reset_slot >= 0:
+            b.invokestatic(RUNTIME2, "liftForeign", "(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
+        b.astore(exc_slot)
+        b.aload(exc_slot); b.invokestatic(RUNTIME2, "attachContext", f"({OBJ})V")
+        if reset_slot >= 0:
+            b.aload(reset_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
         b.aload(exc_slot); b.invokestatic(RUNTIME,"tracebackAddCurrentFrame",f"({OBJ})V")
         b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
         self._trace_handler_entry(None, exc_slot, b)
@@ -3340,6 +3391,9 @@ class Compiler:
                 b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}"); self._store_name(handler.name, b, scope)
             self.exception_stack.append(exc_slot)
             handler_body = self._handler_body(handler)
+            frame_depth = None
+            if not self.dynamic_reraise:
+                frame_depth = self._handler_enter(exc_slot, b, scope)
             if self.dynamic_reraise:
                 depth_slot = scope.temp()
                 b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_slot)
@@ -3349,10 +3403,37 @@ class Compiler:
                 handler_body = [ast.fix_missing_locations(wrapped_body)]
             for stmt in handler_body: self._stmt(stmt, b, scope, in_function)
             self.exception_stack.pop()
+            if frame_depth is not None: self._handler_leave(frame_depth, b)
             b.goto(done)
             b.mark(next_handler)
         b.aload(exc_slot); b.athrow()
         b.mark(done)
+
+    @staticmethod
+    def _contains_handler(stmts: list[ast.stmt]) -> bool:
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.ExceptHandler): return True
+        return False
+
+    def _handler_enter(self, exc_slot: int, b: CodeBuilder, scope: Scope) -> int:
+        """Record the exception an except clause is handling (sys.exception()); returns the slot holding the previous depth."""
+        depth_slot = scope.temp()
+        b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_slot)
+        self.handler_depths.append((depth_slot, len(self.loop_stack)))
+        return depth_slot
+
+    def _handler_leave(self, depth_slot: int, b: CodeBuilder) -> None:
+        self.handler_depths.pop()
+        b.aload(depth_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
+
+    def _leave_handlers_for_branch(self, b: CodeBuilder) -> None:
+        """break/continue leaves every except clause opened inside the loop it jumps out of."""
+        depth = len(self.loop_stack)
+        for slot, loop_depth in self.handler_depths:
+            if loop_depth == depth:
+                b.aload(slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
+                return
 
     def _except_name_is_variable(self, name: str, scope: Scope) -> bool:
         if name in EXCEPTION_TYPES or name in self.classes or name in self.functions:

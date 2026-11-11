@@ -126,7 +126,8 @@ final class PyFunction {
             return reflected.invoke(null, actual);
         } catch (java.lang.reflect.InvocationTargetException exc) {
             Throwable cause=exc.getCause();
-            if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
+            if (cause instanceof PyException p) { BuiltinsExtra.attachContext(p,logical); p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
+            if (cause instanceof ArithmeticException || cause instanceof IndexOutOfBoundsException) { PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); BuiltinsExtra.attachContext(lifted,logical); lifted.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw lifted; }
             if (cause instanceof RuntimeException r) throw r;
             if (cause instanceof Error e) throw e;
             throw new RuntimeException(cause);
@@ -168,7 +169,8 @@ final class PyFunction {
         } catch (java.lang.reflect.InvocationTargetException exc) {
             Throwable cause=exc.getCause();
             if (cause instanceof PyException p && traced) Tracing.unwind(logical,p);
-            if (cause instanceof PyException p) { p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
+            if (cause instanceof PyException p) { BuiltinsExtra.attachContext(p,logical); p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
+            if (cause instanceof ArithmeticException || cause instanceof IndexOutOfBoundsException) { PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); BuiltinsExtra.attachContext(lifted,logical); lifted.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw lifted; }
             if (cause instanceof RuntimeException r) throw r;
             if (cause instanceof Error e) throw e;
             throw new RuntimeException(cause);
