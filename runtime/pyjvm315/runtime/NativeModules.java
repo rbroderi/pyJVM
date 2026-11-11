@@ -31,6 +31,7 @@ public final class NativeModules {
         ArrayList<Object> args = new ArrayList<>();
         for (String a : argv) args.add(a);
         m.attrs.put("argv", args);
+        BuiltinsExtra.installSys(m);
         return m;
     }
 

@@ -192,11 +192,7 @@ public final class PyRuntime {
     static final Map<String,PyBuiltinFunction> BUILTIN_FUNCTIONS=new java.util.concurrent.ConcurrentHashMap<>();
     public static Object builtinFunction(Object name) { return BUILTIN_FUNCTIONS.computeIfAbsent((String)name,PyBuiltinFunction::new); }
     static Object callBuiltin(String name,List<Object> args,Map<Object,Object> kwargs) {
-        if(name.equals("print")) {
-            for(Object key:kwargs.keySet()) if(!key.equals("sep") && !key.equals("end"))
-                throw new PyException("TypeError","unsupported print keyword");
-            return printArgs(args,kwargs.get("sep"),kwargs.get("end"));
-        }
+        if(name.equals("print")) return BuiltinsExtra.printKw(args,kwargs);
         if(name.equals("min") || name.equals("max")) return extreme(args,kwargs,name.equals("min"));
         if(name.equals("sorted")) return sortedCall(args,kwargs);
         if(name.equals("round"))return roundCall(args,kwargs);
@@ -231,6 +227,7 @@ public final class PyRuntime {
             if(args.size()>2 || iterable==null && !kwargs.containsKey("iterable")) throw new PyException("TypeError","enumerate() takes at most 2 arguments");
             return new PyEnumerate(iterable,start);
         }
+        if(BuiltinsExtra.handles(name)) return BuiltinsExtra.call(name,args,kwargs);
         if(!kwargs.isEmpty()) throw new PyException("TypeError",name+"() does not accept keyword arguments");
         if(name.equals("filter")) {
             if(args.size()!=2) throw new PyException("TypeError","filter expected 2 arguments, got "+args.size());
@@ -489,6 +486,7 @@ public final class PyRuntime {
         if (value instanceof PyMemoryView view) return view.toString();
         if (value instanceof PyTuple t) return t.pyRepr();
         if (value instanceof PyDictView v) return v.pyRepr();
+        if (value instanceof PyExcArgs a) return a.str();
         if (value instanceof PyExceptionValue e) return e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):pyStr(e.value);
         if (value instanceof PyException e) return e.value==null?"":e.typeName.equals("KeyError")?pyRepr(e.value):e.getMessage() == null ? "" : e.getMessage();
         if (value instanceof Throwable t) return t.getMessage() == null ? "" : t.getMessage();
@@ -547,6 +545,7 @@ public final class PyRuntime {
     }
     public static String pyRepr(Object value) {
         if (value instanceof String s) return stringRepr(s);
+        if (value instanceof PyExceptionValue exc) return BuiltinsExtra.exceptionRepr(exc);
         if (value instanceof PyBytes bytes) return bytesRepr(bytes.data);
         if (value instanceof PyByteArray bytes) return "bytearray("+bytesRepr(bytes.toByteArray())+")";
         if(value instanceof PyInstance exc && exc.cls.exceptionBase!=null && exc.cls.lookupMethod("__repr__")==null && exc.fields.get("args") instanceof PyTuple a) {
@@ -1797,9 +1796,13 @@ public final class PyRuntime {
     }
 
     // ---------- Iteration / range ----------
-    public static Object range1(Object stop) { return new PyRange(BigInteger.ZERO, bigInt(stop), BigInteger.ONE); }
-    public static Object range2(Object start, Object stop) { return new PyRange(bigInt(start), bigInt(stop), BigInteger.ONE); }
-    public static Object range3(Object start, Object stop, Object step) { return new PyRange(bigInt(start), bigInt(stop), bigInt(step)); }
+    public static Object range1(Object stop) { return new PyRange(BigInteger.ZERO, BuiltinsExtra.rangeIndex(stop), BigInteger.ONE); }
+    public static Object range2(Object start, Object stop) { return new PyRange(BuiltinsExtra.rangeIndex(start), BuiltinsExtra.rangeIndex(stop), BigInteger.ONE); }
+    public static Object range3(Object start, Object stop, Object step) {
+        BigInteger a=BuiltinsExtra.rangeIndex(start), b=BuiltinsExtra.rangeIndex(stop), c=BuiltinsExtra.rangeIndex(step);
+        if(c.signum()==0) throw new PyException("ValueError","range() arg 3 must not be zero");
+        return new PyRange(a,b,c);
+    }
 
     public static Object iter(Object value) {
         if(value instanceof Iterator<?>) return value;
@@ -2599,8 +2602,7 @@ public final class PyRuntime {
                 return new PyManagedProperty(values[0],values[1],values[2],values[3]);
             }
             if(type.name.equals("range")){
-                if(!kwargs.isEmpty() || args.isEmpty() || args.size()>3)throw new PyException("TypeError","invalid range() arguments");
-                return args.size()==1?range1(args.get(0)):args.size()==2?range2(args.get(0),args.get(1)):range3(args.get(0),args.get(1),args.get(2));
+                return BuiltinsExtra.rangeCall(args,kwargs);
             }
             if(type.name.equals("type")){
                 if(kwargs.isEmpty() && args.size()==1)return typeOf(args.get(0));
@@ -2617,8 +2619,7 @@ public final class PyRuntime {
                 return new PySlice(args.size()==1?null:args.get(0),args.size()==1?args.get(0):args.get(1),args.size()<3?null:args.get(2));
             }
             if(exceptionIsSubclass(type.name,"BaseException")) {
-                if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError","exception accepts zero or one argument in this runtime");
-                return makeException(type.name,args.isEmpty()?null:args.get(0));
+                return BuiltinsExtra.newExceptionCall(type.name,args,kwargs);
             }
             if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError","invalid builtin constructor arguments");
             Object value=args.isEmpty()?null:args.get(0);
@@ -2825,10 +2826,12 @@ public final class PyRuntime {
         Map.entry("ChildProcessError","OSError"), Map.entry("InterruptedError","OSError"),
         Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
         Map.entry("ProcessLookupError","OSError")));
+    static { BuiltinsExtra.registerExceptionTypes(EXCEPTION_PARENTS); }
     static boolean exceptionIsSubclass(String actual, String requested) {
         if(actual.equals(requested)) return actual.equals("BaseException") || EXCEPTION_PARENTS.containsKey(actual);
+        if(actual.equals("ExceptionGroup") && requested.equals("BaseExceptionGroup")) return true;
         for(String parent=EXCEPTION_PARENTS.get(actual);parent!=null;parent=EXCEPTION_PARENTS.get(parent))
-            if(parent.equals(requested)) return true;
+            if(parent.equals(requested) || parent.equals("ExceptionGroup") && requested.equals("BaseExceptionGroup")) return true;
         return false;
     }
 
@@ -3141,10 +3144,9 @@ public final class PyRuntime {
 
         // Class declaration keywords that were not consumed by the metaclass are
         // forwarded to the inherited __init_subclass__ hook.
-        if(!cls.bases.isEmpty()) {
-            PyMethod hook=cls.lookupMethodAfter(cls,"__init_subclass__");
-            if(hook!=null) invokeOnClassKw(cls,hook,new ArrayList<>(),kwargs);
-        }
+        PyMethod hook=cls.bases.isEmpty()?null:cls.lookupMethodAfter(cls,"__init_subclass__");
+        if(hook!=null) invokeOnClassKw(cls,hook,new ArrayList<>(),kwargs);
+        else if(!kwargs.isEmpty() && cls.metaclass==null) throw new PyException("TypeError",cls.name+".__init_subclass__() takes no keyword arguments");
         cls.finalized=true;
     }
 
@@ -3160,6 +3162,7 @@ public final class PyRuntime {
         else throw new PyException("TypeError","expected a type");
         if(builtin!=null){
             mro.add(builtinType(builtin));
+            if(builtin.equals("ExceptionGroup"))mro.add(builtinType("BaseExceptionGroup"));
             if(builtin.equals("bool"))mro.add(builtinType("int"));
             for(String parent=EXCEPTION_PARENTS.get(builtin);parent!=null;parent=EXCEPTION_PARENTS.get(parent))mro.add(builtinType(parent));
         }
@@ -3265,7 +3268,7 @@ public final class PyRuntime {
             created=invokeOnClassKw(cls,newMethod,newArgs,kwargs);
         } else {
             created=typeMro(cls).contains(builtinType("super"))?new PySuper(cls):new PyInstance(cls);
-            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); }
+            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
         // __init__ is called only when __new__ produced an instance of cls or a
@@ -3617,8 +3620,10 @@ public final class PyRuntime {
         if(obj instanceof PySlice sl) return switch(name){case "start"->sl.start;case "stop"->sl.stop;case "step"->sl.step;case "__class__"->builtinType("slice");default->throw new PyException("AttributeError","slice has no attribute '"+name+"'");};
         if(name.equals("__class__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass)) return typeOf(obj);
         if (obj instanceof PyModule) return moduleGetattr(obj,nameObj);
+        if (obj instanceof PyRange range && Set.of("start","stop","step").contains(name)) return compact(name.equals("start")?range.start:name.equals("stop")?range.stop:range.step);
         if (obj instanceof PyExceptionValue exc) {
-            if (name.equals("args")) { PyTuple t=new PyTuple(); if(exc.value!=null)t.items.add(exc.value); return t; }
+            if (name.equals("args")) return BuiltinsExtra.exceptionArgs(exc.value);
+            Object groupAttr=BuiltinsExtra.groupAttribute(exc,name); if(groupAttr!=MISSING) return groupAttr;
             if (name.equals("value") && exc.typeName.equals("StopIteration")) return exc.value;
             if (name.equals("__cause__")) return exc.cause;
             if (name.equals("__context__")) return exc.context;
@@ -3782,6 +3787,7 @@ public final class PyRuntime {
             instance.fields.put(name, value); return;
         }
         if(obj instanceof PyClass cls){classAddAttr(cls,name,value);return;}
+        if(obj instanceof PyModule module){module.attrs.put(name,value);return;}
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
@@ -3795,6 +3801,10 @@ public final class PyRuntime {
         }
         if(obj instanceof PyMethodDescriptor method){if(!method.attrs.containsKey(nameObj))throw new PyException("AttributeError","attribute not found");method.attrs.remove(nameObj);return;}
         if(obj instanceof PyComplex)throw new PyException("AttributeError","complex attributes are read-only");
+        if(obj instanceof PyModule module){
+            if(!module.attrs.containsKey(nameObj)) throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+nameObj+"'");
+            module.attrs.remove(nameObj);return;
+        }
         if(obj instanceof PyInstance instance) {
             String name=(String)nameObj;
             if(instance.cls.lookupProperty(name)!=null) throw new PyException("AttributeError","property '"+name+"' has no deleter");

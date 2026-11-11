@@ -14,7 +14,9 @@ class Tests:
         print(x)
 
     def test_unsupported(self):
-        class C(*bases):
+        try:
+            pass
+        except* ValueError:
             pass
 """.strip()
         + "\n",
@@ -24,7 +26,7 @@ class Tests:
     report = probe_files([source])
     assert report["summary"]["COMPILES"] == 1
     assert report["summary"]["UNSUPPORTED"] == 1
-    assert any("starred class bases" in item["reason"] for item in report["unsupported_reasons"])
+    assert any("TryStar" in item["reason"] for item in report["unsupported_reasons"])
 
 
 def test_reason_normalization_removes_line_numbers():

@@ -27,6 +27,7 @@ def _preserve_codegen_state(compile_method):
 OBJ = "Ljava/lang/Object;"
 RUNTIME = "pyjvm315/runtime/PyRuntime"
 PATMA_RUNTIME = "pyjvm315/runtime/PatternMatch"
+RUNTIME2 = "pyjvm315/runtime/BuiltinsExtra"
 
 
 class CompileError(SyntaxError):
@@ -43,6 +44,10 @@ EXCEPTION_TYPES = {
     "UnicodeTranslateError", "Warning", "UserWarning", "DeprecationWarning", "PendingDeprecationWarning",
     "SyntaxWarning", "RuntimeWarning", "FutureWarning", "ImportWarning", "UnicodeWarning",
     "BytesWarning", "ResourceWarning", "KeyboardInterrupt", "SystemExit",
+    "SystemError", "EncodingWarning", "EOFError", "ReferenceError", "BaseExceptionGroup", "ExceptionGroup",
+    "FileNotFoundError", "PermissionError", "TimeoutError", "ConnectionError", "BlockingIOError",
+    "ChildProcessError", "InterruptedError", "IsADirectoryError", "NotADirectoryError", "ProcessLookupError",
+    "FileExistsError", "BrokenPipeError", "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError",
 }
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
 NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io"}
@@ -51,7 +56,7 @@ BUILTIN_FUNCTIONS = {
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
     "reversed", "getattr", "hasattr", "setattr", "delattr", "callable",
     "isinstance", "issubclass", "pow", "abs", "any", "all", "sum",
-    "aiter", "anext", "exec", "eval", "compile",
+    "aiter", "anext", "exec", "eval", "compile", "divmod", "ascii", "breakpoint", "input", "__import__",
 }
 
 
@@ -200,6 +205,7 @@ class Compiler:
         self._async_comp_compiled: dict[int, str] = {}
         self.loop_stack: list[tuple[object, object]] = []  # (continue, break)
         self.exception_stack: list[int] = []
+        self.dynamic_reraise = False
         self.cleanup_stack: list[tuple[str, object]] = []
         self.finally_stack: list[FinallyContext] = []
         self.filename = "<string>"
@@ -214,6 +220,7 @@ class Compiler:
             tree = ast.Module(body=[ast.Expr(value=tree.body)], type_ignores=[])
         tree = lower_match(tree)
         tree = lower_annotations(tree)
+        self.dynamic_reraise = self._bare_raise_outside_handler([tree], False)
         # CPython binds a name declared `global` in any nested scope through the globals mapping, even at module level
         self.declared_global = {n for node in ast.walk(tree) if isinstance(node, ast.Global) for n in node.names}
         if not self.dynamic:
@@ -239,6 +246,21 @@ class Compiler:
         else:
             self._compile_main(tree.body)
         return self.cf.to_bytes()
+
+    def _bare_raise_outside_handler(self, nodes, in_handler: bool) -> bool:
+        """True when a bare ``raise`` may need the dynamically handled exception (it is not inside a handler of its own function)."""
+        for node in nodes:
+            if isinstance(node, ast.Raise) and node.exc is None and not in_handler:
+                return True
+            inner = in_handler
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)): inner = False
+            elif isinstance(node, ast.ExceptHandler): inner = True
+            elif isinstance(node, ast.Try):
+                if self._bare_raise_outside_handler(node.finalbody, True): return True
+                if self._bare_raise_outside_handler(node.body + node.handlers + node.orelse, in_handler): return True
+                continue
+            if self._bare_raise_outside_handler(ast.iter_child_nodes(node), inner): return True
+        return False
 
     def _register_module_globals(self, body: list[ast.stmt]) -> None:
         names: set[str] = {"__name__", "__package__", "__file__", "__loader__", "__spec__"}
@@ -407,6 +429,8 @@ class Compiler:
             self._check_global_binding(name, b); return
         if name in {"NotImplemented", "Ellipsis"}:
             b.invokestatic(RUNTIME, "notImplemented" if name == "NotImplemented" else "ellipsis", f"(){OBJ}"); return
+        if name == "__debug__":
+            self._boxed_bool(True, b); return
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
         if name in {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes", "bytearray", "memoryview",
@@ -723,14 +747,10 @@ class Compiler:
         metaclass: ast.expr | None = None
         class_keywords: list[tuple[str, ast.expr]] = []
         for kw in node.keywords:
-            if kw.arg is None:
-                raise CompileError("** class keyword expansion is not implemented yet")
             if kw.arg == "metaclass":
                 metaclass = kw.value
             class_keywords.append((kw.arg, kw.value))
         bases: list[ast.expr] = list(node.bases)
-        if any(isinstance(base, ast.Starred) for base in bases):
-            raise CompileError("starred class bases are not implemented yet")
         local = not top_level
         class_field = self.global_fields.get(node.name, f"__py_class_{node.name}") if top_level else f"__py_local_class_{len(self.class_nodes)}"
         if top_level and not any(field.name == class_field for field in self.cf.fields):
@@ -1419,17 +1439,7 @@ class Compiler:
             for handler in handlers:
                 next_handler = b.label()
                 if handler.type is not None:
-                    if isinstance(handler.type, ast.Name):
-                        b.aload(exc_slot); b.ldc_string(handler.type.id)
-                        b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifeq(next_handler)
-                    elif isinstance(handler.type, ast.Tuple) and all(isinstance(x, ast.Name) for x in handler.type.elts):
-                        matched = b.label()
-                        for typ in handler.type.elts:
-                            b.aload(exc_slot); b.ldc_string(typ.id)
-                            b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifne(matched)
-                        b.goto(next_handler); b.mark(matched)
-                    else:
-                        raise CompileError("except types currently must be exception names or tuples of names")
+                    self._emit_except_match(handler.type, exc_slot, next_handler, b, scope)
                 if handler.name:
                     b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}")
                     self._store_name(handler.name, b, scope)
@@ -1496,7 +1506,7 @@ class Compiler:
                     return
                 if self.exception_stack:
                     b.aload(self.exception_stack[-1]); b.athrow(); return
-                raise CompileError("No active exception to reraise")
+                b.invokestatic(RUNTIME2, "reraiseCurrent", "()V"); return
             if isinstance(stmt,ast.Return):
                 if stmt.value is None: b.aconst_null()
                 else: gen_value(stmt.value)
@@ -2152,7 +2162,9 @@ class Compiler:
         # Exceptional completion. This handler range ends before any copy of finally,
         # so an exception raised by finally itself is not accidentally handled twice.
         b.mark(handler); b.astore(exc_slot)
+        self.exception_stack.append(exc_slot)  # a bare ``raise`` in the cleanup re-raises the in-flight exception
         self._emit_context_cleanup(ctx, b, scope, in_function)
+        self.exception_stack.pop()
         b.aload(exc_slot); b.athrow()
         b.add_exception_handler(start, protected_end, handler, "java/lang/Throwable")
 
@@ -2352,19 +2364,27 @@ class Compiler:
                     b.invokestatic(RUNTIME, "unbound", f"(){OBJ}")
                     b.invokestatic(RUNTIME, "envSetLocal", f"({OBJ * 3})V")
                     for base in info.bases:
-                        b.aload(class_slot); self._expr(base, b, scope)
-                        b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
+                        b.aload(class_slot)
+                        if isinstance(base, ast.Starred):
+                            self._expr(base.value, b, scope); b.invokestatic(RUNTIME2, "classAddBases", f"({OBJ}{OBJ})V")
+                        else:
+                            self._expr(base, b, scope); b.invokestatic(RUNTIME, "classAddBase", f"({OBJ}{OBJ})V")
 
                     b.invokestatic(RUNTIME, "dict0", f"(){OBJ}")
                     class_kw_slot = scope.temp(); b.astore(class_kw_slot)
                     metaclass_slot = scope.temp(); b.aconst_null(); b.astore(metaclass_slot)
                     for kw_name, kw_value in (info.keywords or []):
-                        if kw_name == "metaclass":
+                        if kw_name is None:
+                            b.aload(class_kw_slot); self._expr(kw_value, b, scope)
+                            b.invokestatic(RUNTIME2, "classKwUpdate", f"({OBJ}{OBJ})V")
+                        elif kw_name == "metaclass" and not any(name is None for name, _ in info.keywords):
                             self._expr(kw_value, b, scope); b.astore(metaclass_slot)
                         else:
                             b.aload(class_kw_slot); b.ldc_string(kw_name); self._expr(kw_value, b, scope)
                             b.invokestatic(RUNTIME, "dictPut", f"({OBJ}{OBJ}{OBJ})V")
 
+                    if any(name is None for name, _ in (info.keywords or [])):
+                        b.aload(class_kw_slot); b.invokestatic(RUNTIME2, "classTakeMetaclass", f"({OBJ}){OBJ}"); b.astore(metaclass_slot)
                     b.aload(class_slot)
                     b.aload(metaclass_slot)
                     b.aload(class_kw_slot)
@@ -2556,7 +2576,9 @@ class Compiler:
                     return True
                 case ast.Raise(exc=exc, cause=cause):
                     if exc is None:
-                        if not self.exception_stack: raise CompileError("No active exception to reraise")
+                        if not self.exception_stack:
+                            b.invokestatic(RUNTIME2, "reraiseCurrent", "()V")
+                            return True
                         b.aload(self.exception_stack[-1]); b.athrow()
                     else:
                         self._expr(exc, b, scope)
@@ -2611,7 +2633,7 @@ class Compiler:
             return
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id
-            if name in {"min", "max", "sorted", "hex", "oct", "bin", "super"} or scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
+            if name in {"min", "max", "sorted", "hex", "oct", "bin", "super"} or any(isinstance(a, ast.Starred) for a in node.args) or any(k.arg is None for k in node.keywords) or scope.namespace_slot is not None or name in (self.global_names | self.functions.keys() | self.classes.keys() | scope.local_names | scope.free_names | scope.global_decl) or scope.has(name):
                 self._emit_dynamic_call(node.func, node.args, node.keywords, b, scope)
                 return
         if self._expr_part0(node, b, scope):
@@ -2789,16 +2811,18 @@ class Compiler:
                 case ast.Compare(left=left, ops=ops, comparators=comparators):
                     self._compare_chain(left, ops, comparators, b, scope)
                     return True
-                case ast.Call(func=ast.Name(id="print"), args=args, keywords=keywords):
+                case ast.Call(func=ast.Name(id="print"), args=args, keywords=keywords) if all(kw.arg in {"sep", "end", "file", "flush"} for kw in keywords):
                     b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
                     for arg in args:
                         b.dup(); self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
-                    sep = next((kw.value for kw in keywords if kw.arg == "sep"), None)
-                    endv = next((kw.value for kw in keywords if kw.arg == "end"), None)
-                    if any(kw.arg not in {"sep", "end"} for kw in keywords): raise CompileError("print() only supports sep= and end= keywords")
-                    (b.aconst_null() if sep is None else self._expr(sep, b, scope))
-                    (b.aconst_null() if endv is None else self._expr(endv, b, scope))
-                    b.invokestatic(RUNTIME, "printArgs", f"({OBJ}{OBJ}{OBJ}){OBJ}")
+                    keyword_slots = {}
+                    for kw in keywords:
+                        self._expr(kw.value, b, scope)
+                        keyword_slots[kw.arg] = scope.temp(); b.astore(keyword_slots[kw.arg])
+                    for keyword_name in ("sep", "end", "file", "flush"):
+                        if keyword_name in keyword_slots: b.aload(keyword_slots[keyword_name])
+                        else: b.aconst_null()
+                    b.invokestatic(RUNTIME2, "printCall", f"({OBJ * 5}){OBJ}")
                     return True
                 case ast.Call(func=ast.Name(id=pm_name), args=pm_args, keywords=[]) if (
                         pm_name.startswith(PATMA_PREFIX) and PATMA_HELPERS.get(pm_name[len(PATMA_PREFIX):]) == len(pm_args)):
@@ -2871,6 +2895,9 @@ class Compiler:
                 case ast.Call(func=ast.Name(id=name), args=[arg], keywords=[]) if name in {"sorted", "reversed"}:
                     self._expr(arg, b, scope); b.invokestatic(RUNTIME, name, f"({OBJ}){OBJ}")
                     return True
+                case ast.Call(func=ast.Name(id="__py_exc_leave_internal"), args=[ast.Constant(value=int() as depth_slot)], keywords=[]):
+                    b.aload(depth_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V"); b.aconst_null()
+                    return True
                 case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
                     self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
                     return True
@@ -2890,14 +2917,20 @@ class Compiler:
                     self._expr(arg, b, scope); b.invokestatic(RUNTIME, "next_", f"({OBJ}){OBJ}")
                     return True
                 case ast.Call(func=ast.Name(id=name), args=args, keywords=[]) if name in EXCEPTION_TYPES:
-                    if len(args) > 1: raise CompileError("exception constructors currently accept zero or one positional argument")
                     b.ldc_string(name)
-                    if args: self._expr(args[0], b, scope)
-                    else: b.aconst_null()
-                    b.invokestatic(RUNTIME, "makeException", f"({OBJ}{OBJ}){OBJ}")
+                    if len(args) > 1:
+                        b.invokestatic(RUNTIME, "list0", f"(){OBJ}")
+                        for arg in args:
+                            b.dup(); self._expr(arg, b, scope); b.invokestatic(RUNTIME, "listAppend", f"({OBJ}{OBJ})V")
+                        b.invokestatic(RUNTIME2, "exceptionN", f"({OBJ}{OBJ}){OBJ}")
+                    elif args:
+                        self._expr(args[0], b, scope)
+                        b.invokestatic(RUNTIME2, "exception1", f"({OBJ}{OBJ}){OBJ}")
+                    else:
+                        b.aconst_null()
+                        b.invokestatic(RUNTIME, "makeException", f"({OBJ}{OBJ}){OBJ}")
                     return True
-                case ast.Call(func=ast.Name(id="range"), args=args, keywords=[]):
-                    if not 1 <= len(args) <= 3: raise CompileError("range() currently accepts 1-3 positional args")
+                case ast.Call(func=ast.Name(id="range"), args=args, keywords=[]) if 1 <= len(args) <= 3:
                     for arg in args: self._expr(arg, b, scope)
                     b.invokestatic(RUNTIME, f"range{len(args)}", f"({OBJ * len(args)}){OBJ}")
                     return True
@@ -2984,27 +3017,48 @@ class Compiler:
         for handler in handlers:
             next_handler = b.label()
             if handler.type is not None:
-                if isinstance(handler.type, ast.Name):
-                    b.aload(exc_slot); b.ldc_string(handler.type.id)
-                    b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifeq(next_handler)
-                elif isinstance(handler.type, ast.Tuple) and all(isinstance(x, ast.Name) for x in handler.type.elts):
-                    matched = b.label()
-                    for typ in handler.type.elts:
-                        b.aload(exc_slot); b.ldc_string(typ.id)
-                        b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifne(matched)
-                    b.goto(next_handler); b.mark(matched)
-                else:
-                    raise CompileError("except types currently must be exception names or tuples of names")
+                self._emit_except_match(handler.type, exc_slot, next_handler, b, scope)
             if handler.name:
                 b.aload(exc_slot); b.invokestatic(RUNTIME, "exceptionInstance", f"({OBJ}){OBJ}"); self._store_name(handler.name, b, scope)
             self.exception_stack.append(exc_slot)
             handler_body = self._handler_body(handler)
+            if self.dynamic_reraise:
+                depth_slot = scope.temp()
+                b.aload(exc_slot); b.invokestatic(RUNTIME2, "excEnter", f"({OBJ}){OBJ}"); b.astore(depth_slot)
+                leave = ast.Expr(value=ast.Call(func=ast.Name(id="__py_exc_leave_internal", ctx=ast.Load()), args=[ast.Constant(value=depth_slot)], keywords=[]))
+                wrapped_body = ast.Try(body=handler_body, handlers=[], orelse=[], finalbody=[leave])
+                ast.copy_location(wrapped_body, handler)
+                handler_body = [ast.fix_missing_locations(wrapped_body)]
             for stmt in handler_body: self._stmt(stmt, b, scope, in_function)
             self.exception_stack.pop()
             b.goto(done)
             b.mark(next_handler)
         b.aload(exc_slot); b.athrow()
         b.mark(done)
+
+    def _except_name_is_variable(self, name: str, scope: Scope) -> bool:
+        if name in EXCEPTION_TYPES or name in self.classes or name in self.functions:
+            return False
+        if name in {"object", "int", "bool", "float", "complex", "str", "bytes", "bytearray", "list", "tuple", "dict", "set", "frozenset", "range", "type", "property"}:
+            return True
+        return name in self.global_names or scope.has(name) or name in scope.local_names or name in scope.free_names
+
+    def _emit_except_match(self, type_node: ast.expr, exc_slot: int, next_handler, b: CodeBuilder, scope: Scope) -> None:
+        """Jump to next_handler unless the exception in exc_slot matches the handler's type expression."""
+        if isinstance(type_node, ast.Name) and not self._except_name_is_variable(type_node.id, scope):
+            b.aload(exc_slot); b.ldc_string(type_node.id)
+            b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifeq(next_handler)
+        elif isinstance(type_node, ast.Tuple) and all(isinstance(x, ast.Name) and not self._except_name_is_variable(x.id, scope) for x in type_node.elts):
+            matched = b.label()
+            for typ in type_node.elts:
+                b.aload(exc_slot); b.ldc_string(typ.id)
+                b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifne(matched)
+            b.goto(next_handler); b.mark(matched)
+        else:
+            self._expr(type_node, b, scope)
+            type_slot = scope.temp(); b.astore(type_slot)
+            b.aload(exc_slot); b.aload(type_slot)
+            b.invokestatic(RUNTIME2, "exceptionMatchesValue", f"({OBJ}{OBJ})Z"); b.ifeq(next_handler)
 
     def _compare_chain(self, left: ast.expr, ops: list[ast.cmpop], comparators: list[ast.expr], b: CodeBuilder, scope: Scope) -> None:
         left_slot = scope.temp(); right_slot = scope.temp(); false = b.label(); end = b.label()
@@ -3031,10 +3085,10 @@ class Compiler:
         b.getstatic("java/lang/Boolean", "TRUE" if value else "FALSE", "Ljava/lang/Boolean;")
 
     def _binary_runtime(self, op: ast.operator, b: CodeBuilder, *, inplace: bool = False) -> None:
-        name = {ast.Add:"add", ast.Sub:"sub", ast.Mult:"mul", ast.Div:"truediv", ast.FloorDiv:"floordiv", ast.Mod:"mod", ast.Pow:"pow", ast.BitAnd:"bitAnd", ast.BitOr:"bitOr", ast.BitXor:"bitXor", ast.LShift:"lshift", ast.RShift:"rshift"}.get(type(op))
+        name = {ast.Add:"add", ast.Sub:"sub", ast.Mult:"mul", ast.Div:"truediv", ast.FloorDiv:"floordiv", ast.Mod:"mod", ast.Pow:"pow", ast.BitAnd:"bitAnd", ast.BitOr:"bitOr", ast.BitXor:"bitXor", ast.LShift:"lshift", ast.RShift:"rshift", ast.MatMult:"matmul"}.get(type(op))
         if name is None: raise CompileError(f"Unsupported binary operator: {type(op).__name__}")
-        if inplace and name in {"add", "mul", "pow", "sub", "bitAnd", "bitOr", "bitXor"}: name = "i" + name
-        b.invokestatic(RUNTIME, name, f"({OBJ}{OBJ}){OBJ}")
+        if inplace and name in {"add", "mul", "pow", "sub", "bitAnd", "bitOr", "bitXor", "matmul"}: name = "i" + name
+        b.invokestatic(RUNTIME2 if name in {"matmul", "imatmul"} else RUNTIME, name, f"({OBJ}{OBJ}){OBJ}")
 
     def _boolop(self, values: list[ast.expr], is_and: bool, b: CodeBuilder, scope: Scope) -> None:
         if not values:
