@@ -21,7 +21,7 @@ import java.util.Set;
  * (or its {@code value} for Python-defined classes) keeps the two sides the same object so identity, notes and
  * user attributes survive a catch and a re-raise.
  */
-final class ExceptionGroupSupport {
+public final class ExceptionGroupSupport {
     private ExceptionGroupSupport() {}
 
     // ---------- classification and metadata ----------
@@ -435,7 +435,35 @@ final class ExceptionGroupSupport {
     }
 
     /** Throws an exception value as it is: no context, no cause (re-raise of a matched or combined group). */
-    public static void egThrow(Object value) { raiseObject(value); }
+    public static void egThrow(Object value) { BARE_RERAISE.set(value); raiseObject(value); }
+
+    private static final ThreadLocal<Object> BARE_RERAISE = new ThreadLocal<>();
+
+    /**
+     * Records an exception raised by an except* body.  An explicit {@code raise e} of the matched group adds a traceback
+     * entry (CPython's unwinding does), so the group no longer counts as merely re-raised; a bare raise adds none.
+     */
+    @SuppressWarnings("unchecked")
+    static void egCollect(Object raised, Object exc, Object matchedAndOrig) {
+        Object matched = ((PyTuple) matchedAndOrig).items.get(0), orig = ((PyTuple) matchedAndOrig).items.get(1);
+        Object bare = BARE_RERAISE.get();
+        BARE_RERAISE.remove();
+        if (exc == matched) {
+            if (bare != exc) {
+                ActiveFrame f = currentLogicalFrame();
+                if (f != null) {
+                    PyFrame shown = new PyFrame(new PyCode(f.name, f.filename, f.firstlineno), f.locals);
+                    shown.fixedLine = f.line;
+                    setTraceback(exc, new PyTraceback(shown, f.line, traceback(exc)));
+                }
+            }
+            // raising the matched group inside its own handler must not chain it to the exception being split
+            if (context(exc) == orig) setContext(exc, isGroup(orig) ? context(orig) : null);
+        } else if (context(exc) == orig) {
+            setContext(exc, matched);   // the handler runs "inside" the matched group, not the original exception
+        }
+        ((List<Object>) raised).add(exc);
+    }
 
     /** Entry point of the {@code __py_eg_internal(op, ...)} intrinsics emitted by the except* lowering. */
     public static Object egOp(Object op, Object a, Object b, Object c) {
@@ -443,6 +471,7 @@ final class ExceptionGroupSupport {
             case "match": return egMatch(a, b, c);
             case "prep": return egPrepReraise(a, b, c);
             case "throw": egThrow(a); return null;
+            case "collect": egCollect(a, b, c); return null;
             default: throw new PyException("SystemError", "unknown except* helper " + op);
         }
     }

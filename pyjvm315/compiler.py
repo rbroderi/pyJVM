@@ -9,6 +9,7 @@ from .stackmap import FrameError
 from .versions import feature_version, deferred_annotations
 from .patma import HELPERS as PATMA_HELPERS, PREFIX as PATMA_PREFIX, lower_match
 from .annot import lower_annotations, ANNOTATION_MARKERS, CLASSDICT_INTRINSIC
+from .excstar import check_except_star_flow, lower_try_star
 from .typeparams import lower_type_params, TP_PREFIX, HELPERS as TYPEPARAM_HELPERS
 
 
@@ -246,6 +247,8 @@ class Compiler:
         if self.optimize >= 2:
             strip_docstrings(tree)
         check_async_scopes(tree)
+        check_except_star_flow(tree)
+        tree = lower_try_star(tree)
         tree = lower_match(tree)
         tree = lower_type_params(tree, self.dynamic, self.module_name)
         tree = lower_annotations(tree, deferred_annotations(), self.dynamic)
@@ -2907,7 +2910,11 @@ class Compiler:
                                 b.invokestatic(RUNTIME, "raiseObject", f"({OBJ})V")
                         else:
                             self._expr(cause, b, scope)
-                            b.invokestatic(RUNTIME, "raiseObjectFrom", f"({OBJ}{OBJ})V")
+                            if self.exception_stack:
+                                b.aload(self.exception_stack[-1])
+                                b.invokestatic(RUNTIME, "raiseObjectFromWithContext", f"({OBJ}{OBJ}{OBJ})V")
+                            else:
+                                b.invokestatic(RUNTIME, "raiseObjectFrom", f"({OBJ}{OBJ})V")
                     return True
                 case ast.Try(body=body, handlers=handlers, orelse=orelse, finalbody=[]):
                     self._compile_try_except(body, handlers, orelse, b, scope, in_function)
@@ -3222,6 +3229,11 @@ class Compiler:
                 case ast.Call(func=ast.Name(id="__py_exc_leave_internal"), args=[ast.Constant(value=int() as depth_slot)], keywords=[]):
                     b.aload(depth_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V"); b.aconst_null()
                     return True
+                case ast.Call(func=ast.Name(id="__py_eg_internal"), args=eg_args, keywords=[]):
+                    for eg_arg in eg_args: self._expr(eg_arg, b, scope)
+                    for _pad in range(4 - len(eg_args)): b.aconst_null()
+                    b.invokestatic("pyjvm315/runtime/ExceptionGroupSupport", "egOp", f"({OBJ}{OBJ}{OBJ}{OBJ}){OBJ}")
+                    return True
                 case ast.Call(func=ast.Name(id="__py_await_iter_internal"), args=[arg], keywords=[]):
                     self._expr(arg, b, scope); b.invokestatic(RUNTIME, "awaitIterator", f"({OBJ}){OBJ}")
                     return True
@@ -3325,7 +3337,10 @@ class Compiler:
         delete = ast.Delete(targets=[ast.Name(id=handler.name, ctx=ast.Del())])
         wrapped = ast.Try(body=handler.body, handlers=[], orelse=[], finalbody=[clear, delete])
         ast.copy_location(wrapped, handler)
-        return [ast.fix_missing_locations(wrapped)]
+        ast.fix_missing_locations(wrapped)
+        # the implicit cleanup must not move the frame's current line (a traceback raised through it keeps the raise line)
+        del clear.lineno, delete.lineno
+        return [wrapped]
 
     def _compile_try_except(self, body: list[ast.stmt], handlers: list[ast.ExceptHandler], orelse: list[ast.stmt], b: CodeBuilder, scope: Scope, in_function: bool) -> None:
         start, protected_end, dispatch, done = b.label(), b.label(), b.label(), b.label()

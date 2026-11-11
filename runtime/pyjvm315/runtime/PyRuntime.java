@@ -2815,7 +2815,8 @@ public final class PyRuntime {
         if (value instanceof Throwable t) throw new RuntimeException(t);
         throw new PyException("RuntimeError", "no active exception to reraise");
     }
-    public static void raiseObjectWithContext(Object value, Object contextObj) {
+    public static void raiseObjectWithContext(Object value, Object contextObj) { throw preparedWithContext(value, contextObj); }
+    static PyException preparedWithContext(Object value, Object contextObj) {
         if(value instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) value=new PyExceptionValue(bt.name,null);
         PyException raised=userException(value);
         if (raised!=null) {}
@@ -2829,7 +2830,11 @@ public final class PyRuntime {
                 if(raised.instance!=null) ExceptionGroupSupport.setContext(raised.instance,handled);
             }
         }
-        throw raised;
+        return raised;
+    }
+    public static void raiseObjectFromWithContext(Object value, Object causeObj, Object contextObj) {
+        PyException raised=preparedWithContext(value, contextObj);
+        raiseObjectFrom(raised, causeObj);
     }
     public static void raiseObjectFrom(Object value, Object causeObj) {
         if(value instanceof PyBuiltinType bt && exceptionIsSubclass(bt.name,"BaseException")) value=new PyExceptionValue(bt.name,null);
