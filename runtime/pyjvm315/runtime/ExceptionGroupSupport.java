@@ -108,6 +108,7 @@ public final class ExceptionGroupSupport {
             p.instance = v;
             return v;
         }
+        if (p.handledView) return inst;
         if (inst instanceof PyInstance i) {
             ExcState s = state(i);
             if (s.cause == null && p.cause != null) s.cause = p.cause;
@@ -451,6 +452,15 @@ public final class ExceptionGroupSupport {
 
     /** CHECK_EG_MATCH: {match, rest} of {@code rest} against the except* type; both None when nothing is left. */
     public static Object egMatch(Object rest, Object type, Object lineObj) {
+        try {
+            return egMatchChecked(rest, type, lineObj);
+        } catch (PyException p) {
+            BuiltinsExtra.attachContext(p);   // raised while the exception being split is the handled one
+            throw p;
+        }
+    }
+
+    private static Object egMatchChecked(Object rest, Object type, Object lineObj) {
         PyTuple out = new PyTuple();
         if (rest == null) { out.items.add(null); out.items.add(null); return out; }
         checkStarTypes(type);
@@ -459,7 +469,16 @@ public final class ExceptionGroupSupport {
             out.items.add(null);
             return out;
         }
-        if (isGroup(rest)) return split(rest, new ArrayList<Object>(List.of(type)));
+        if (isGroup(rest)) {
+            if (!(rest instanceof PyInstance)) return split(rest, new ArrayList<Object>(List.of(type)));
+            // a subclass may override split(); its result is validated as CPython does
+            Object result = callMethod(rest, "split", new Object[]{type});
+            if (!(result instanceof PyTuple t)) throw new PyException("TypeError", typeName(rest) + ".split must return a tuple, not " + typeName(result));
+            if (t.items.size() < 2) throw new PyException("TypeError", typeName(rest) + ".split must return a 2-tuple, got tuple of size " + t.items.size());
+            PyTuple pair = new PyTuple();
+            pair.items.add(t.items.get(0)); pair.items.add(t.items.get(1));
+            return pair;
+        }
         out.items.add(null); out.items.add(rest);
         return out;
     }
@@ -493,6 +512,7 @@ public final class ExceptionGroupSupport {
         for (Object e : excs) (sameMetadata(e, orig) ? reraised : raised).add(e);
         Object reraisedEg = projection(orig, reraised);
         if (raised.isEmpty()) return reraisedEg;
+        if (reraisedEg == null && raised.size() == 1) return raised.get(0);   // a lone new exception is raised as it is
         if (reraisedEg != null) raised.add(reraisedEg);
         List<Object> ctor = new ArrayList<>();
         ctor.add(""); ctor.add(raised);
@@ -500,7 +520,10 @@ public final class ExceptionGroupSupport {
     }
 
     /** Throws an exception value as it is: no context, no cause (re-raise of a matched or combined group). */
-    public static void egThrow(Object value) { BARE_RERAISE.set(value); raiseObject(value); }
+    public static void egThrow(Object value) {
+        BARE_RERAISE.set(value);
+        try { raiseObject(value); } catch (PyException p) { p.reraised = true; throw p; }
+    }
 
     private static final ThreadLocal<Object> BARE_RERAISE = new ThreadLocal<>();
 
@@ -537,6 +560,8 @@ public final class ExceptionGroupSupport {
             case "prep": return egPrepReraise(a, b, c);
             case "throw": egThrow(a); return null;
             case "collect": egCollect(a, b, c); return null;
+            case "enter": BuiltinsExtra.excPush(a); return null;
+            case "leave": BuiltinsExtra.excPopIf(a); return null;
             default: throw new PyException("SystemError", "unknown except* helper " + op);
         }
     }

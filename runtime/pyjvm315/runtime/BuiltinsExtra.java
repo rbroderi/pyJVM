@@ -446,6 +446,21 @@ public final class BuiltinsExtra {
         return depth;
     }
 
+    /** except* bodies run with the matched group as the handled exception (sys.exception()). */
+    public static void excPush(Object value) { PyException view = ExceptionGroupSupport.throwableFor(value); view.handledView = true; handledStack().add(view); }
+
+    public static void excPopIf(Object value) {
+        ArrayList<Object> stack = handledStack();
+        if (!stack.isEmpty() && exceptionInstance(stack.get(stack.size() - 1)) == value) stack.remove(stack.size() - 1);
+    }
+
+    /** Host arithmetic / index failures become Python exceptions where an except clause can observe them. */
+    public static Throwable liftForeign(Throwable t) {
+        if (t instanceof ArithmeticException || t instanceof IndexOutOfBoundsException)
+            return new PyException(pythonExceptionType(t), exceptionValue(t));
+        return t;
+    }
+
     public static Object excDepth() { return (long) handledStack().size(); }
 
     /** An exception raised while this frame handles another one gets that one as its __context__ (set once, innermost first). */
@@ -453,7 +468,7 @@ public final class BuiltinsExtra {
 
     static void attachContext(Object throwable, ActiveFrame frame) {
         if (!(throwable instanceof PyException p) || frame == null || frame.handled == null || frame.handled.isEmpty()) return;
-        if (p.context != null || p.suppressContext) return;
+        if (p.context != null || p.suppressContext || p.reraised) return;
         Object top = frame.handled.get(frame.handled.size() - 1);
         if (top == p) return;
         Object handled = exceptionInstance(top);

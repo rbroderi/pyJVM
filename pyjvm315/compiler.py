@@ -3372,10 +3372,13 @@ class Compiler:
         b.mark(protected_end)
         for stmt in orelse: self._stmt(stmt, b, scope, in_function)
         b.goto(done)
-        b.mark(dispatch); b.astore(exc_slot)
+        b.mark(dispatch)
+        if reset_slot >= 0:
+            b.invokestatic(RUNTIME2, "liftForeign", "(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
+        b.astore(exc_slot)
+        b.aload(exc_slot); b.invokestatic(RUNTIME2, "attachContext", f"({OBJ})V")
         if reset_slot >= 0:
             b.aload(reset_slot); b.invokestatic(RUNTIME2, "excLeave", f"({OBJ})V")
-        b.aload(exc_slot); b.invokestatic(RUNTIME2, "attachContext", f"({OBJ})V")
         b.aload(exc_slot); b.invokestatic(RUNTIME,"tracebackAddCurrentFrame",f"({OBJ})V")
         b.add_exception_handler(start, protected_end, dispatch, "java/lang/Throwable")
         self._trace_handler_entry(None, exc_slot, b)

@@ -9,8 +9,9 @@ The lowering follows CPython's CHECK_EG_MATCH / PREP_RERAISE_STAR protocol.  The
         $eg_o = $eg_e; $eg_r = $eg_e; $eg_x = []
         $eg_m, $eg_r = __py_eg_internal("match", $eg_r, TYPE, LINE)     # once per clause
         if $eg_m is not None:
-            try: [NAME = $eg_m]; HANDLER BODY
+            try: enter($eg_m); [NAME = $eg_m]; HANDLER BODY      # sys.exception() is the matched group
             except BaseException as $eg_n: __py_eg_internal("collect", $eg_x, $eg_n, ($eg_m, $eg_o))
+            finally: __py_eg_internal("leave", $eg_m)
         $eg_p = __py_eg_internal("prep", $eg_o, $eg_x, $eg_r)
         if $eg_p is not None: __py_eg_internal("throw", $eg_p)
     else: ORELSE
@@ -138,16 +139,22 @@ class _Lower(ast.NodeTransformer):
             clause[0].value.args[2] = handler.type
             inner = clause[1].body[0]
             rewriter = _ReRaise(m)
-            body = [rewriter.visit(s) for s in handler.body]
+            # the handler body runs with the matched group as the handled exception (sys.exception())
+            enter = ast.parse(f'__py_eg_internal("enter", {m})').body[0]
+            leave = ast.parse(f'__py_eg_internal("leave", {m})').body[0]
+            _relocate(enter, line)
+            _relocate(leave, line)
+            body = [enter] + [rewriter.visit(s) for s in handler.body]
             if handler.name is not None:
                 bind = ast.parse(f"{handler.name} = {m}").body[0]
                 _relocate(bind, line)
                 cleanup = ast.parse(f"{handler.name} = None\ndel {handler.name}").body
                 _relocate_all(cleanup, line)
                 inner.body = [bind] + body
-                inner.finalbody = cleanup
+                inner.finalbody = [leave] + cleanup
             else:
                 inner.body = body
+                inner.finalbody = [leave]
             stmts.extend(clause)
         tail = ast.parse(
             f'{p} = __py_eg_internal("prep", {o}, {x}, {r})\n'

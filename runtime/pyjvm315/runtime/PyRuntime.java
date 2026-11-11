@@ -3312,6 +3312,11 @@ public final class PyRuntime {
             Object base=mro.get(i);
             if(base instanceof PyClass cls && cls.attrs.containsKey(name))
                 return descriptorGet(cls.attrs.get(name),sup.self==sup.owner?null:sup.self,sup.owner);
+            if(base instanceof PyBuiltinType group && group.name.endsWith("ExceptionGroup") && sup.self!=sup.owner
+                && (name.equals("split") || name.equals("subgroup") || name.equals("derive"))) {
+                Object bound=ExceptionGroupSupport.getattr(sup.self,name);
+                if(bound!=MISSING) return bound;
+            }
             if(base instanceof PyBuiltinType builtin && builtinHasMethod(builtin.name,name)) {
                 Object callable=new BuiltinBoundMethod(base,name);
                 return name.equals("__new__") || name.equals("__init_subclass__") || sup.self==sup.owner?callable:new BoundCallable(callable,sup.self);

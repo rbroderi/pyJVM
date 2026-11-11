@@ -101,6 +101,42 @@ class RaisesContext:
 
 
 
+# ExceptionIsLikeMixin (test.support.testcase) and the metadata helpers of test_except_star.ExceptionStarTest
+EXCGROUP_HELPERS = """
+def assertExceptionIsLike(self, exc, template):
+    if exc is None and template is None:
+        return
+    if template is None:
+        self.fail(f"unexpected exception: {exc}")
+    if exc is None:
+        self.fail(f"expected an exception like {template!r}, got None")
+    if not isinstance(exc, ExceptionGroup):
+        self.assertEqual(exc.__class__, template.__class__)
+        self.assertEqual(exc.args[0], template.args[0])
+    else:
+        self.assertEqual(exc.message, template.message)
+        self.assertEqual(len(exc.exceptions), len(template.exceptions))
+        for e, t in zip(exc.exceptions, template.exceptions):
+            self.assertExceptionIsLike(e, t)
+
+def assertMetadataEqual(self, e1, e2):
+    if e1 is None or e2 is None:
+        self.assertTrue(e1 is None and e2 is None)
+    else:
+        self.assertEqual(e1.__context__, e2.__context__)
+        self.assertEqual(e1.__cause__, e2.__cause__)
+        self.assertEqual(e1.__traceback__, e2.__traceback__)
+
+def assertMetadataNotEqual(self, e1, e2):
+    if e1 is None or e2 is None:
+        self.assertNotEqual(e1, e2)
+    else:
+        return not (e1.__context__ == e2.__context__
+                    and e1.__cause__ == e2.__cause__
+                    and e1.__traceback__ == e2.__traceback__)
+"""
+
+
 def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
     parts = qualified_name.split('.')
     if len(parts) != 2:
@@ -116,7 +152,7 @@ def extract_case(path: Path, qualified_name: str) -> ast.FunctionDef:
 
 
 def fixture_source(method: ast.FunctionDef, variant: str, imports: tuple[str, ...] = ()) -> str:
-    if variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset'):
+    if variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset', 'excgroup'):
         raise ValueError("unsupported fixture variant")
     fixtures = ast.parse(FIXTURE).body
     fixture = fixtures[0]
@@ -135,6 +171,8 @@ def __init__(self):
     self.d = {{letter: None for letter in self.word}}
 """).body
         fixture.body.extend(setup)
+    if variant == 'excgroup':
+        fixture.body.extend(ast.parse(EXCGROUP_HELPERS).body)
     fixture.body.append(copy.deepcopy(method))
     driver = ast.parse(f'Fixture().{method.name}()\nprint("CPYTHON CASE PASSED")').body
     header = ''.join(f'import {name}\n' for name in imports)
@@ -165,7 +203,7 @@ def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_
                 raise ValueError("execution manifest entry requires a case and optional fixture variant")
             relative, qualified = fields[0].split('::', 1)
             variants = ('bytes', 'bytearray') if len(fields) == 1 else (fields[1],)
-            if any(variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset') for variant in variants):
+            if any(variant not in ('bytes', 'bytearray', 'numeric', 'objects', 'set', 'frozenset', 'excgroup') for variant in variants):
                 raise ValueError("unsupported fixture variant")
             method = extract_case(root / relative, qualified)
             for variant in variants:
