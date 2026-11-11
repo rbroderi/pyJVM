@@ -46,7 +46,7 @@ final class AtexitModule {
             CALLBACKS.add(new Callback(func, new ArrayList<>(a.subList(1, a.size())), new LinkedHashMap<>(k)));
             if (!hookInstalled) {
                 hookInstalled = true;
-                Runtime.getRuntime().addShutdownHook(new Thread(AtexitModule::shutdown, "pyjvm-atexit"));
+                Runtime.getRuntime().addShutdownHook(new Thread(AtexitModule::orderedShutdown, "pyjvm-atexit"));
             }
         }
         return func;
@@ -60,7 +60,7 @@ final class AtexitModule {
         }
     }
 
-    static void runExitFuncs() {
+    static synchronized void runExitFuncs() {
         int n;
         synchronized (CALLBACKS) { n = CALLBACKS.size(); }
         for (int i = n - 1; i >= 0; i--) {
@@ -81,8 +81,12 @@ final class AtexitModule {
         } catch (Throwable t) {
             System.err.println("Error in atexit._run_exitfuncs: " + t);
         } finally {
+            IoStd.flushAtExit();   // after the callbacks: their output must reach the real streams
             System.out.flush();
             System.err.flush();
         }
     }
+
+    /** Ordered shutdown shared by every JVM shutdown hook: exit callbacks first, then the stream flush (serialized). */
+    static synchronized void orderedShutdown() { shutdown(); }
 }

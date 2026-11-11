@@ -19,7 +19,7 @@ final class IoStd {
         in = i; out = o; err = e;
         if (!hook) {
             hook = true;
-            Runtime.getRuntime().addShutdownHook(new Thread(IoStd::flushAtExit, "pyjvm-flush-std"));
+            Runtime.getRuntime().addShutdownHook(new Thread(AtexitModule::orderedShutdown, "pyjvm-flush-std"));
         }
     }
 
