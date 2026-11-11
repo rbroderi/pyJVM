@@ -157,7 +157,7 @@ public final class WarningsModule {
             if (lineno >= 1 && lineno <= lines.size() && !lines.get((int) lineno - 1).isBlank()) sb.append("  ").append(lines.get((int) lineno - 1).strip()).append('\n');
         } catch (java.io.IOException | RuntimeException e) { /* no source line available */ }
         Object stderr = BuiltinsExtra.currentStream("stderr");
-        if (stderr == BuiltinsExtra.STDERR || stderr == null) { System.err.print(sb); System.err.flush(); }
+        if (stderr == null) { System.err.print(sb); System.err.flush(); }
         else PyRuntime.callMethod(stderr, "write", new Object[]{sb.toString()});
     }
 }

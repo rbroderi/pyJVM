@@ -3,84 +3,154 @@ package pyjvm315.runtime;
 
 import static pyjvm315.runtime.NativeTypes.*;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * {@code _io}: only the read-only file primitives importlib needs ({@code FileIO} opened for reading and
- * {@code open_code}). BytesIO, StringIO, the buffered classes, TextIOWrapper and {@code open} are Phase 4 work;
- * they are absent, so {@code import io} fails with an ImportError naming the first missing name.
+ * The native {@code _io} module: the stream class hierarchy (IoBase, IoFile, IoBytes, IoStringIO, IoBuffered,
+ * IoText, IoCodec), {@code open}, {@code open_code} and {@code text_encoding}. CPython's {@code Lib/io.py}
+ * imports this module unmodified.
  */
 public final class IoModule {
     private IoModule() {}
 
-    private static PyClass fileIO;
-
-    /** Whole-file read-only state: the bytes are read when first needed. */
-    static final class FileState {
-        final String path; final String mode; byte[] data; int pos; boolean closed;
-        FileState(String path, String mode) { this.path = path; this.mode = mode; }
-    }
+    private static PyModule module;
+    static PyClass unsupportedClass;
+    private static NativeFunction openFn;
 
     static synchronized PyModule create() {
+        if (module != null) return module;
         PyModule m = new PyModule("_io", "pyjvm315.runtime.IoModule");
-        fileIO = define("_io", "FileIO", null);
-        method(fileIO, IoModule.class, "__init__", "fileInit", "self,name,mode,closefd", defaults("mode", "r", "closefd", true));
-        method(fileIO, IoModule.class, "read", "fileRead", "self,size", defaults("size", -1L));
-        method(fileIO, IoModule.class, "readall", "fileReadall", "self");
-        method(fileIO, IoModule.class, "readable", "fileReadable", "self");
-        method(fileIO, IoModule.class, "writable", "fileWritable", "self");
-        method(fileIO, IoModule.class, "close", "fileClose", "self");
-        method(fileIO, IoModule.class, "__enter__", "fileEnter", "self");
-        methodVar(fileIO, IoModule.class, "__exit__", "fileExit", "self", "args");
-        PyRuntime.classAddProperty(fileIO, "closed", IoModule.class.getName(), "fileClosed", null);
-        PyRuntime.classAddProperty(fileIO, "name", IoModule.class.getName(), "fileName", null);
-        PyRuntime.classAddProperty(fileIO, "mode", IoModule.class.getName(), "fileMode", null);
-        finish(fileIO);
-        m.attrs.put("FileIO", fileIO);
-        m.attrs.put("DEFAULT_BUFFER_SIZE", 8192L);
+        unsupportedClass = (PyClass) PyRuntime.classCreate("UnsupportedOperation", "io");
+        PyRuntime.classAddBase(unsupportedClass, PyRuntime.builtinType("OSError"));
+        PyRuntime.classAddBase(unsupportedClass, PyRuntime.builtinType("ValueError"));
+        finish(unsupportedClass);
+        m.attrs.put("UnsupportedOperation", unsupportedClass);
+        m.attrs.put("BlockingIOError", PyRuntime.builtinType("BlockingIOError"));
+        m.attrs.put("DEFAULT_BUFFER_SIZE", (long) IoUtil.DEFAULT_BUFFER_SIZE);
+        IoBase.define(m);
+        IoFile.define(m);
+        IoBytes.define(m);
+        IoStringIO.define(m);
+        IoBuffered.define(m);
+        IoCodec.define(m);
+        IoText.define(m);
+        String[][] docs = {
+            {"_IOBase", "The abstract base class for all I/O classes.\n\nThis class provides dummy implementations for many methods that\nderived classes can override selectively; the default implementations\nrepresent a file that cannot be read, written or seeked."},
+            {"_RawIOBase", "Base class for raw binary I/O."},
+            {"_BufferedIOBase", "Base class for buffered IO objects.\n\nThe main difference with RawIOBase is that the read() method\nsupports omitting the size argument, and does not have a default\nimplementation that defers to readinto()."},
+            {"_TextIOBase", "Base class for text I/O.\n\nThis class provides a character and line based interface to stream\nI/O. There is no readinto method because Python's character strings\nare immutable."},
+            {"FileIO", "Open a file.\n\nThe mode can be 'r' (default), 'w', 'x' or 'a' for reading,\nwriting, exclusive creation or appending."},
+            {"BytesIO", "Buffered I/O implementation using an in-memory bytes buffer."},
+            {"StringIO", "Text I/O implementation using an in-memory buffer."},
+            {"BufferedReader", "Create a new buffered reader using the given readable raw IO object."},
+            {"BufferedWriter", "A buffer for a writeable sequential RawIO object."},
+            {"BufferedRandom", "A buffered interface to random access streams."},
+            {"BufferedRWPair", "A buffered reader and writer object together."},
+            {"TextIOWrapper", "Character and line based layer over a BufferedIOBase object, buffer."},
+            {"IncrementalNewlineDecoder", "Codec used when reading a file in universal newlines mode."},
+        };
+        for (String[] d : docs) {
+            Object c = m.attrs.get(d[0]);
+            if (c instanceof PyClass pc && !pc.attrs.containsKey("__doc__")) PyRuntime.setattr(pc, "__doc__", d[1]);
+        }
+        m.attrs.put("open", openFunction());
         fn(m, "open_code", (a, k) -> {
-            if (a.size() != 1 || !(a.get(0) instanceof String)) throw new PyException("TypeError", "open_code() argument 'path' must be str, not " + PyRuntime.typeName(a.isEmpty() ? null : a.get(0)));
-            return PyRuntime.instantiate(fileIO, new Object[]{a.get(0), "rb"});
+            Object p = a.size() == 1 ? a.get(0) : k.get("path");
+            if (a.size() + k.size() != 1) throw new PyException("TypeError", "open_code() takes exactly 1 argument (" + (a.size() + k.size()) + " given)");
+            if (!(NativeSubclass.unwrap(p) instanceof String)) throw new PyException("TypeError", "open_code() argument 'path' must be str, not " + PyRuntime.typeName(p));
+            return open(new ArrayList<Object>(List.of(p, "rb")), new LinkedHashMap<Object,Object>());
         });
+        fn(m, "text_encoding", (a, k) -> {
+            Object enc = a.isEmpty() ? k.get("encoding") : a.get(0);
+            if (enc != null) return enc;
+            return LangVersion.atLeast(3, 15) ? "utf-8" : "locale";
+        });
+        module = m;
         return m;
     }
 
-    private static FileState st(Object self) { return state(self, FileState.class, "FileIO"); }
-
-    public static Object fileInit(Object self, Object name, Object mode, Object closefd) {
-        String path = PosixModule.pathString(name);
-        String md = (String) mode;
-        if (!md.replace("b", "").equals("r"))
-            throw new PyException("NotImplementedError", "_io.FileIO supports only reading (mode 'r'/'rb'), not '" + md + "'");
-        Path p = Path.of(path);
-        if (Files.isDirectory(p)) throw PosixModule.osError("IsADirectoryError", 21, PosixModule.strerror(21), path);
-        FileState s = new FileState(path, md);
-        try { s.data = Files.readAllBytes(p); }
-        catch (IOException e) { throw PosixModule.osError(e, path); }
-        setState(self, s);
-        return null;
+    /** The one {@code open} function: {@code builtins.open is io.open}. */
+    public static synchronized Object openFunction() {
+        if (openFn == null) openFn = new NativeFunction("open", IoModule::open);
+        return openFn;
     }
 
-    private static void open(FileState s) { if (s.closed) throw new PyException("ValueError", "I/O operation on closed file"); }
+    private static final String[] OPEN_PARAMS = {"file", "mode", "buffering", "encoding", "errors", "newline", "closefd", "opener"};
 
-    public static Object fileRead(Object self, Object size) {
-        FileState s = st(self); open(s);
-        long n = size == null ? -1 : ((Number) size).longValue();
-        int end = n < 0 ? s.data.length : (int) Math.min(s.data.length, s.pos + n);
-        PyBytes out = new PyBytes(Arrays.copyOfRange(s.data, s.pos, end));
-        s.pos = end;
-        return out;
+    static Object open(List<Object> a, Map<Object,Object> k) {
+        if (a.size() > OPEN_PARAMS.length) throw new PyException("TypeError", "open() takes at most 8 arguments (" + a.size() + " given)");
+        Object[] v = new Object[OPEN_PARAMS.length];
+        boolean[] given = new boolean[OPEN_PARAMS.length];
+        for (int i = 0; i < a.size(); i++) { v[i] = a.get(i); given[i] = true; }
+        for (Map.Entry<Object,Object> e : k.entrySet()) {
+            int idx = java.util.Arrays.asList(OPEN_PARAMS).indexOf(e.getKey());
+            if (idx < 0) throw new PyException("TypeError", "open() got an unexpected keyword argument '" + e.getKey() + "'");
+            if (given[idx]) throw new PyException("TypeError", "argument for open() given by name ('" + e.getKey() + "') and position (" + (idx + 1) + ")");
+            v[idx] = e.getValue(); given[idx] = true;
+        }
+        if (!given[0]) throw new PyException("TypeError", "open() missing required argument 'file' (pos 1)");
+        Object file = v[0];
+        Object mode = given[1] ? v[1] : "r";
+        Object buffering = given[2] ? v[2] : (Object) (-1L);
+        Object closefd = given[6] ? v[6] : (Object) true;
+        return openFile(file, mode, buffering, v[3], v[4], v[5], closefd, v[7]);
     }
-    public static Object fileReadall(Object self) { return fileRead(self, -1L); }
-    public static Object fileReadable(Object self) { open(st(self)); return true; }
-    public static Object fileWritable(Object self) { open(st(self)); return false; }
-    public static Object fileClose(Object self) { st(self).closed = true; return null; }
-    public static Object fileEnter(Object self) { open(st(self)); return self; }
-    public static Object fileExit(Object self, Object args) { return fileClose(self); }
-    public static Object fileClosed(Object self) { return st(self).closed; }
-    public static Object fileName(Object self) { return st(self).path; }
-    public static Object fileMode(Object self) { st(self); return "rb"; }
+
+    static Object openFile(Object file, Object modeObj, Object bufObj, Object encoding, Object errors, Object newline, Object closefd, Object opener) {
+        Object mo = NativeSubclass.unwrap(modeObj);
+        if (!(mo instanceof String mode)) throw new PyException("TypeError", "open() argument 'mode' must be str, not " + PyRuntime.typeName(mo));
+        Object bo = NativeSubclass.unwrap(bufObj);
+        if (bo instanceof Double || !(bo instanceof Long || bo instanceof Boolean || bo instanceof java.math.BigInteger || bo instanceof PyInstance))
+            throw new PyException("TypeError", "'" + PyRuntime.typeName(bo) + "' object cannot be interpreted as an integer");
+        long buffering = IoUtil.asLong(bo);
+        boolean creating = false, reading = false, writing = false, appending = false, updating = false, text = false, binary = false;
+        java.util.HashSet<Character> seen = new java.util.HashSet<>();
+        for (int i = 0; i < mode.length(); i++) {
+            char c = mode.charAt(i);
+            if ("axrwb+t".indexOf(c) < 0 || !seen.add(c)) throw new PyException("ValueError", "invalid mode: " + PyRuntime.pyRepr(mode));
+            switch (c) {
+                case 'x' -> creating = true;
+                case 'r' -> reading = true;
+                case 'w' -> writing = true;
+                case 'a' -> appending = true;
+                case '+' -> updating = true;
+                case 't' -> text = true;
+                default -> binary = true;
+            }
+        }
+        if (text && binary) throw new PyException("ValueError", "can't have text and binary mode at once");
+        int kinds = (creating ? 1 : 0) + (reading ? 1 : 0) + (writing ? 1 : 0) + (appending ? 1 : 0);
+        if (kinds != 1) throw new PyException("ValueError", kinds > 1 ? "must have exactly one of create/read/write/append mode" : "Must have exactly one of create/read/write/append mode and at most one plus");
+        if (binary && encoding != null) throw new PyException("ValueError", "binary mode doesn't take an encoding argument");
+        if (binary && errors != null) throw new PyException("ValueError", "binary mode doesn't take an errors argument");
+        if (binary && newline != null) throw new PyException("ValueError", "binary mode doesn't take a newline argument");
+        if (binary && buffering == 1) {
+            Object warnings = ImportSupport.importBuiltin(new ArrayList<Object>(List.of("warnings")), new LinkedHashMap<Object,Object>());
+            PyRuntime.callMethod(warnings, "warn", new Object[]{"line buffering (buffering=1) isn't supported in binary mode, the default buffer size will be used",
+                PyRuntime.builtinType("RuntimeWarning"), 2L});
+        }
+        String rawMode = (creating ? "x" : "") + (reading ? "r" : "") + (writing ? "w" : "") + (appending ? "a" : "") + (updating ? "+" : "");
+        Object raw = PyRuntime.instantiate(IoFile.cls, new Object[]{file, rawMode, closefd, opener});
+        try {
+            boolean lineBuffering = false;
+            if (buffering == 1 || (buffering < 0 && PyRuntime.truth(PyRuntime.callMethod(raw, "isatty", new Object[0])))) { buffering = -1; lineBuffering = true; }
+            if (buffering < 0) buffering = IoUtil.DEFAULT_BUFFER_SIZE;
+            if (buffering == 0) {
+                if (binary) return raw;
+                throw new PyException("ValueError", "can't have unbuffered text I/O");
+            }
+            PyClass bc = updating ? IoBuffered.random : (creating || writing || appending) ? IoBuffered.writer : IoBuffered.reader;
+            Object buffer = PyRuntime.instantiate(bc, new Object[]{raw, buffering});
+            if (binary) return buffer;
+            PyInstance wrapper = (PyInstance) PyRuntime.instantiate(IoText.cls, new Object[]{buffer, encoding, errors, newline, lineBuffering, false});
+            wrapper.fields.put("mode", mode);
+            return wrapper;
+        } catch (RuntimeException e) {
+            try { PyRuntime.callMethod(raw, "close", new Object[0]); } catch (RuntimeException ignored) { }
+            throw e;
+        }
+    }
 }

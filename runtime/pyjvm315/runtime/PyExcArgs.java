@@ -21,9 +21,11 @@ final class PyExcArgs {
             int n = group.items.size();
             return PyRuntime.pyStr(args.items.get(0)) + " (" + n + " sub-exception" + (n == 1 ? "" : "s") + ")";
         }
+        if (attrs != null && attrs.containsKey(CodecErrors.KIND)) return CodecErrors.describe(attrs);
         if (attrs != null && attrs.containsKey("errno") && attrs.get("strerror") != null && args.items.size() >= 2)
             return "[Errno " + PyRuntime.pyStr(attrs.get("errno")) + "] " + PyRuntime.pyStr(attrs.get("strerror"))
-                + (attrs.get("filename") == null ? "" : ": " + PyRuntime.pyRepr(attrs.get("filename")));
+                + (attrs.get("filename") == null ? "" : ": " + PyRuntime.pyRepr(attrs.get("filename")))
+                + (attrs.get("filename2") == null ? "" : " -> " + PyRuntime.pyRepr(attrs.get("filename2")));
         if (args.items.isEmpty()) return "";
         if (args.items.size() == 1) return PyRuntime.pyStr(args.items.get(0));
         return args.pyRepr();

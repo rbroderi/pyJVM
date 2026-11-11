@@ -29,7 +29,7 @@ public final class NativeModules {
         m.attrs.put("version", LangVersion.MAJOR + "." + LangVersion.MINOR + ".0 (pyjvm)");
         m.attrs.put("maxsize", Long.MAX_VALUE);
         m.attrs.put("maxunicode", 0x10ffffL);
-        m.attrs.put("byteorder", "big");
+        m.attrs.put("byteorder", "little");
         m.attrs.put("platform", "java");
         ArrayList<Object> args = new ArrayList<>();
         for (String a : argv) args.add(a);

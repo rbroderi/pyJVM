@@ -84,7 +84,8 @@ public final class Namespaces {
 
     static final String[] FUNCTIONS = {"exec", "eval", "compile", "aiter", "anext", "ord", "chr", "repr", "print", "hash", "id", "len",
         "iter", "next", "reversed", "getattr", "hasattr", "setattr", "delattr", "callable", "isinstance", "issubclass", "pow", "abs",
-        "any", "all", "sum", "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round", "globals", "locals"};
+        "any", "all", "sum", "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round", "globals", "locals",
+        "divmod", "ascii", "input", "breakpoint", "__import__", "open"};
     static final String[] TYPES = {"object", "int", "bool", "float", "complex", "classmethod", "staticmethod", "property", "str", "bytes",
         "bytearray", "memoryview", "list", "tuple", "dict", "set", "frozenset", "frozendict", "range", "type", "map", "zip",
         "enumerate", "filter", "slice", "super"};

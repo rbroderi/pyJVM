@@ -53,6 +53,12 @@ final class PyClass {
         }
         return k == 2;
     }
+    /** A __del__ is visible through the MRO (set at finalization and when __del__ is assigned): instances are allocated as GcFinalizable. */
+    boolean hasDel = false;
+    /** Instances accept weak references (no __slots__ without __weakref__, not an int/tuple/bytes subclass). */
+    boolean weakrefOk = false;
+    /** Instances are weakref.proxy objects: attribute access and isinstance forward to the referent. */
+    boolean weakProxy = false;
     PyClass(String moduleName, String name) { this.moduleName=moduleName; this.name = name; this.qualname=name; }
 
     PyMethod lookupMethod(String name) { for (PyClass c:mro){PyMethod m=c.methods.get(name);if(m!=null)return m;if(c.attrs.containsKey(name))return null;} return null; }
