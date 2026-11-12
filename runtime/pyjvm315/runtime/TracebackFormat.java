@@ -97,6 +97,41 @@ final class TracebackFormat {
         return new int[]{Integer.parseInt(pick[2]), Integer.parseInt(pick[3]), Integer.parseInt(pick[4]), Integer.parseInt(pick[5]), Integer.parseInt(pick[6])};
     }
 
+    // ---------- positions for traceback.py ----------
+    /**
+     * What {@code code.co_positions()} holds for the instruction a traceback entry stopped at: (line, end line, start
+     * column, end column), columns in UTF-8 bytes; null when {@link #pickCaret} has no single candidate. traceback.py
+     * reads it as {@code co_positions()[tb_lasti // 2]} and derives the carets from that range itself, so the Python
+     * formatter underlines what the native one does.
+     */
+    private static PyTuple positions(PyTraceback tb) {
+        String filename = tb.frame.code.coFilename;
+        int line = (int) tb.lineno;
+        int[] caret = pickCaret(filename, line, tb.next == null, tb.leafType == null ? "" : tb.leafType);
+        String text = caret == null ? null : sourceLine(filename, line);
+        if (text == null || caret[1] <= caret[0]) return null;
+        PyTuple t = new PyTuple();
+        t.items.add((long) line); t.items.add((long) line); t.items.add(utf8Column(text, caret[0])); t.items.add(utf8Column(text, caret[1]));
+        return t;
+    }
+
+    private static long utf8Column(String text, int chars) {
+        int end = chars >= text.codePointCount(0, text.length()) ? text.length() : text.offsetByCodePoints(0, Math.max(0, chars));
+        return text.substring(0, end).getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    /** {@code tb.tb_lasti}: there are no instruction offsets; 0 selects the entry's one position record, -1 says there is none. */
+    static long lasti(PyTraceback tb) { return tb.frame.code.shown == tb && positions(tb) != null ? 0L : -1L; }
+
+    /** {@code tb.tb_frame.f_code.co_positions()} for the code object of a traceback entry. */
+    static Object codePositions(PyTraceback tb) {
+        ArrayList<Object> out = new ArrayList<>();
+        PyTuple p = positions(tb);
+        if (p == null) { p = new PyTuple(); for (int k = 0; k < 4; k++) p.items.add(null); }
+        out.add(p);
+        return PyRuntime.iter(out);
+    }
+
     // ---------- stack ----------
     private static void formatFrame(StringBuilder out, PyTraceback tb, boolean leaf, String excType) {
         String filename = tb.frame.code.coFilename;

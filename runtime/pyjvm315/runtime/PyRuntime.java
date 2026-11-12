@@ -1369,8 +1369,7 @@ public final class PyRuntime {
     public static Object int_(Object value) {
         if (isIntLike(value)) return compact(bigInt(value));
         if (value instanceof Double d) return compact(BigInteger.valueOf(d.longValue()));
-        if (value instanceof String s) return pyInt(s.trim());
-        if (value instanceof PyByteSequence) return NativeSubclass.parseInt(value, 10);   // int(b'32'), as pickle protocol 0 does
+        if (value instanceof String || value instanceof PyByteSequence) return NativeSubclass.parseInt(value, 10);   // ValueError for a malformed literal; int(b'32') as pickle protocol 0 does
         if (value instanceof PyInstance w) return NativeSubclass.intOf(w);
         throw typeError("int() argument must be a string or a number", value);
     }
@@ -2734,6 +2733,8 @@ public final class PyRuntime {
             if(type.name.equals("method") && kwargs.isEmpty() && args.size()==2)return new BoundCallable(args.get(0),args.get(1));   // types.MethodType(func, obj)
             if(type.name.equals("sentinel"))return TypeParamsSentinel.construct(args,kwargs);
             if(type.name.equals("complex"))return complexConstructor(args,kwargs);
+            if(type.name.equals("GenericAlias") && kwargs.isEmpty() && args.size()==2)   // types.GenericAlias(origin, args), as collections.abc's __class_getitem__ does
+                return new TypeParamsGeneric(args.get(0),args.get(1) instanceof PyTuple t?t:TypeParamsObject.tuple(new ArrayList<Object>(List.of(args.get(1)))),true);
             if(Set.of("map","zip","enumerate","filter").contains(type.name)) return callBuiltin(type.name,args,kwargs);
             if(type.name.equals("frozendict")) return dictConstruct(args,kwargs).freeze();
             if(type.name.equals("dict")) return dictConstruct(args,kwargs);
@@ -2745,7 +2746,7 @@ public final class PyRuntime {
                 return BuiltinsExtra.newExceptionCall(type.name,args,kwargs);
             }
             if((!kwargs.isEmpty() || args.size()>1) && NativeSubclass.isKind(type.name)) return NativeSubclass.construct(type.name,args.toArray(),kwargs);
-            if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError","invalid builtin constructor arguments");
+            if(!kwargs.isEmpty() || args.size()>1) throw new PyException("TypeError",type.name+"() takes at most 1 argument ("+(args.size()+kwargs.size())+" given)");
             Object value=args.isEmpty()?null:args.get(0);
             return switch(type.name) {
                 case "str" -> args.isEmpty()?"":str_(value);
@@ -2862,16 +2863,16 @@ public final class PyRuntime {
         if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
         PyCode code=new PyCode(name,filename,firstline);
         PyFrame shown=new PyFrame(code,locals); shown.fixedLine=line;
-        return new PyTraceback(shown,line,current);
+        return code.shown=new PyTraceback(shown,line,current);
     }
     public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
         if(!(throwableObj instanceof PyException p)) return;
-        long line=bigInt(lineObj).longValue(); p.traceback=prependTraceback(p.traceback,(String)nameObj,(String)filenameObj,line,line);
+        long line=bigInt(lineObj).longValue(); p.addFrame((String)nameObj,(String)filenameObj,line,line);
     }
     public static void tracebackAddCurrentFrame(Object throwableObj){
         if(!(throwableObj instanceof PyException p)) return;
         ActiveFrame frame=currentLogicalFrame();
-        if(frame!=null) p.traceback=prependTraceback(p.traceback,frame.name,frame.filename,frame.firstlineno,frame.line);
+        if(frame!=null) p.addFrame(frame.name,frame.filename,frame.firstlineno,frame.line);
     }
 
     // ---------- Exceptions ----------
@@ -3043,7 +3044,7 @@ public final class PyRuntime {
             else if(target.exceptionBase.equals("BaseExceptionGroup") && exceptionIsSubclass(exc.name,"Exception")){ target.exceptionBase="ExceptionGroup"; target.builtinBaseName="ExceptionGroup"; EXCEPTION_PARENTS.put(target.name,"ExceptionGroup"); }
             return;
         }
-        if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super") || DESCRIPTOR_TYPES.contains(builtin.name) || builtin.name.equals("GenericAlias"))) {
+        if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super") || builtin.name.equals("module") || DESCRIPTOR_TYPES.contains(builtin.name) || builtin.name.equals("GenericAlias"))) {
             target.builtinBaseName=builtin.name; target.builtinBasePos=target.bases.size();
             return;
         }
@@ -3745,7 +3746,10 @@ public final class PyRuntime {
         if(obj instanceof PyMethodDescriptor || obj instanceof PyManagedProperty || obj instanceof PyFunction || obj instanceof BoundCallable || obj instanceof NativeFunction)
             return callFunction(getattr(obj,name),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
         TypeSlots.CallMethod slot = TypeSlots.callMethodSlot(obj);
-        if (slot == null && obj instanceof PyCode) throw PyFrameSupport.codeMethod(name);
+        if (slot == null && obj instanceof PyCode code) {
+            if (name.equals("co_positions") && args.length == 0 && code.shown != null) return TracebackFormat.codePositions(code.shown);
+            throw PyFrameSupport.codeMethod(name);
+        }
         if (slot == null) throw new PyException("AttributeError", "'" + typeName(obj) + "' object has no attribute '" + name + "'");
         return slot.call(obj, name, args);
     }
@@ -3864,6 +3868,7 @@ public final class PyRuntime {
             if(function.attrs.containsKey(name))return function.attrs.get(name);
             if(name.equals("__type_params__"))return TypeParamsSupport.emptyTypeParams();
             if(name.equals("__code__"))return new PyCode(function.displayName,function.filename,function.firstlineno);
+            if(FunctionDefaults.handles(name))return FunctionDefaults.get(function,name);
             if(!name.equals("__class__"))throw new PyException("AttributeError","function has no attribute '"+name+"'");
         }
         if(obj instanceof PyMethodDescriptor method){
@@ -3904,7 +3909,8 @@ public final class PyRuntime {
             if(name.equals("__name__") || name.equals("__qualname__"))return nf.name;
             if(name.equals("__doc__"))return null;
         }
-        if(obj instanceof PyBuiltinType type && name.equals("__name__"))return type.name;
+        if(obj instanceof PyBuiltinType type && (name.equals("__name__") || name.equals("__qualname__")))return type.name;
+        if(obj instanceof PyBuiltinType && name.equals("__module__"))return "builtins";
         if(obj instanceof PyBuiltinType type && name.equals("__mro__")){
             PyTuple mro=new PyTuple();
             for(String n=type.name;n!=null&&!n.equals("object");n=type.name.equals("bool")&&n.equals("bool")?"int":EXCEPTION_PARENTS.get(n))mro.items.add(builtinType(n));
@@ -3932,6 +3938,10 @@ public final class PyRuntime {
         if(name.equals("__dir__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__format__") && !(obj instanceof PyInstance) && !(obj instanceof PyClass) && !(obj instanceof PyBuiltinType))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof String && name.equals("__mod__"))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof PyBuiltinType type && name.equals("__hash__") && !type.name.equals("object")){   // dataclasses tests `type.__hash__ is None`
+            if(Set.of("list","dict","set","bytearray").contains(type.name))return null;
+            return new NativeFunction("__hash__",(a,k)->{if(a.size()!=1)throw new PyException("TypeError","expected 0 arguments, got "+Math.max(0,a.size()-1));return hash(a.get(0));});
+        }
         if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyComplex z){
             if(name.equals("real"))return z.real;
@@ -3993,7 +4003,7 @@ public final class PyRuntime {
             };
         }
         if(obj instanceof PyTraceback tb) {
-            return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
+            return switch(name){case "tb_next" -> tb.next; case "tb_frame" -> tb.frame; case "tb_lineno" -> tb.lineno; case "tb_lasti" -> TracebackFormat.lasti(tb); default -> throw new PyException("AttributeError","traceback has no attribute '"+name+"'");};
         }
         if(obj instanceof PyFrame frame) return PyFrameSupport.frameAttr(frame,name);
         if(obj instanceof PyCode code) return PyFrameSupport.codeAttr(code,name);
@@ -4108,6 +4118,7 @@ public final class PyRuntime {
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
             if(AnnotationSupport.isAnnotationName(name))AnnotationSupport.functionSet(function,name,value);
+            else if(FunctionDefaults.handles(name))FunctionDefaults.set(function,name,value);
             else if(Set.of("__module__","__qualname__","__name__","__doc__").contains(name))function.metadata.put(name,value);
             else function.attrs.put(name,value);return;
         }

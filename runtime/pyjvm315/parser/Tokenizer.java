@@ -18,6 +18,7 @@ public final class Tokenizer {
     private int i = 0;
     private int bracketDepth = 0;
     private boolean atLineStart = true;
+    private boolean templates = true;
     private final ArrayDeque<Integer> indents = new ArrayDeque<>();
     private final ArrayDeque<FString> fstrings = new ArrayDeque<>();
 
@@ -46,6 +47,25 @@ public final class Tokenizer {
         Tokenizer t = new Tokenizer(source);
         t.run();
         return t.out;
+    }
+
+    /** The tokens up to the first lexical error, and that error (null when the whole source tokenizes). */
+    public static final class Partial {
+        public final List<Token> tokens;
+        public final PySyntaxError error;
+        Partial(List<Token> tokens, PySyntaxError error) { this.tokens = tokens; this.error = error; }
+    }
+
+    /**
+     * Like {@link #tokenize} but keeps the tokens scanned before an error (the {@code _tokenize} module yields them
+     * before raising). {@code templates} false lexes {@code t"..."} as before Python 3.14: a name followed by a string.
+     */
+    public static Partial tokenizePartial(String source, boolean templates) {
+        Tokenizer t = new Tokenizer(source);
+        t.templates = templates;
+        try { t.run(); }
+        catch (PySyntaxError e) { return new Partial(t.out, e); }
+        return new Partial(t.out, null);
     }
 
     // ---- positions ----------------------------------------------------------------------------
@@ -189,7 +209,8 @@ public final class Tokenizer {
             if (!isIdentPart(cp)) break;
             i += Character.charCount(cp);
         }
-        if (i < n && (src.charAt(i) == '"' || src.charAt(i) == '\'') && i - s <= 3 && isStringPrefix(src.substring(s, i))) {
+        if (i < n && (src.charAt(i) == '"' || src.charAt(i) == '\'') && i - s <= 3 && isStringPrefix(src.substring(s, i))
+                && (templates || src.substring(s, i).toLowerCase().indexOf('t') < 0)) {
             String prefix = src.substring(s, i);
             i = s;
             scanString(s, prefix);

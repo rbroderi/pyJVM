@@ -89,5 +89,30 @@ with CPython 3.13 / 3.15 (`dis.opname`, `dis.stack_effect`, `dis.hasjump`, ...).
 bytecode and keeps no CPython bytecode, so everything that disassembles a function or code object is unsupported:
 `dis.dis(func)`, `dis.dis("source")`, `dis.get_instructions`, `dis.Bytecode`, `dis.code_info` and `dis.show_code`
 raise `NotImplementedError` ("pyJVM compiles Python to JVM bytecode and has no CPython bytecode ..."), as does
-reading `co_code` or calling `co_lines()` on a code object. `_opcode.get_executor` returns `None` (no executors) and
-`ENABLE_SPECIALIZATION` is 0.
+reading `co_code` or calling `co_lines()` on a code object. The one exception is `co_positions()` on the code objects
+that traceback frames expose (`tb.tb_frame.f_code`): it is derived from the same caret table the traceback printer uses
+(one position per line/column span, `tb_lasti` is an index into that table), which is enough for `traceback` to print
+carets on both lanes; on any other code object it raises the same `NotImplementedError`. `_opcode.get_executor` returns
+`None` (no executors) and `ENABLE_SPECIALIZATION` is 0.
+
+Known limitation: `class C(types.ModuleType)` is accepted (so `namedtuple`/`dataclasses`/`typing` machinery that names it
+as a base imports), but its instances are plain objects, not real modules: they have no `__dict__`-backed namespace
+that `exec(code, module.__dict__)` or `sys.modules` insertion would treat as a module.
+
+## Tokenizing (`_tokenize`, `tokenize`)
+
+`_tokenize.TokenizerIter(readline, *, extra_tokens, encoding=None)` is native (`TokenizeModule`) and wraps the parser
+package's `Tokenizer`, the lexer the self-hosted parser uses, so `tokenize.py` (and with it `linecache`, `traceback`,
+`inspect`) imports and `tokenize.generate_tokens` / `tokenize.tokenize` / `untokenize` produce CPython's token stream:
+types numbered as in the emulated version's `token.py`, positions, and the physical `line` of every token. Known gaps:
+
+- `readline` is read to the end on the first `__next__`; CPython pulls one line at a time (visible only with an
+  interactive or infinite source).
+- Tokens before a lexical error are yielded and then `SyntaxError` / `IndentationError` is raised, as in CPython, but
+  the message and offset are the pyJVM parser's and do not always match the C tokenizer's. Covered: unterminated
+  strings, unclosed brackets (`unexpected EOF in multi-line statement`), inconsistent dedent. Not diagnosed at this
+  level: mixed tabs and spaces (`TabError`) and malformed numbers (`0x`, `1_` lex as NUMBER followed by NAME/OP).
+- `extra_tokens=False` (the parser's own token view, reached only through `python -m tokenize -e` and CPython's tests) is
+  derived from the same stream: exact operator types, no COMMENT/NL, empty NEWLINE/INDENT/DEDENT strings with CPython's
+  `-1` columns. Type comments and the C tokenizer's `\r` handling are not reproduced.
+- Under the 3.13 lane `t"..."` lexes as NAME + STRING, from 3.14 on as TSTRING tokens.

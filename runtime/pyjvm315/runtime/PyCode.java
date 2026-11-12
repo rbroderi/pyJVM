@@ -25,6 +25,8 @@ final class PyCode {
     final String coName, coFilename; final long coFirstlineno;
     /** Class file for code created by compile(); null for function code objects. */
     byte[] classBytes; String mode="exec";
+    /** The traceback entry this code object was made for (tb.tb_frame.f_code): co_positions() answers for that entry only. */
+    PyTraceback shown;
     PyCode(String name,String filename,long firstlineno){this.coName=name;this.coFilename=filename;this.coFirstlineno=firstlineno;}
     @Override public String toString(){return "<code object "+coName+">";}
 }

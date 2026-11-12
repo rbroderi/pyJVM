@@ -28,6 +28,7 @@ final class PercentFormat {
     private boolean numeric;
 
     private PercentFormat(String format, Object operand, boolean bytes) {
+        if (operand instanceof PyInstance w && w.payload instanceof PyTuple values) operand = values;   // a tuple subclass (namedtuple) supplies the arguments
         this.format = format; this.operand = operand; this.bytes = bytes;
         tuple = operand instanceof PyTuple;
         args = tuple ? ((PyTuple) operand).items : Collections.singletonList(operand);
