@@ -384,7 +384,7 @@ public final class ImportSupport {
 
     // ---- sys -------------------------------------------------------------------------------------
 
-    private static PyInstance namespaceObject(String type, LinkedHashMap<String,Object> fields) {
+    static PyInstance namespaceObject(String type, LinkedHashMap<String,Object> fields) {
         PyClass cls = define("sys", type, null);
         finish(cls);
         PyInstance o = new PyInstance(cls);
@@ -427,7 +427,7 @@ public final class ImportSupport {
         impl.put("name", "pyjvm"); impl.put("cache_tag", null);
         impl.put("version", sys.attrs.get("version_info"));
         impl.put("hexversion", ((long) LangVersion.MAJOR << 24) | ((long) LangVersion.MINOR << 16) | 0xf0L);
-        sys.attrs.put("implementation", namespaceObject("implementation", impl));
+        sys.attrs.put("implementation", namespaceObject("SimpleNamespace", impl));
         fn(sys, "audit", (a, k) -> null);
         fn(sys, "getfilesystemencoding", (a, k) -> "utf-8");
         fn(sys, "getfilesystemencodeerrors", (a, k) -> "surrogateescape");

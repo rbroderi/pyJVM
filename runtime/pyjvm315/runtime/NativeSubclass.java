@@ -203,6 +203,7 @@ final class NativeSubclass {
             for (int i = 0; i < digits.length(); i++) if (Character.digit(digits.charAt(i), radix) < 0) { valid = false; break; }
             if (valid && base == 0 && radix == 10 && digits.length() > 1 && digits.charAt(0) == '0' && !digits.chars().allMatch(c -> c == '0')) valid = false;
             if (valid) {
+                if ((radix & (radix - 1)) != 0) SysExtras.checkIntStrDigits(digits.length());
                 BigInteger v = new BigInteger(digits, radix);
                 return compact(negative ? v.negate() : v);
             }

@@ -179,7 +179,7 @@ public final class BuiltinsExtra {
     static void installSys(PyModule m) {
         m.attrs.put("stdout", IoStd.stdout()); m.attrs.put("stderr", IoStd.stderr()); m.attrs.put("stdin", IoStd.stdin());
         m.attrs.put("__stdout__", IoStd.stdout()); m.attrs.put("__stderr__", IoStd.stderr()); m.attrs.put("__stdin__", IoStd.stdin());
-        NativeFunction hook = new NativeFunction("breakpointhook", (a, k) -> defaultBreakpointHook());
+        NativeFunction hook = new NativeFunction("breakpointhook", (a, k) -> defaultBreakpointHook(a, k));
         m.attrs.put("breakpointhook", hook); m.attrs.put("__breakpointhook__", hook);
         ExceptionGroupSupport.installSys(m);
     }
@@ -214,11 +214,31 @@ public final class BuiltinsExtra {
         return callFunction(sys.attrs.get("breakpointhook"), new ArrayList<Object>(args), new LinkedHashMap<Object,Object>(kwargs));
     }
 
-    static Object defaultBreakpointHook() {
-        String target = System.getenv("PYTHONBREAKPOINT");
+    /** PYTHONBREAKPOINT as the program sees it: os.environ when posix is loaded, else the process environment. */
+    private static String breakpointTarget() {
+        PyModule posix = ImportSupport.cachedModule("posix");
+        if (posix != null && posix.attrs.get("environ") instanceof PyDict env) {
+            Object v = env.get(new PyBytes("PYTHONBREAKPOINT".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return v instanceof PyBytes b ? new String(b.data, java.nio.charset.StandardCharsets.UTF_8) : null;
+        }
+        return System.getenv("PYTHONBREAKPOINT");
+    }
+
+    static Object defaultBreakpointHook(List<Object> args, Map<Object,Object> kwargs) {
+        String target = breakpointTarget();
         if (target != null && target.equals("0")) return null;
         String module = target == null || target.isEmpty() ? "pdb" : target.contains(".") ? target.substring(0, target.lastIndexOf('.')) : "builtins";
-        throw new PyException("ImportError", "breakpoint() cannot import '" + module + "': no debugger or import system is available in this runtime");
+        String attr = target == null || target.isEmpty() ? "set_trace" : target.contains(".") ? target.substring(target.lastIndexOf('.') + 1) : target;
+        Object fn;
+        try {
+            PyTuple from = new PyTuple();
+            from.items.add(attr);
+            Object mod = ImportSupport.importBuiltin(new ArrayList<Object>(List.of(module, "", "", from, 0L)), new LinkedHashMap<Object,Object>());
+            fn = getattr(mod, attr);
+        } catch (PyException e) {
+            throw new PyException("ImportError", "breakpoint() cannot import '" + module + "': no debugger or import system is available in this runtime");
+        }
+        return callFunction(fn, new ArrayList<Object>(args), new LinkedHashMap<Object,Object>(kwargs));
     }
 
     static Object importBuiltin(List<Object> args, Map<Object,Object> kwargs) { return ImportSupport.importBuiltin(args, kwargs); }
