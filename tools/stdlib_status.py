@@ -487,6 +487,7 @@ class Kit:
             shutil.rmtree(self.prog, ignore_errors=True)
             os.rename(tmp, self.prog)
         self.cache = ln.dir / "jvm-cache"
+        (ln.dir / "kit.json").write_text(json.dumps({"program": str(self.prog), "compiler": str(self.stage1), "java": "java"}))
         self._fp: str | None = None
 
     def env(self, module: str, jar: Path | None) -> dict[str, str]:

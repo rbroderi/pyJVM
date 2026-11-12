@@ -68,6 +68,25 @@ A `.jar` or `.zip` on `sys.path` is a module archive: `python3 -m pyjvm315.jarbu
 (`JarImport`) serves those modules without compiling. Modules the compiler rejects are left out of the jar, so the import falls
 through to the next `sys.path` entry.
 
+#### Stdlib jar and per-module manifest
+
+`tools/stdlib_status.py` builds CPython's `Lib` into a jar per language lane and records, for every module, how far it gets
+(`smoke` / `imports` / `compiles` / `unsupported`, with the reason). It works in resumable stages that append one JSON line per
+module to `<work>/<lane>/records.jsonl` (a killed run resumes where it stopped; each module is compiled or imported in its own
+subprocess with a timeout): `compile`, `jar` (pinned to the JVM compiler/runtime fingerprint and the language version) and `probe`
+(each module is imported on the JVM from that jar and compared with the reference interpreter by `tools/stdlib_probe.py`: public
+names plus a short behavioural check). Run it with the lane's own interpreter:
+
+    python3    tools/stdlib_status.py all --lane 3.13            # Lib of that interpreter, or --lib <checkout>
+    python3.15 tools/stdlib_status.py all --lane 3.15 --lib <cpython>/Lib
+    python3 tools/stdlib_status.py manifest && python3 tools/stdlib_status.py report   # tools/stdlib_manifest.json, STDLIB_STATUS.md
+
+To start without compiling, point `PYJVM_STDLIB_JAR=<jar>[:<jar>...]` at the result (with `PYJVM_STDLIB=<Lib>` as before): the jars are
+searched after `PYTHONPATH` and before the stdlib sources, and anything not in a jar still imports from source. A jar built by
+another compiler/runtime build or for another language version is reported on stderr (`pyjvm: ignoring module archive ...`) and
+ignored, never used silently. Compiled output is derived from CPython's sources (PSF license) and is not committed; only the
+tooling, the manifest and the report are.
+
 ## 0.9 status
 
 The compiler emits JVM class files directly; user programs are not translated
