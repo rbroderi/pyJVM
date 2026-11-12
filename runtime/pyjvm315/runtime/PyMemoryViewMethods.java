@@ -47,6 +47,10 @@ final class PyMemoryViewMethods {
                 PyMemoryView out=new PyMemoryView(view.source,view.start,view.length);
                 out.fmt=f.charAt(0); out.itemsize=size; yield out;
             }
+            case "__enter__" -> { requireArgs(name,args,0); yield view; }
+            case "__exit__" -> null;
+            case "release" -> { requireArgs(name,args,0); yield null; }
+            case "hex" -> callMethod(new PyBytes(view.toByteArray()),"hex",args);
             default -> throw new PyException("AttributeError","'memoryview' object has no attribute '"+name+"'");
         };
     }
