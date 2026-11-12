@@ -48,6 +48,12 @@ final class ClassCache {
 
     private static String env(String name) { String v = System.getenv(name); return v == null || v.isEmpty() ? null : v; }
 
+    /** {@code sys.dont_write_bytecode} (initially PYTHONDONTWRITEBYTECODE) stops writes; entries are still read. */
+    private static boolean dontWrite() {
+        try { return PyRuntime.truth(((PyModule) PyRuntime.importNative("sys")).attrs.get("dont_write_bytecode")); }
+        catch (RuntimeException e) { return env("PYTHONDONTWRITEBYTECODE") != null; }
+    }
+
     private static boolean disabled() {
         Boolean d = disabled;
         if (d == null) {
@@ -214,7 +220,7 @@ final class ClassCache {
 
     /** Best effort: any failure (read-only directory, full disk, races) leaves the cache as it was. */
     static void store(String filename, String mode, int optimize, int featureMinor, String source, byte[] classBytes) {
-        if (disabled() || env("PYTHONDONTWRITEBYTECODE") != null) return;
+        if (disabled() || dontWrite()) return;
         try {
             String variant = variant(filename, mode, optimize, featureMinor);
             ByteArrayOutputStream bytes = new ByteArrayOutputStream(classBytes.length + 64);

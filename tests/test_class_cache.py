@@ -186,6 +186,19 @@ def test_explicit_cache_dir_and_off(kit, tmp_path):
     assert off.stdout == "11 cmod.py\n" and _events(off, "") == []
 
 
+def test_dont_write_bytecode_stops_writes_but_not_reads(kit, tmp_path):
+    root = _libs(tmp_path, {"cmod.py": "def answer():\n    return 8\n"})
+    quiet = kit.program(MAIN.replace("import cmod", "sys.dont_write_bytecode = True\n    import cmod"))
+    kit.env_for[quiet] = {"ROOT": str(root)}
+    result = kit.run(quiet)
+    assert result.stdout == "8 cmod.py\n" and _events(result, "cmod.py") == ["miss"]
+    assert not (root / "__pycache__").exists()
+    env_only = kit.run(_main_for(kit, root), env={"PYTHONDONTWRITEBYTECODE": "1"})
+    assert _events(env_only, "cmod.py") == ["miss"] and not (root / "__pycache__").exists()
+    kit.run(_main_for(kit, root))                      # writes
+    assert _events(kit.run(quiet), "cmod.py") == ["hit"]
+
+
 def test_concurrent_processes_do_not_corrupt_the_cache(kit, tmp_path):
     body = "\n".join(f"def f{i}(x):\n    return x + {i}\n" for i in range(60))
     root = _libs(tmp_path, {"cmod.py": body + "\ndef answer():\n    return f59(1) + f0(1)\n"})

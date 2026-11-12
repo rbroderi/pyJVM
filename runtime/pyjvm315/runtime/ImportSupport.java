@@ -406,7 +406,8 @@ public final class ImportSupport {
         sys.attrs.put("meta_path", new ArrayList<Object>());
         sys.attrs.put("path_hooks", new ArrayList<Object>());
         sys.attrs.put("path_importer_cache", new PyDict());
-        sys.attrs.put("dont_write_bytecode", true);
+        boolean noWrite = System.getenv("PYTHONDONTWRITEBYTECODE") != null && !System.getenv("PYTHONDONTWRITEBYTECODE").isEmpty();
+        sys.attrs.put("dont_write_bytecode", noWrite);
         sys.attrs.put("pycache_prefix", null);
         sys.attrs.put("warnoptions", new ArrayList<Object>());
         sys.attrs.put("_xoptions", new PyDict());
@@ -419,7 +420,7 @@ public final class ImportSupport {
         LinkedHashMap<String,Object> flags = new LinkedHashMap<>();
         for (String f : new String[]{"debug", "inspect", "interactive", "optimize", "dont_write_bytecode", "no_user_site", "no_site",
                 "ignore_environment", "verbose", "bytes_warning", "quiet", "hash_randomization", "isolated", "dev_mode", "safe_path", "int_max_str_digits", "warn_default_encoding", "gil", "thread_inherit_context", "context_aware_warnings"})
-            flags.put(f, f.equals("dont_write_bytecode") ? 1L : f.equals("int_max_str_digits") ? 4300L : 0L);
+            flags.put(f, f.equals("dont_write_bytecode") ? (noWrite ? 1L : 0L) : f.equals("int_max_str_digits") ? 4300L : 0L);
         sys.attrs.put("flags", namespaceObject("flags", flags));
         LinkedHashMap<String,Object> impl = new LinkedHashMap<>();
         impl.put("name", "pyjvm"); impl.put("cache_tag", null);
