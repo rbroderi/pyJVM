@@ -39,6 +39,23 @@ stand in: set `PYJVM_HOME` to the directory containing the `pyjvm315` package (a
 `compile()` of an AST object; generated code over the JVM's 64KB method limit; `feature_version`
 gating in `ast.parse`.
 
+### Compile cache and jar finder
+
+Modules imported at run time (`PYJVM_STDLIB`, `PYTHONPATH`, `sys.path`) are compiled by the in-process compiler on first
+import and the resulting class file is cached on disk, so a later process loads it instead of compiling it again
+(`import re` from the 3.15 stdlib: minutes cold, about 1.6 s warm). An entry is
+`<dir>/__pycache__/<file>.pyjvm-<fp>-<variant>.cls`; it is valid while the SHA-256 of the source text, the compile
+options and the fingerprint of the compiler and runtime class files (`pyjvm315/**/*.class` on the class path) match, so editing a
+file or rebuilding the compiler simply recompiles. Writes are temp file plus atomic rename, safe for concurrent processes.
+When `__pycache__` cannot be written (read-only stdlib) entries go to `$XDG_CACHE_HOME/pyjvm` (default `~/.cache/pyjvm`).
+`PYJVM_CACHE=<dir>` makes that directory the only location, `PYJVM_CACHE=off` disables the cache,
+`PYTHONDONTWRITEBYTECODE` keeps reading but stops writing, `PYJVM_CACHE_VERBOSE=1` traces hit/miss/stored on stderr.
+
+A `.jar` or `.zip` on `sys.path` is a module archive: `python3 -m pyjvm315.jarbuild out.jar ROOT...` compiles every
+`.py` below the roots into one class per module plus the manifest `META-INF/pyjvm-modules.txt`; the runtime's path hook
+(`JarImport`) serves those modules without compiling. Modules the compiler rejects are left out of the jar, so the import falls
+through to the next `sys.path` entry.
+
 ## 0.9 status
 
 The compiler emits JVM class files directly; user programs are not translated
