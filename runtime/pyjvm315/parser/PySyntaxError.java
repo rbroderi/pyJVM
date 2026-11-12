@@ -5,6 +5,7 @@ package pyjvm315.parser;
 public final class PySyntaxError extends RuntimeException {
     public final String kind;      // "SyntaxError", "IndentationError", "TabError"
     public final int line, column; // 1-based line; 1-based column as CPython reports offset
+    public int endColumn = -1;     // end offset when the lexer knows a range (-1: same as column)
     public PySyntaxError(String kind, String message, int line, int column) {
         super(message);
         this.kind = kind; this.line = line; this.column = column;
