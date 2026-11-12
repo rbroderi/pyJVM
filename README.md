@@ -60,7 +60,7 @@ any runtime `.java` edit makes the stdlib cache cold (1-5 minutes). `PYJVM_CACHE
 mode that hashes the compiler classes fully but the runtime classes (`pyjvm315/runtime/**`) only by their linkable surface:
 class name, flags, supertypes, and the name, descriptor, flags and constant value of every non-private, non-synthetic member
 (`ClassCache.apiDigest`; method bodies, private members, lambdas and anonymous classes do not count). Generated code
-links to the runtime only through such names, so a body edit keeps cached stdlib classes valid (measured below). It is not
+links to the runtime only through such names, so a body edit keeps cached stdlib classes valid (`import re, string, json` from the 3.15 stdlib: cold 218 s, warm 2.2 s, after a runtime body edit 1.6 s with `api`; the default fingerprint takes 207 s again after the same edit). It is not
 the default because it is not sound in general: it cannot see a body edit that changes behaviour the cached bytes depend on,
 namely (1) a runtime change that alters what the in-process compiler emits (the self-hosted compiler runs on this
 runtime: dict/str/struct semantics it relies on), (2) a changed contract between runtime and generated classes that is not a
