@@ -4031,7 +4031,7 @@ public final class PyRuntime {
             if(name.equals("__class__")) return cls.metaclass != null ? cls.metaclass : builtinType("type");
             if(name.equals("__name__")) return cls.name;
             if(name.equals("__qualname__")) return cls.qualname;
-            if(name.equals("__module__")) return cls.moduleName;
+            if(name.equals("__module__")) return cls.attrs.get("__module__") instanceof String declared ? declared : cls.moduleName;
             if(cls.nativeKind!=null && name.equals("__bases__")) return explicitBasesTuple(cls);
             if(cls.nativeKind!=null && name.equals("__mro__")) {PyTuple t=new PyTuple(); t.items.addAll(typeMro(cls)); return t;}
             if(name.equals("__bases__")) {
