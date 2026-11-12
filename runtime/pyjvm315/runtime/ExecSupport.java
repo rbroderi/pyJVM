@@ -60,6 +60,10 @@ final class ExecSupport {
             String key = source instanceof String ? mode + '\0' + filename + '\0' + optimize + '\0' + featureMinor + '\0' + source : null;
             byte[] cached = key == null ? null : cache.get(key);
             if (cached != null) return cached;
+            // persistent cache (P3-02): a previous process may already have compiled exactly this source
+            String text = source instanceof String t ? t : null;
+            byte[] persisted = text == null ? null : ClassCache.lookup(filename, mode, optimize, featureMinor, text);
+            if (persisted != null) { cache.put(key, persisted); return persisted; }
             Object[] result = new Object[1]; Throwable[] failure = new Throwable[1];
             // the compiler recurses deeply on nested source, so it gets a thread with a large stack
             Thread worker = new Thread(null, () -> {
@@ -69,7 +73,7 @@ final class ExecSupport {
             try { worker.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new PyException("RuntimeError", "interrupted while compiling"); }
             if (failure[0] != null) throw translate(failure[0], source instanceof String s ? s : null, filename);
             byte[] data = ((PyBytes) result[0]).data;
-            if (key != null) cache.put(key, data);
+            if (key != null) { cache.put(key, data); ClassCache.store(filename, mode, optimize, featureMinor, text, data); }
             return data;
         }
 

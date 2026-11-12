@@ -21,7 +21,8 @@ import java.util.TreeSet;
  * unmodified {@code importlib._bootstrap} and {@code importlib._bootstrap_external} (read from the directory named
  * by the PYJVM_STDLIB environment variable) on top of the native {@code _imp}, {@code _thread}, {@code _warnings},
  * {@code _weakref}, {@code posix}, {@code _io} and {@code marshal} modules. Source files are compiled by the
- * in-process compiler through {@code compile()}; there are no .pyc files (sys.implementation.cache_tag is None).
+ * in-process compiler through {@code compile()}; there are no .pyc files (sys.implementation.cache_tag is None), but the compiled classes are cached on disk
+ * ({@link ClassCache}) and {@code .jar}/.zip path entries of precompiled modules are served by {@link JarImport}.
  */
 public final class ImportSupport {
     private ImportSupport() {}
@@ -353,6 +354,7 @@ public final class ImportSupport {
             execSource("_frozen_importlib_external", Path.of(stdlib, "importlib", "_bootstrap_external.py"), "<frozen importlib._bootstrap_external>");
             call(boot, "_install", sys, imp);
             call(boot, "_install_external_importers");
+            JarImport.install(sys);
             bootstrapModule = boot;
             bootstrapped = true;
         } finally {
