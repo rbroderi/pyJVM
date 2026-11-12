@@ -27,14 +27,12 @@ print(again is not rc_mod, again.VALUE, again.f(10))
 
 # edited source (different size): the new text wins
 write("rc_mod.py", "VALUE = 22222\nEXTRA = 'edited'\n\ndef f(x):\n    return x * VALUE\n")
-importlib.invalidate_caches()
 del sys.modules["rc_mod"]
 import rc_mod as edited
 print(edited.VALUE, edited.EXTRA, edited.f(2))
 
 # reload picks up another edit
 write("rc_mod.py", "VALUE = 3\n")
-importlib.invalidate_caches()
 importlib.reload(edited)
 print(edited.VALUE, hasattr(edited, "EXTRA"))
 
@@ -44,7 +42,6 @@ write("rc_pkg/sub.py", "def who():\n    return 'first'\n")
 import rc_pkg
 print(rc_pkg.NAME, rc_pkg.sub.who())
 write("rc_pkg/sub.py", "def who():\n    return 'second, longer'\n")
-importlib.invalidate_caches()
 importlib.reload(rc_pkg.sub)
 print(rc_pkg.sub.who())
 print(os.path.basename(rc_mod.__file__), os.path.basename(os.path.dirname(rc_pkg.sub.__file__)))
