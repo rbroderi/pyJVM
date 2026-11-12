@@ -37,6 +37,7 @@ public final class NativeModules {
         BuiltinsExtra.installSys(m);
         ImportSupport.installSys(m);
         fn(m, "_getframe", (a, k) -> PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)));
+        fn(m, "_pyjvm_fingerprint", (a, k) -> ClassCache.fingerprint());
         fn(m, "settrace", (a, k) -> Tracing.settrace(a.get(0)));
         fn(m, "_settraceallthreads", (a, k) -> Tracing.setAllThreads(a.get(0), true));
         fn(m, "_setprofileallthreads", (a, k) -> Tracing.setAllThreads(a.get(0), false));
