@@ -194,13 +194,19 @@ def class_file_path(output_dir, jvm_name):
     return Path(output_dir) / Path(*jvm_name.replace('/', '.').split('.')).with_suffix('.class')
 
 
+def embedded_name(path, embed_root=None) -> str:
+    return str(path) if embed_root is None else Path(path).relative_to(embed_root).as_posix()
+
+
 def compile_file(source_path: str | Path, output_dir: str | Path, class_name: str | None = None,
-                 *, target: int = DEFAULT_TARGET, trace: bool = False) -> Path:
+                 *, target: int = DEFAULT_TARGET, trace: bool = False, embed_root: str | Path | None = None) -> Path:
+    """``embed_root``: record file names (``__file__``, code objects, tracebacks) relative to this directory instead of
+    as given, so the class files do not depend on where the sources happen to be checked out."""
     trace = trace or os.environ.get("PYJVM_TRACE", "") not in ("", "0")
     plan = plan_compile(source_path, class_name)
     out = None
     for path, jvm_name, module_name, package_name in plan.jobs:
-        data = compile_source(path.read_text(encoding="utf-8"), jvm_name, str(path),
+        data = compile_source(path.read_text(encoding="utf-8"), jvm_name, embedded_name(path, embed_root),
                               import_map=plan.import_map, import_exports=plan.import_exports,
                               module_name=module_name, package_name=package_name, target=target, trace=trace)
         out = class_file_path(output_dir, jvm_name)

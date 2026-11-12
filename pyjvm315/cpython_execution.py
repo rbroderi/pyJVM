@@ -180,17 +180,26 @@ def __init__(self):
     return header + ast.unparse(ast.fix_missing_locations(ast.Module(body=[*fixtures, *driver], type_ignores=[]))) + '\n'
 
 
-def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_TARGET, selfhosted: bool = False) -> dict:
+def run_cases(root: Path, manifest: Path, python: str, *, target: int = DEFAULT_TARGET, selfhosted: bool = False,
+              build_cache: Path | None = None) -> dict:
+    """``build_cache`` (default: ``$PYJVM_BUILD_CACHE``): a directory of persistent runtime / self-hosted compiler
+    builds keyed by a hash of their sources, so repeated runs skip the rebuild. Without it every run builds afresh."""
     results = []
+    if build_cache is None and os.environ.get('PYJVM_BUILD_CACHE'):
+        build_cache = Path(os.environ['PYJVM_BUILD_CACHE'])
     with tempfile.TemporaryDirectory(prefix='pyjvm-cpython-execution-') as td:
         work = Path(td)
-        runtime = work / 'runtime'
-        runtime.mkdir()
-        build_runtime(runtime)
         classes = None
-        if selfhosted:
-            from .selfhost import build_selfhosted
-            classes = build_selfhosted(work / 'selfhosted')
+        if build_cache is not None:
+            from .selfhost import cached_build
+            runtime, classes = cached_build(build_cache, selfhosted)
+        else:
+            runtime = work / 'runtime'
+            runtime.mkdir()
+            build_runtime(runtime)
+            if selfhosted:
+                from .selfhost import build_selfhosted
+                classes = build_selfhosted(work / 'selfhosted')
         imports: tuple[str, ...] = ()
         for line in manifest.read_text().splitlines():
             entry = line.strip()
@@ -244,9 +253,13 @@ def main(argv=None):
     parser.add_argument('--python', default=sys.executable)
     parser.add_argument('--target', type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET)
     parser.add_argument('--selfhosted', action='store_true', help='compile exec/eval/compile code with the self-hosted compiler (no host Python)')
+    parser.add_argument('--build-cache', type=Path, metavar='DIR',
+                        help='reuse runtime and self-hosted compiler builds kept in DIR, keyed by a hash of their sources '
+                             '(default: $PYJVM_BUILD_CACHE; unset: build into a temporary directory every run)')
     parser.add_argument('--output', type=Path)
     ns = parser.parse_args(argv)
-    report = run_cases(ns.cpython_root, ns.manifest, ns.python, target=ns.target, selfhosted=ns.selfhosted)
+    report = run_cases(ns.cpython_root, ns.manifest, ns.python, target=ns.target, selfhosted=ns.selfhosted,
+                       build_cache=ns.build_cache)
     if ns.output:
         ns.output.parent.mkdir(parents=True, exist_ok=True)
         ns.output.write_text(json.dumps(report, indent=2) + '\n')

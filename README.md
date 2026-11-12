@@ -51,6 +51,18 @@ When `__pycache__` cannot be written (read-only stdlib) entries go to `$XDG_CACH
 `PYJVM_CACHE=<dir>` makes that directory the only location, `PYJVM_CACHE=off` disables the cache,
 `PYTHONDONTWRITEBYTECODE` keeps reading but stops writing, `PYJVM_CACHE_VERBOSE=1` traces hit/miss/stored on stderr.
 
+The fingerprint only stays the same if the compiler's class files do. The self-hosted compiler build (stage 1,
+`pyjvm315.selfhost`) therefore records its file names relative to the source root (`pyjvm315/compiler.py`), never the
+absolute path of the build directory: two builds from the same sources and the same host Python are byte-identical
+wherever they are made, and the entries they wrote stay valid. The runners that build the compiler themselves
+(`pyjvm315.conformance`, `pyjvm315.cpython_execution`) do so in a temporary directory on every run unless
+`PYJVM_BUILD_CACHE=<dir>` is set (`cpython_execution` also takes `--build-cache <dir>`): the runtime and stage-1 classes
+are then kept in `<dir>/<key>`, where the key hashes the compiler sources, the runtime sources and the host Python
+version, and later runs reuse them (about 17 s saved per run). Each part is built in a scratch directory and renamed
+into place, so a killed build is never reused; builds for older sources are left behind and can simply be deleted.
+(`PYJVM_CONFORMANCE_CACHE=<dir>`, the older un-keyed variant for the conformance runner, must be wiped by hand when
+the sources change.)
+
 A `.jar` or `.zip` on `sys.path` is a module archive: `python3 -m pyjvm315.jarbuild out.jar ROOT...` compiles every
 `.py` below the roots into one class per module plus the manifest `META-INF/pyjvm-modules.txt`; the runtime's path hook
 (`JarImport`) serves those modules without compiling. Modules the compiler rejects are left out of the jar, so the import falls

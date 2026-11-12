@@ -157,6 +157,12 @@ def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
         if selfhosted:
             classes = runtime_cache / "selfhosted" / "stage1"
         return [compare_file(f, python_exe, java_exe, runtime_cache, target=target, selfhosted=classes) for f in files]
+    keyed = os.environ.get("PYJVM_BUILD_CACHE")
+    if keyed:
+        # Persistent builds keyed by a hash of the compiler and runtime sources (rebuilt automatically when they change)
+        from .selfhost import cached_build
+        runtime_cache, classes = cached_build(Path(keyed), selfhosted)
+        return [compare_file(f, python_exe, java_exe, runtime_cache, target=target, selfhosted=classes) for f in files]
     with tempfile.TemporaryDirectory(prefix="pyjvm315-runtime-") as td:
         runtime_cache = Path(td)
         build_runtime(runtime_cache)
