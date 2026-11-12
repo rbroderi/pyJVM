@@ -47,9 +47,26 @@ import and the resulting class file is cached on disk, so a later process loads 
 `<dir>/__pycache__/<file>.pyjvm-<fp>-<variant>.cls`; it is valid while the SHA-256 of the source text, the compile
 options and the fingerprint of the compiler and runtime class files (`pyjvm315/**/*.class` on the class path) match, so editing a
 file or rebuilding the compiler simply recompiles. Writes are temp file plus atomic rename, safe for concurrent processes.
+Entries written under other fingerprints are kept, so parallel processes and worktrees that share one `__pycache__` or
+`~/.cache/pyjvm` do not evict each other: after a store only the `PYJVM_CACHE_KEEP` (default 4) most recently used
+fingerprints of that file survive (a hit refreshes the entry's mtime, at most hourly), and temp files left by a killed
+writer are removed after a day. Give a worktree its own `PYJVM_CACHE=<dir>` if you want strict isolation.
 When `__pycache__` cannot be written (read-only stdlib) entries go to `$XDG_CACHE_HOME/pyjvm` (default `~/.cache/pyjvm`).
 `PYJVM_CACHE=<dir>` makes that directory the only location, `PYJVM_CACHE=off` disables the cache,
 `PYTHONDONTWRITEBYTECODE` keeps reading but stops writing, `PYJVM_CACHE_VERBOSE=1` traces hit/miss/stored on stderr.
+
+**Granularity of the fingerprint.** By default every class under `pyjvm315/` (compiler and the whole runtime) is hashed, so
+any runtime `.java` edit makes the stdlib cache cold (1-5 minutes). `PYJVM_CACHE_FINGERPRINT=api` is an opt-in developer
+mode that hashes the compiler classes fully but the runtime classes (`pyjvm315/runtime/**`) only by their linkable surface:
+class name, flags, supertypes, and the name, descriptor, flags and constant value of every non-private, non-synthetic member
+(`ClassCache.apiDigest`; method bodies, private members, lambdas and anonymous classes do not count). Generated code
+links to the runtime only through such names, so a body edit keeps cached stdlib classes valid (measured below). It is not
+the default because it is not sound in general: it cannot see a body edit that changes behaviour the cached bytes depend on,
+namely (1) a runtime change that alters what the in-process compiler emits (the self-hosted compiler runs on this
+runtime: dict/str/struct semantics it relies on), (2) a changed contract between runtime and generated classes that is not a
+signature (entry points looked up by string, sentinel return values). Jar archives are hashed whole.
+Surface changes (including constant values) always invalidate. Use it to iterate on runtime bodies; run CI, benchmarks and
+anything you publish with the default, and bump `ClassCache.FORMAT` whenever you change one of the contracts in (1)-(2).
 
 The fingerprint only stays the same if the compiler's class files do. The self-hosted compiler build (stage 1,
 `pyjvm315.selfhost`) therefore records its file names relative to the source root (`pyjvm315/compiler.py`), never the
@@ -62,6 +79,30 @@ version, and later runs reuse them (about 17 s saved per run). Each part is buil
 into place, so a killed build is never reused; builds for older sources are left behind and can simply be deleted.
 (`PYJVM_CONFORMANCE_CACHE=<dir>`, the older un-keyed variant for the conformance runner, must be wiped by hand when
 the sources change.)
+
+### Resumable runners
+
+The slow lanes can be killed half way (container restarts, reaped `nohup` jobs), so `tools/resumable.py` cuts them
+into units, writes each unit's output to `<out>/<unit>.out` and counts a unit as finished only when that output contains
+the tool's final summary; running the same command again redoes just the unfinished units (an edited input drops its
+stale output; `--force` reruns everything, `--dry-run` lists the pending units). Children get SIGINT reset to the default
+(a `nohup`'d job inherits SIGINT=ignored, which breaks the signal tests). Standard library only; run it detached with
+`nohup python3 tools/resumable.py ... > log 2>&1 &`.
+
+```sh
+# pytest one file at a time (done = ' passed' in the output), then methodsize and the CPython probe
+python3 tools/resumable.py pytest --out /tmp/run --skip test_threads_stress \
+    --then methodsize probe --cpython-root /path/to/cpython
+# tests/conformance/*.py in groups of 4, `--selfhosted`, N parallel jobs; one case runs first to warm the build and
+# class caches (done = ' passed, '; PYJVM_BUILD_CACHE defaults to <out>/build)
+python3 tools/resumable.py conformance --out /tmp/conf --python python3.15 --group-size 4 --jobs 2
+# strict lane: the manifest in pieces of 25 cases, each piece starting with the active `@imports` line
+# (done = the final `{'PASS': ...}` dict); aggregates to <out>/summary.json
+python3 tools/resumable.py strict --out /tmp/strict --cpython-root /path/to/cpython --piece-size 25 --jobs 2
+```
+
+Set `PYJVM_CACHE` / `PYJVM_BUILD_CACHE` to private directories when other jobs share the machine.
+The splitting and resume logic is covered by `tests/test_resumable_runners.py` (no JVM needed).
 
 A `.jar` or `.zip` on `sys.path` is a module archive: `python3 -m pyjvm315.jarbuild out.jar ROOT...` compiles every
 `.py` below the roots into one class per module plus the manifest `META-INF/pyjvm-modules.txt`; the runtime's path hook
@@ -1080,7 +1121,7 @@ python -m pyjvm315.regression_probe \
   --cpython-root /path/to/cpython \
   --manifest tools/cpython_probe_3000_manifest.txt \
   --baseline tools/cpython_probe_3000_baseline.json \
-  --expect-cases 3000 --min-compiles 2247 --fail-on-error \
+  --expect-cases 3000 --min-compiles 2918 --fail-on-error \
   --output artifacts/cpython-regression-probe-3000.json
 ```
 

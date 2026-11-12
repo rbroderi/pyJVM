@@ -147,19 +147,115 @@ def test_source_edit_invalidates(kit, tmp_path):
     assert len(list((root / "__pycache__").glob("cmod.py.pyjvm-*.cls"))) == 1
 
 
+def _entries(root: Path, name: str = "cmod.py") -> list[Path]:
+    return sorted((root / "__pycache__").glob(f"{name}.pyjvm-*.cls"))
+
+
+def _fp(entry: Path) -> str:
+    return re.search(r"pyjvm-([0-9a-f]{8})-", entry.name).group(1)
+
+
 def test_compiler_change_invalidates(kit, tmp_path):
-    """A different compiler/runtime build has another fingerprint: old entries are never read and get cleaned up."""
+    """Another compiler/runtime build has another fingerprint: entries of a foreign fingerprint are never read, but are kept."""
     root = _libs(tmp_path, {"cmod.py": "def answer():\n    return 5\n"})
     prog = _main_for(kit, root)
     kit.run(prog)
-    [entry] = (root / "__pycache__").glob("cmod.py.pyjvm-*.cls")
+    [entry] = _entries(root)
     renamed = entry.with_name(re.sub(r"pyjvm-[0-9a-f]{8}-", "pyjvm-deadbeef-", entry.name))
     entry.rename(renamed)
     result = kit.run(prog)
     assert result.stdout == "5 cmod.py\n"
     assert _events(result, "cmod.py") == ["miss", "stored"]
-    names = [p.name for p in (root / "__pycache__").glob("cmod.py.pyjvm-*.cls")]
-    assert len(names) == 1 and "deadbeef" not in names[0]
+    assert len(_entries(root)) == 2
+    assert renamed.exists()                       # a worktree with another build may still want it
+
+
+def _overlay(kit: Kit, prog: Path, name: str, *edits: tuple[str, str]) -> Path:
+    """A copy of ``prog`` whose ClassCache class was recompiled from the real source with ``edits`` applied."""
+    src = (Path(__file__).resolve().parents[1] / "runtime" / "pyjvm315" / "runtime" / "ClassCache.java").read_text(encoding="utf-8")
+    for old, new in edits:
+        assert old in src
+        src = src.replace(old, new, 1)
+    work = kit.base / name
+    out = kit.base / f"{name}-src"
+    (out / "pyjvm315" / "runtime").mkdir(parents=True)
+    java = out / "pyjvm315" / "runtime" / "ClassCache.java"
+    java.write_text(src, encoding="utf-8")
+    shutil.copytree(prog, work)
+    subprocess.run(["javac", "--release", "21", "-nowarn", "-cp", str(prog), "-d", str(work), str(java)], check=True, capture_output=True)
+    kit.env_for[work] = dict(kit.env_for.get(prog, {}))
+    return work
+
+
+PRIVATE_EDIT = ("    private static int keep() {", "    private static int bodyOnlyProbe() { return 41 + 1; }\n    private static int keep() {")
+SURFACE_EDIT = ("    private static int keep() {", "    static int surfaceProbe() { return 7; }\n    private static int keep() {")
+
+
+def test_two_fingerprints_coexist(kit, tmp_path):
+    """Two builds sharing one __pycache__ (worktrees, parallel runs) do not evict each other's entries."""
+    root = _libs(tmp_path, {"cmod.py": "def answer():\n    return 21 * 2\n"})
+    a = _main_for(kit, root)
+    b = _overlay(kit, a, "fp-b", PRIVATE_EDIT)
+    kit.env_for[b]["ROOT"] = str(root)
+    assert _events(kit.run(a), "cmod.py") == ["miss", "stored"]
+    assert _events(kit.run(b), "cmod.py") == ["miss", "stored"]
+    entries = _entries(root)
+    assert len({_fp(p) for p in entries}) == 2 and len(entries) == 2
+    for prog in (a, b, a, b):
+        r = kit.run(prog)
+        assert r.stdout == "42 cmod.py\n" and _events(r, "cmod.py") == ["hit"]
+    assert _entries(root) == entries
+
+
+def test_old_fingerprints_are_bounded_by_recency(kit, tmp_path):
+    root = _libs(tmp_path, {"cmod.py": "def answer():\n    return 4\n"})
+    prog = _main_for(kit, root)
+    kit.run(prog)
+    [real] = _entries(root)
+    for i in range(6):                              # six foreign fingerprints, oldest first
+        fake = real.with_name(re.sub(r"pyjvm-[0-9a-f]{8}-", f"pyjvm-0000000{i}-", real.name))
+        fake.write_bytes(real.read_bytes())
+        os.utime(fake, (1_000_000 + i, 1_000_000 + i))
+    real.unlink()
+    result = kit.run(prog, env={"PYJVM_CACHE_KEEP": "3"})
+    assert result.stdout == "4 cmod.py\n" and _events(result, "cmod.py") == ["miss", "stored"] + ["evicted"] * 4
+    assert sorted(_fp(p) for p in _entries(root))[:2] == ["00000004", "00000005"] and len(_entries(root)) == 3
+
+
+def test_concurrent_writers_keep_foreign_entries(kit, tmp_path):
+    body = "\n".join(f"def f{i}(x):\n    return x + {i}\n" for i in range(60))
+    root = _libs(tmp_path, {"cmod.py": body + "\ndef answer():\n    return f59(1) + f0(1)\n"})
+    prog = _main_for(kit, root)
+    other = _overlay(kit, prog, "fp-c", PRIVATE_EDIT)
+    kit.env_for[other]["ROOT"] = str(root)
+    assert kit.run(other).stdout == "61 cmod.py\n"          # the foreign build wrote its entry first
+    [foreign] = _entries(root)
+    before = foreign.read_bytes()
+    with ThreadPoolExecutor(6) as pool:
+        results = list(pool.map(lambda i: kit.run(other if i % 3 == 2 else prog), range(6)))
+    for r in results:
+        assert r.returncode == 0 and r.stdout == "61 cmod.py\n", r.stderr
+    cache = root / "__pycache__"
+    assert len(_entries(root)) == 2 and foreign.read_bytes() == before
+    assert not [p for p in cache.iterdir() if p.suffix == ".tmp"]
+    assert _events(kit.run(prog), "cmod.py") == ["hit"] and _events(kit.run(other), "cmod.py") == ["hit"]
+
+
+def test_api_fingerprint_ignores_body_edits_only(kit, tmp_path):
+    """PYJVM_CACHE_FINGERPRINT=api: a runtime edit that leaves the linkable surface alone keeps the cache warm."""
+    root = _libs(tmp_path, {"cmod.py": "def answer():\n    return 6 * 7\n"})
+    a = _main_for(kit, root)
+    body = _overlay(kit, a, "api-body", PRIVATE_EDIT, ("return v == null ? 4 : Math.max(1, Integer.parseInt(v.trim()));", "return v == null ? 2 + 2 : Math.max(1, Integer.parseInt(v.trim()));"))
+    surface = _overlay(kit, a, "api-surface", SURFACE_EDIT)
+    for p in (body, surface):
+        kit.env_for[p]["ROOT"] = str(root)
+    env = {"PYJVM_CACHE_FINGERPRINT": "api"}
+    cold = kit.run(a, env=env)
+    assert _events(cold, "cmod.py") == ["miss", "stored"]
+    warm_body = kit.run(body, env=env)
+    assert warm_body.stdout == "42 cmod.py\n" and _events(warm_body, "cmod.py") == ["hit"]
+    assert _events(kit.run(body), "cmod.py") == ["miss", "stored"]           # default (full) mode: the edit invalidates
+    assert _events(kit.run(surface, env=env), "cmod.py") == ["miss", "stored"]   # a new member is part of the surface
 
 
 def test_unwritable_pycache_falls_back_to_user_cache(kit, tmp_path):
