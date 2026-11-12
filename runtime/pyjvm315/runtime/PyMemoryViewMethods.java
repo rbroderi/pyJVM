@@ -23,14 +23,6 @@ import java.util.Set;
 
 /** Method-call slot for PyMemoryView receivers (split out of PyRuntime.callMethod). */
 final class PyMemoryViewMethods {
-    /** Views are byte-addressed, so only the one-byte formats can be cast to. */
-    private static Object cast(PyMemoryView view,Object[] args) {
-        if(args.length<1||args.length>2) throw new PyException("TypeError","cast() takes 1 or 2 arguments ("+args.length+" given)");
-        if(args[0] instanceof String f && (f.equals("B")||f.equals("b")||f.equals("c"))&&args.length==1) return view;
-        throw new PyException("NotImplementedError","memoryview.cast to formats other than B, b and c is not supported");
-    }
-
-
     static Object call(Object obj, String name, Object[] args) {
         PyMemoryView view=(PyMemoryView)obj;
         return switch(name) {
@@ -46,11 +38,15 @@ final class PyMemoryViewMethods {
                 }
                 yield out;
             }
-            case "__enter__" -> { requireArgs(name,args,0); yield view; }
-            case "__exit__" -> null;
-            case "release" -> { requireArgs(name,args,0); yield null; }
-            case "hex" -> callMethod(new PyBytes(view.toByteArray()),"hex",args);
-            case "cast" -> cast(view,args);
+            case "cast" -> {
+                // only the integer formats of the struct module, in native (little endian) layout; one dimension
+                if(args.length<1||args.length>2||!(args[0] instanceof String f))throw new PyException("TypeError","memoryview: format argument must be a string");
+                int size=switch(f){case "b","B","c" -> 1; case "h","H" -> 2; case "i","I" -> 4; case "l","L","q","Q","n","N" -> 8;
+                    default -> throw new PyException("ValueError","memoryview: destination format must be a native single character format prefixed with an optional '@'");};
+                if(view.length%size!=0)throw new PyException("TypeError","memoryview: length is not a multiple of itemsize");
+                PyMemoryView out=new PyMemoryView(view.source,view.start,view.length);
+                out.fmt=f.charAt(0); out.itemsize=size; yield out;
+            }
             default -> throw new PyException("AttributeError","'memoryview' object has no attribute '"+name+"'");
         };
     }
