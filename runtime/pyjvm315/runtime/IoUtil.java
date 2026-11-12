@@ -39,6 +39,8 @@ final class IoUtil {
     static byte[] bytesLike(Object o) {
         o = NativeSubclass.unwrap(o);
         if (o instanceof PyBytes b) return b.data;
+        // the C functions behind these callers ask for a simple (C-contiguous) buffer
+        if (o instanceof PyMemoryView v && !v.contiguous()) throw new PyException("BufferError", "memoryview: underlying buffer is not C-contiguous");
         if (o instanceof PyByteSequence s) return s.toByteArray();
         ArrayData arr = ArrayModule.asArray(o);
         if (arr != null) return arr.toByteArray();

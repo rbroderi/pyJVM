@@ -1370,6 +1370,7 @@ public final class PyRuntime {
         if (isIntLike(value)) return compact(bigInt(value));
         if (value instanceof Double d) return compact(BigInteger.valueOf(d.longValue()));
         if (value instanceof String s) return pyInt(s.trim());
+        if (value instanceof PyByteSequence) return NativeSubclass.parseInt(value, 10);   // int(b'32'), as pickle protocol 0 does
         if (value instanceof PyInstance w) return NativeSubclass.intOf(w);
         throw typeError("int() argument must be a string or a number", value);
     }
@@ -2015,7 +2016,7 @@ public final class PyRuntime {
     }
     public static Object memoryview1(Object value){
         value=NativeSubclass.unwrap(value);
-        if(value instanceof PyMemoryView view) return new PyMemoryView(view.source,view.start,view.length);
+        if(value instanceof PyMemoryView view) return new PyMemoryView(view.source,view.start,view.length,view.step);
         if(value instanceof PyByteSequence seq) return new PyMemoryView(seq);
         { ArrayData arr=ArrayModule.asArray(value); if(arr!=null) return new PyMemoryView(arr); }
         throw new PyException("TypeError","memoryview: a bytes-like object is required");
@@ -2319,7 +2320,8 @@ public final class PyRuntime {
         ArrayList<Byte> vals=new ArrayList<>();
         for(int i=start;step>0?i<stop:i>stop;i+=step) if(i>=0&&i<size) vals.add((byte)seq.unsignedAt(i));
         byte[] raw=new byte[vals.size()];for(int i=0;i<vals.size();i++)raw[i]=vals.get(i);
-        if(asView && step==1 && seq instanceof PyMemoryView mv) return new PyMemoryView(mv.source,mv.start+start,raw.length);
+        // a memoryview slice stays a (possibly strided) view of the same exporter
+        if(asView && seq instanceof PyMemoryView mv) return new PyMemoryView(mv.source,mv.start+start*mv.step,raw.length,mv.step*step);
         if(seq instanceof PyByteArray) return new PyByteArray(raw);
         if(seq instanceof PyMemoryView) return new PyMemoryView(new PyBytes(raw));
         return new PyBytes(raw);
@@ -3967,9 +3969,9 @@ public final class PyRuntime {
                 case "ndim": return 1L;
                 case "format": return String.valueOf(view.fmt);
                 case "shape": { PyTuple t=new PyTuple(); t.items.add((long)(view.byteSize()/view.itemsize)); return t; }
-                case "strides": { PyTuple t=new PyTuple(); t.items.add((long)view.itemsize); return t; }
+                case "strides": { PyTuple t=new PyTuple(); t.items.add((long)view.itemsize*view.step); return t; }
                 case "obj": return view.source;
-                case "c_contiguous": case "f_contiguous": case "contiguous": return true;
+                case "c_contiguous": case "f_contiguous": case "contiguous": return view.contiguous();
                 default: break;
             }
         }

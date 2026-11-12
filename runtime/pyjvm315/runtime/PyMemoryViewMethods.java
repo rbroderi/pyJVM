@@ -44,6 +44,7 @@ final class PyMemoryViewMethods {
                 int size=switch(f){case "b","B","c" -> 1; case "h","H" -> 2; case "i","I" -> 4; case "l","L","q","Q","n","N" -> 8;
                     default -> throw new PyException("ValueError","memoryview: destination format must be a native single character format prefixed with an optional '@'");};
                 if(view.length%size!=0)throw new PyException("TypeError","memoryview: length is not a multiple of itemsize");
+                if(!view.contiguous())throw new PyException("TypeError","memoryview: casts are restricted to C-contiguous views");
                 PyMemoryView out=new PyMemoryView(view.source,view.start,view.length);
                 out.fmt=f.charAt(0); out.itemsize=size; yield out;
             }

@@ -66,6 +66,8 @@ public final class BinasciiModule {
             }
             return out;
         }
+        if (u instanceof PyMemoryView v && !v.contiguous())
+            throw new PyException("TypeError", "argument should be bytes, buffer or ASCII string, not 'memoryview'");
         return IoUtil.bytesLike(o);
     }
 
