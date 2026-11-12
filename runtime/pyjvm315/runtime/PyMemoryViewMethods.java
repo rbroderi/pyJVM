@@ -46,15 +46,6 @@ final class PyMemoryViewMethods {
                 }
                 yield out;
             }
-            case "cast" -> {
-                // only the integer formats of the struct module, in native (little endian) layout; one dimension
-                if(args.length<1||args.length>2||!(args[0] instanceof String f))throw new PyException("TypeError","memoryview: format argument must be a string");
-                int size=switch(f){case "b","B","c" -> 1; case "h","H" -> 2; case "i","I" -> 4; case "l","L","q","Q","n","N" -> 8;
-                    default -> throw new PyException("ValueError","memoryview: destination format must be a native single character format prefixed with an optional '@'");};
-                if(view.length%size!=0)throw new PyException("TypeError","memoryview: length is not a multiple of itemsize");
-                PyMemoryView out=new PyMemoryView(view.source,view.start,view.length);
-                out.fmt=f.charAt(0); out.itemsize=size; yield out;
-            }
             case "__enter__" -> { requireArgs(name,args,0); yield view; }
             case "__exit__" -> null;
             case "release" -> { requireArgs(name,args,0); yield null; }
