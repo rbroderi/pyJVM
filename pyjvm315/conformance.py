@@ -141,6 +141,22 @@ def run_suite(path: Path, python_exe: str, java_exe: str = "java", *,
     # javac startup dominated the old runner because the tiny support runtime was
     # rebuilt for every file. Build it once per suite and copy the class package
     # into each isolated test output directory.
+    shared = os.environ.get("PYJVM_CONFORMANCE_CACHE")
+    if shared:
+        # Opt-in persistent cache of the built runtime and self-hosted compiler (keyed by the caller; wipe it when the
+        # sources change). Lets many short invocations share one build.
+        runtime_cache = Path(shared)
+        classes = None
+        if not (runtime_cache / ".built").exists():
+            runtime_cache.mkdir(parents=True, exist_ok=True)
+            build_runtime(runtime_cache)
+            if selfhosted:
+                from .selfhost import build_selfhosted
+                build_selfhosted(runtime_cache / "selfhosted")
+            (runtime_cache / ".built").write_text("ok")
+        if selfhosted:
+            classes = runtime_cache / "selfhosted" / "stage1"
+        return [compare_file(f, python_exe, java_exe, runtime_cache, target=target, selfhosted=classes) for f in files]
     with tempfile.TemporaryDirectory(prefix="pyjvm315-runtime-") as td:
         runtime_cache = Path(td)
         build_runtime(runtime_cache)
