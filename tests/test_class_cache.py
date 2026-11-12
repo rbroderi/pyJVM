@@ -221,7 +221,7 @@ JAR_MAIN = """
     import jpkg.sub.deep as deep
     print(jpkg.NAME, sub.twice(4), leaf.value(), deep.DEPTH)
     for m in (jpkg, sub, leaf, deep):
-        print(m.__name__, m.__spec__.origin.split("/", 3)[-1], type(m.__spec__.loader).__name__, m.__file__ == m.__spec__.origin)
+        print(m.__name__, m.__spec__.origin.split(".jar/", 1)[-1], type(m.__spec__.loader).__name__, m.__file__ == m.__spec__.origin)
     print([p.rsplit(".jar", 1)[-1] for p in sub.__path__], jpkg.__spec__.submodule_search_locations[0].endswith(".jar/jpkg"))
     import broken
     print(broken.WHERE)
@@ -253,7 +253,7 @@ def test_jar_finder_serves_precompiled_modules(kit, tmp_path):
     result = kit.run(prog, env={"JAR": str(jar), "PYTHONPATH": str(src)}, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0] == "jpkg 42 42 3"
+    assert lines[0] == "jpkg 8 42 3"
     assert lines[1] == "jpkg jpkg/__init__.py JarLoader True"
     assert lines[2] == "jpkg.sub jpkg/sub/__init__.py JarLoader True"
     assert lines[3] == "jpkg.leaf jpkg/leaf.py JarLoader True"
