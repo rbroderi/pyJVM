@@ -24,6 +24,8 @@ import java.util.Set;
 final class PyMemoryView implements PyByteSequence {
     final PyByteSequence source;
     final int start, length;
+    char fmt='B';        // item format set by cast() (native sizes, little endian)
+    int itemsize=1;
     PyMemoryView(PyByteSequence source){this(source,0,source.byteSize());}
     PyMemoryView(PyByteSequence source,int start,int length){this.source=source;this.start=start;this.length=length;}
     public int byteSize(){return length;}

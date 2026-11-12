@@ -1623,6 +1623,7 @@ public final class PyRuntime {
         {Object meta=metaSpecial(value,"__len__");if(meta!=MISSING)return meta;}
         long n;
         if (value instanceof String s) n = s.codePointCount(0, s.length());
+        else if (value instanceof PyMemoryView mv) n = mv.byteSize() / mv.itemsize;
         else if (value instanceof PyByteSequence seq) n = seq.byteSize();
         else if (value instanceof List<?> xs) n = xs.size();
         else if (value instanceof Map<?, ?> xs) n = xs.size();
@@ -2080,7 +2081,7 @@ public final class PyRuntime {
     }
     static Object binarySearch(PyByteSequence seq,Object[] args,boolean reverse,boolean raising){
         if(args.length<1||args.length>3)throw new PyException("TypeError",(reverse?(raising?"rindex":"rfind"):(raising?"index":"find"))+"() takes from 1 to 3 arguments");
-        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        byte[] hay=seq.toByteArray(), needle=isIntLike(args[0])?new byte[]{(byte)byteValue(args[0])}:requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
         int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
         int found=reverse?binaryLastIndexOf(hay,needle,start,end):binaryIndexOf(hay,needle,start,end);
@@ -2182,7 +2183,7 @@ public final class PyRuntime {
 
     static Object binaryFind(PyByteSequence seq,Object[] args){
         if(args.length<1||args.length>3)throw new PyException("TypeError","find() takes from 1 to 3 arguments");
-        byte[] hay=seq.toByteArray(), needle=requireBytesLike(args[0]);
+        byte[] hay=seq.toByteArray(), needle=isIntLike(args[0])?new byte[]{(byte)byteValue(args[0])}:requireBytesLike(args[0]);
         int start=args.length>=2?clampSliceBound(args[1],hay.length,0):0;
         int end=args.length>=3?clampSliceBound(args[2],hay.length,hay.length):hay.length;
         return (long)binaryIndexOf(hay,needle,start,end);
@@ -3962,10 +3963,11 @@ public final class PyRuntime {
             if(name.equals("readonly")) return view.readonly();
             switch(name) {
                 case "nbytes": return (long)view.byteSize();
-                case "itemsize": case "ndim": return 1L;
-                case "format": return "B";
-                case "shape": { PyTuple t=new PyTuple(); t.items.add((long)view.byteSize()); return t; }
-                case "strides": { PyTuple t=new PyTuple(); t.items.add(1L); return t; }
+                case "itemsize": return (long)view.itemsize;
+                case "ndim": return 1L;
+                case "format": return String.valueOf(view.fmt);
+                case "shape": { PyTuple t=new PyTuple(); t.items.add((long)(view.byteSize()/view.itemsize)); return t; }
+                case "strides": { PyTuple t=new PyTuple(); t.items.add((long)view.itemsize); return t; }
                 case "obj": return view.source;
                 case "c_contiguous": case "f_contiguous": case "contiguous": return true;
                 default: break;
