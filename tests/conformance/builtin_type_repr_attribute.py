@@ -6,7 +6,7 @@ import types
 kinds = [
     dict, list, tuple, set, frozenset, str, bytes, bytearray, int, float, complex, bool, object, type,
     types.MappingProxyType, types.SimpleNamespace,
-    collections.OrderedDict, collections.defaultdict, collections.Counter, collections.deque, range, slice, memoryview,
+    collections.deque, range, slice, memoryview,
 ]
 if sys.version_info >= (3, 15):
     kinds.append(frozendict)

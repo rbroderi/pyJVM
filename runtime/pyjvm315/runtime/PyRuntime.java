@@ -3152,6 +3152,12 @@ public final class PyRuntime {
                     throw new PyException("TypeError","__prepare__() must return a mapping");
                 namespace.clear();
                 for(var e:map.entrySet()) namespace.put(e.getKey(),e.getValue());
+                if(namespace.prepared!=null){
+                    // the class body stores __module__ and __qualname__ through the prepared mapping, as CPython's STORE_NAME does
+                    setitem(namespace.prepared,"__module__",cls.moduleName);
+                    setitem(namespace.prepared,"__qualname__",cls.qualname);
+                    mirrorPrepared(namespace);
+                }
                 namespace.putIfAbsent("__module__",cls.moduleName);
                 namespace.putIfAbsent("__qualname__",cls.qualname);
             }
