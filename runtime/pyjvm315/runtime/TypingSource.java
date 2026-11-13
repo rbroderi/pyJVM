@@ -237,20 +237,16 @@ class TypeAliasType:
         raise TypeError('Cannot subclass an instance of TypeAliasType')
 
 
-class Generic:
-    __slots__ = ()
-    _is_protocol = False
-
-    def __class_getitem__(cls, params):
-        import typing
-        return typing._generic_class_getitem(cls, params)
-
-    def __init_subclass__(cls, *args, **kwargs):
-        import typing
-        return typing._generic_init_subclass(cls, *args, **kwargs)
+def _generic_class_getitem_hook(cls, params):
+    import typing
+    return typing._generic_class_getitem(cls, params)
 
 
-Generic.__module__ = 'typing'
+def _generic_init_subclass_hook(cls, *args, **kwargs):
+    import typing
+    return typing._generic_init_subclass(cls, *args, **kwargs)
+
+
 for _cls in (TypeVar, ParamSpec, TypeVarTuple, ParamSpecArgs, ParamSpecKwargs, TypeAliasType):
     _cls.__module__ = 'typing'
 """;

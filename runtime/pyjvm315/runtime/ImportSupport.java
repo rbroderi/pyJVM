@@ -70,7 +70,7 @@ public final class ImportSupport {
             case "binascii" -> BinasciiModule.create(); case "_random" -> RandomModule.create(); case "array" -> ArrayModule.create(); case "zlib" -> ZlibModule.create(); case "_signal" -> SignalModule.create(); case "select" -> SelectModule.create(); case "_opcode" -> OpcodeModule.create(); case "_md5" -> HashModule.create("_md5", "md5"); case "_sha1" -> HashModule.create("_sha1", "sha1"); case "_sha2" -> HashModule.create("_sha2", "sha224", "sha256", "sha384", "sha512");
             case "_sre" -> SreModule.create();
             case "_tokenize" -> TokenizeModule.create();
-            case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> StubModules.socket(); case "_typing" -> execText("_typing", TypingSource.TEXT, "<_typing>");
+            case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> StubModules.socket(); case "_typing" -> typingModule();
             default -> throw new PyException("ModuleNotFoundError", new PyExcArgs(tuple("No module named '" + name + "'"), null, attrs("name", name)));
         };
     }
@@ -377,6 +377,20 @@ public final class ImportSupport {
         try { text = Files.readString(file, StandardCharsets.UTF_8); }
         catch (IOException e) { throw new PyException("ImportError", "cannot read " + file + ": " + e.getMessage()); }
         return execText(name, text, filename);
+    }
+
+    /** {@code _typing}: Python source plus the runtime's own {@code Generic}, the implicit base of PEP 695 classes. */
+    private static PyModule typingModule() {
+        PyModule m = execText("_typing", TypingSource.TEXT, "<_typing>");
+        PyClass generic = TypeParamsGeneric.GENERIC;
+        for (String[] hook : new String[][]{{"__class_getitem__", "_generic_class_getitem_hook"}, {"__init_subclass__", "_generic_init_subclass_hook"}}) {
+            Object fn = m.dict.get(hook[1]);
+            Object classmethod = PyRuntime.callFunction(PyRuntime.builtinType("classmethod"), new ArrayList<Object>(List.of(fn)), new LinkedHashMap<Object,Object>());
+            PyRuntime.classAddAttr(generic, hook[0], classmethod);
+        }
+        PyRuntime.classAddAttr(generic, "_is_protocol", false);
+        m.dict.put("Generic", generic);
+        return m;
     }
 
     /** A module whose source is built into the runtime ({@code _typing}); it runs in a fresh module namespace. */
