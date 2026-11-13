@@ -235,9 +235,10 @@ direct class-file writer
 small PyRuntime support layer
 ```
 
-Generated classes and the support runtime target **Java 21 only** (major version
-65), with verifier frames emitted as `StackMapTable` attributes. Java 21 or newer
-is required to build and run them. Earlier target values fail explicitly.
+Generated classes and the support runtime target **Java 25 only** (major version
+69), with verifier frames emitted as `StackMapTable` attributes. Java 25 or newer
+is required to build and run them (the project moved from Java 21 for the
+final FFM API). Other target values fail explicitly.
 See [JVM_BACKEND.md](JVM_BACKEND.md) for frame analysis and validation details.
 
 ## Differential tests

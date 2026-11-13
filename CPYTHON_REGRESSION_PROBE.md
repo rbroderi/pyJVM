@@ -183,7 +183,7 @@ including the modern ValueError behavior for arbitrarily large chr arguments.
 
 ```bash
 python -m pyjvm315.cpython_execution --cpython-root /path/to/cpython \
-  --manifest tools/cpython_execution_manifest.txt --target 21 \
+  --manifest tools/cpython_execution_manifest.txt --target 25 \
   --python python3.15 --output artifacts/cpython-execution.json
 ```
 

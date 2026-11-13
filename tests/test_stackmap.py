@@ -103,7 +103,7 @@ JDK_MAJOR = int(re.search(r'version "(\d+)', subprocess.run(
     ['java', '-version'], capture_output=True, text=True).stderr)[1]) if JDK else 0
 
 
-@pytest.mark.skipif(JDK_MAJOR < 21, reason="Java 21 JVM required")
+@pytest.mark.skipif(JDK_MAJOR < 25, reason="Java 25 JVM required")
 @pytest.mark.parametrize("target", JAVA_TARGETS)
 def test_strict_verifier_dead_blocks_wide_locals_and_uninitialized_objects(tmp_path, target):
     cf = ClassFile("Verify", target=target)
@@ -141,16 +141,16 @@ def test_target_propagates_to_imports(tmp_path):
     main = tmp_path / 'main.py'
     main.write_text('import helper\nprint(helper.value)\n')
     out = tmp_path / 'out'
-    compile_file(main, out, 'Main', target=21)
+    compile_file(main, out, 'Main', target=25)
     classes = list(out.rglob('*.class'))
     assert len(classes) == 2
-    assert all(struct.unpack('>H', p.read_bytes()[6:8])[0] == 65 for p in classes)
+    assert all(struct.unpack('>H', p.read_bytes()[6:8])[0] == 69 for p in classes)
 
 
-@pytest.mark.skipif(JDK_MAJOR < 21, reason="Java 21 JDK required")
+@pytest.mark.skipif(JDK_MAJOR < 25, reason="Java 25 JDK required")
 def test_runtime_also_uses_java21_classfiles(tmp_path):
     from pyjvm315.cli import build_runtime
     build_runtime(tmp_path)
     classes = list(tmp_path.rglob('*.class'))
     assert classes
-    assert all(struct.unpack('>HH', p.read_bytes()[4:8]) == (0, 65) for p in classes)
+    assert all(struct.unpack('>HH', p.read_bytes()[4:8]) == (0, 69) for p in classes)

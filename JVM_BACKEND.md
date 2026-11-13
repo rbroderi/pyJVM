@@ -1,7 +1,7 @@
 # Modern classfile backend
 
-Generated classes and the support runtime target **Java 21 / classfile major
-65 only**. The compiler writes classes and `StackMapTable` directly in Python;
+Generated classes and the support runtime target **Java 25 / classfile major
+69 only**. The compiler writes classes and `StackMapTable` directly in Python;
 it does not use a JVM postprocessor or javac to regenerate user code.
 
 ```bash
@@ -14,7 +14,7 @@ python -m pyjvm315.conformance tests/conformance --python python3.15
 `compile_source`, `compile_file`, `Compiler` and `ClassFile` retain `target=21`
 for explicit validation; all older targets are rejected. The target propagates
 to every imported module. Runtime compilation uses `javac --release 21`.
-These are non-preview classfiles (minor 0); Java 21 or newer is required.
+These are non-preview classfiles (minor 0); Java 25 or newer is required.
 Legacy verifier-inference serialization is removed, so every method goes through
 frame analysis, including straight-line methods with an empty frame table.
 

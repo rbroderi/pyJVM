@@ -326,7 +326,7 @@ def strict_units(ns: argparse.Namespace) -> list[Unit]:
         path, output = out / "pieces" / f"{name}.txt", out / f"{name}.out"
         sync_input(path, "\n".join(lines) + "\n", output)
         units.append(Unit(name, [ns.python, "-m", "pyjvm315.cpython_execution", "--cpython-root", str(ns.cpython_root),
-                                 "--manifest", str(path), "--target", "21", "--selfhosted"], output, PIECE_DONE, env=env))
+                                 "--manifest", str(path), "--target", "25", "--selfhosted"], output, PIECE_DONE, env=env))
     return units
 
 

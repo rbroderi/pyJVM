@@ -182,7 +182,7 @@ def _overlay(kit: Kit, prog: Path, name: str, *edits: tuple[str, str]) -> Path:
     java = out / "pyjvm315" / "runtime" / "ClassCache.java"
     java.write_text(src, encoding="utf-8")
     shutil.copytree(prog, work)
-    subprocess.run(["javac", "--release", "21", "-nowarn", "-cp", str(prog), "-d", str(work), str(java)], check=True, capture_output=True)
+    subprocess.run(["javac", "--release", "25", "-nowarn", "-cp", str(prog), "-d", str(work), str(java)], check=True, capture_output=True)
     kit.env_for[work] = dict(kit.env_for.get(prog, {}))
     return work
 
