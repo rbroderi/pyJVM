@@ -3976,6 +3976,7 @@ public final class PyRuntime {
                     if(a.isEmpty()||a.get(0)==null)throw new PyException("TypeError","descriptor '"+attr+"' for 'type' objects needs a type");
                     return getattr(a.get(0),attr);
                 }));
+                descriptor.attrs.put("__objclass__",type);
                 view.put(attr,descriptor);
             }
             if(!EXCEPTION_PARENTS.containsKey(type.name) || type.name.equals("BaseException")) view.putIfAbsent("__new__",new BuiltinBoundMethod(type,"__new__"));
