@@ -2957,6 +2957,7 @@ public final class PyRuntime {
     public static boolean exceptionMatches(Object throwableObj, Object typeObj) {
         Throwable t = (Throwable)throwableObj;
         String requested = typeObj instanceof PyBuiltinType bt ? bt.name : (String)typeObj;
+        if(t instanceof PyException p && p.instance instanceof PyInstance inst && inst.cls.exceptionBase!=null && !(typeObj instanceof PyClass))return classExcIs(inst.cls,requested);
         String actual = pythonExceptionType(t);
         return exceptionIsSubclass(actual, requested);
     }

@@ -367,6 +367,8 @@ public final class BuiltinsExtra {
             for (Object entry : tuple.items) if (exceptionMatchesValue(throwable, entry)) return true;
             return false;
         }
+        if (type instanceof PyClass cls && throwable instanceof PyException p && p.instance instanceof PyInstance inst && inst.cls.exceptionBase != null)
+            return inst.cls.mro.contains(cls);   // by identity: exception class names repeat across modules
         return exceptionMatches(throwable, type instanceof PyClass cls ? cls.name : type);
     }
 
