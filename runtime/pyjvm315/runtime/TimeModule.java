@@ -43,9 +43,7 @@ public final class TimeModule {
             catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             return null;
         });
-        for (String name : new String[]{"gmtime", "localtime", "mktime", "strftime", "strptime", "asctime", "ctime"}) {
-            NativeTypes.fn(m, name, (a, k) -> { throw new PyException("NotImplementedError", "time." + name + " is not implemented (calendar conversion)"); });
-        }
+        TimeCalendar.define(m);
         TimeZone tz = TimeZone.getDefault();
         long offset = -tz.getRawOffset() / 1000;
         boolean dst = tz.useDaylightTime();

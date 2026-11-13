@@ -3444,6 +3444,7 @@ public final class PyRuntime {
     static boolean builtinHasMethod(String type,String name) {
         if(type.equals("frozendict") && (name.equals("__repr__")||name.equals("__eq__")||name.equals("__ne__")||name.equals("__len__")||name.equals("__iter__")||name.equals("__contains__")||name.equals("__getitem__")))type="dict";
         if(NativeSubclass.isKind(type) && NativeSubclassMethods.hasMember(type,name))return true;
+        if(type.equals("float") && name.equals("__getformat__"))return true;
         if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
@@ -3584,6 +3585,11 @@ public final class PyRuntime {
     }
 
     static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(builtin.name.equals("float") && name.equals("__getformat__") && args.length==1){
+            if(!(args[0] instanceof String fk))throw new PyException("TypeError","__getformat__() argument must be str, not "+typeName(args[0]));
+            if(!fk.equals("double") && !fk.equals("float"))throw new PyException("ValueError","__getformat__() argument 1 must be 'double' or 'float'");
+            return "IEEE, little-endian";
+        }
         if(builtin.name.equals("frozendict") && builtinHasMethod("frozendict",name) && !name.equals("fromkeys"))builtin=(PyBuiltinType)builtinType("dict");
         if(NativeSubclass.isKind(builtin.name)){Object nativeResult=NativeSubclassMethods.callUnbound(builtin,name,args);if(nativeResult!=MISSING)return nativeResult;}
         if((builtin.name.equals("set") || builtin.name.equals("frozenset")) && setMethodKnown(name,builtin.name.equals("frozenset"))){
