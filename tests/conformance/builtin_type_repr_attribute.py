@@ -5,7 +5,6 @@ import types
 
 kinds = [
     dict, list, tuple, set, frozenset, str, bytes, bytearray, int, float, complex, bool, object, type,
-    types.MappingProxyType, types.SimpleNamespace,
     collections.deque, range, slice, memoryview,
 ]
 if sys.version_info >= (3, 15):
