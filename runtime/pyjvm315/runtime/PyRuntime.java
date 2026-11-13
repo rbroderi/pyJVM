@@ -4141,6 +4141,7 @@ public final class PyRuntime {
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__doc__"))return null;
+            if(name.equals("__init__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
