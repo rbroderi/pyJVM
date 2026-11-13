@@ -137,6 +137,7 @@ final class NativeSubclassMethods {
         if (args.length == 0) throw new PyException("TypeError", "unbound method " + kind + "." + name + "() needs an argument");
         Object self = args[0], p = NativeSubclass.unwrap(self);
         String actual = NativeSubclass.kindOf(p);
+        if (actual == null && p instanceof PyDict fd && fd.isFrozen() && kind.equals("dict")) actual = "dict";
         if (actual == null || !(actual.equals(kind))) {
             throw new PyException("TypeError", "descriptor '" + name + "' for '" + kind + "' objects doesn't apply to a '" + typeName(self) + "' object");
         }

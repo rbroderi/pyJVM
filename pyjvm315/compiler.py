@@ -967,6 +967,8 @@ class Compiler:
         self.loop_stack = []; self.exception_stack = []; self.handler_depths = []; self.cleanup_stack = []; self.finally_stack = []
         b.ldc_string("<module>"); b.ldc_string(self.filename); self._emit_int(1,b); self._emit_owner(b)
         b.invokestatic(RUNTIME,"pushModuleFrame",f"({OBJ*4})V")
+        if self.module_name == "__main__":
+            b.ldc_string(self.class_name.replace("/", ".")); b.invokestatic(RUNTIME, "registerMainModule", f"({OBJ})V")
         for chunk_start in range(0, len(self.caret_table), 16000):
             b.ldc_string(self.filename); b.ldc_string(self.caret_table[chunk_start:chunk_start + 16000])
             b.invokestatic(RUNTIME2, "registerCarets", f"({OBJ}{OBJ})V")
@@ -2003,7 +2005,7 @@ class Compiler:
                 else:
                     gen_try_except(stmt.body, stmt.handlers, stmt.orelse)
                 return
-            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and self._contains_yield(stmt):
+            if not isinstance(stmt,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)) and self._contains_yield(stmt):
                 raise CompileError(f"yield inside {type(stmt).__name__} is not implemented yet")
             self._stmt(stmt,b,scope,in_function=True)
 

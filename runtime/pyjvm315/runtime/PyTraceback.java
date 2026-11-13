@@ -22,7 +22,7 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyTraceback {
-    final PyFrame frame; final long lineno; final PyTraceback next;
+    final PyFrame frame; final long lineno; PyTraceback next;
     /** On the entry where the exception was raised: its type name (TracebackFormat picks the caret range with it). */
     String leafType;
     PyTraceback(PyFrame frame,long lineno,PyTraceback next){this.frame=frame;this.lineno=lineno;this.next=next;}

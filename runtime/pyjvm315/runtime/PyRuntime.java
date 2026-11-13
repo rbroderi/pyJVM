@@ -151,6 +151,11 @@ public final class PyRuntime {
         return module;
         }
     }
+    /** Registers the running script as sys.modules['__main__'] (its globals are the static fields of {@code className}). */
+    public static void registerMainModule(Object classObj) {
+        if(ImportSupport.cachedModule("__main__")!=null)return;
+        PyModule module=new PyModule("__main__",(String)classObj); MODULE_CACHE.put("__main__",module); ImportSupport.register("__main__",module);
+    }
     public static Object importModule(Object nameObj,Object classObj) {
         String name=(String)nameObj, className=(String)classObj;
         PyModule cached=ImportSupport.cachedModule(name);
@@ -2595,10 +2600,16 @@ public final class PyRuntime {
         return yieldFromStep(iteratorObj,parent.sentValue);
     }
 
+    /** Whether a user-defined exception class derives from the built-in exception {@code name}, by its own MRO (class names are not unique across modules). */
+    static boolean classExcIs(PyClass cls,String name) {
+        for(PyClass c:cls.mro)for(String b:c.ownExcBases)if(exceptionIsSubclass(b,name))return true;
+        return false;
+    }
+
     static boolean exceptionObjectIs(Object value,String name) {
         if(value instanceof PyExceptionValue e) return exceptionIsSubclass(e.typeName,name);
         if(value instanceof PyException e) return exceptionIsSubclass(e.typeName,name);
-        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return exceptionIsSubclass(inst.cls.name,name);
+        if(value instanceof PyInstance inst && inst.cls.exceptionBase!=null) return classExcIs(inst.cls,name);
         return false;
     }
     public static boolean yieldFromDone(Object resultObj) { return ((PyYieldFromResult)resultObj).done; }
@@ -2816,7 +2827,9 @@ public final class PyRuntime {
     }
     public static boolean withExitException(Object manager, Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        Object result=callMethod(manager, "__exit__", new Object[]{builtinType(pythonExceptionType(t)), exceptionInstance(t), null});
+        Object exc=exceptionInstance(t);
+        Object excType=exc instanceof PyInstance pi && pi.cls.exceptionBase!=null ? pi.cls : builtinType(pythonExceptionType(t));
+        Object result=callMethod(manager, "__exit__", new Object[]{excType, exc, null});
         return truth(result);
     }
     public static Object asyncWithEnter(Object manager) {
@@ -2864,6 +2877,7 @@ public final class PyRuntime {
         if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
         PyCode code=new PyCode(name,filename,firstline);
         PyFrame shown=new PyFrame(code,locals); shown.fixedLine=line;
+        if(active!=null && active.name.equals(name) && active.filename.equals(filename)) shown.owner=active.owner;
         return code.shown=new PyTraceback(shown,line,current);
     }
     public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
@@ -2947,6 +2961,7 @@ public final class PyRuntime {
     public static boolean exceptionMatches(Object throwableObj, Object typeObj) {
         Throwable t = (Throwable)throwableObj;
         String requested = typeObj instanceof PyBuiltinType bt ? bt.name : (String)typeObj;
+        if(t instanceof PyException p && p.instance instanceof PyInstance inst && inst.cls.exceptionBase!=null && !(typeObj instanceof PyClass) && BUILTIN_EXCEPTION_NAMES.contains(requested))return classExcIs(inst.cls,requested);
         String actual = pythonExceptionType(t);
         return exceptionIsSubclass(actual, requested);
     }
@@ -2981,6 +2996,8 @@ public final class PyRuntime {
         Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
         Map.entry("ProcessLookupError","OSError")));
     static { BuiltinsExtra.registerExceptionTypes(EXCEPTION_PARENTS); }
+    /** Names of the built-in exception types (before any user class registers its own name in EXCEPTION_PARENTS). */
+    static final Set<String> BUILTIN_EXCEPTION_NAMES = new java.util.HashSet<>(EXCEPTION_PARENTS.keySet()); static { BUILTIN_EXCEPTION_NAMES.add("BaseException"); }
     /** Further exception bases of a class with several (class UnsupportedOperation(OSError, ValueError)). */
     static final Map<String,List<String>> EXTRA_EXCEPTION_PARENTS = new java.util.concurrent.ConcurrentHashMap<>();
     static boolean exceptionIsSubclass(String actual, String requested) {
@@ -3040,9 +3057,10 @@ public final class PyRuntime {
         if(base instanceof TypeParamsGeneric generic && generic.origin instanceof PyClass origin){ classAddBase(cls,origin); return; }
         if(base instanceof PyBuiltinType sealed && sealed.name.equals("sentinel")) throw new PyException("TypeError","type 'sentinel' is not an acceptable base type");
         if(base instanceof PyBuiltinType exc && exceptionIsSubclass(exc.name,"BaseException")) {
+            target.ownExcBases.add(exc.name);
             if(target.exceptionBase==null){ target.exceptionBase=exc.name; target.builtinBaseName=exc.name; EXCEPTION_PARENTS.put(target.name,exc.name); }
             else if(!target.exceptionBase.equals("BaseExceptionGroup") && !exceptionIsSubclass(target.exceptionBase,exc.name)) EXTRA_EXCEPTION_PARENTS.computeIfAbsent(target.name,k->new java.util.concurrent.CopyOnWriteArrayList<>()).add(exc.name);
-            else if(target.exceptionBase.equals("BaseExceptionGroup") && exceptionIsSubclass(exc.name,"Exception")){ target.exceptionBase="ExceptionGroup"; target.builtinBaseName="ExceptionGroup"; EXCEPTION_PARENTS.put(target.name,"ExceptionGroup"); }
+            else if(target.exceptionBase.equals("BaseExceptionGroup") && exceptionIsSubclass(exc.name,"Exception")){ target.exceptionBase="ExceptionGroup"; target.builtinBaseName="ExceptionGroup"; target.ownExcBases.add("ExceptionGroup"); EXCEPTION_PARENTS.put(target.name,"ExceptionGroup"); }
             return;
         }
         if(base instanceof PyBuiltinType builtin && (builtin.name.equals("object") || builtin.name.equals("type") || builtin.name.equals("super") || builtin.name.equals("module") || DESCRIPTOR_TYPES.contains(builtin.name) || builtin.name.equals("GenericAlias"))) {
@@ -3427,7 +3445,9 @@ public final class PyRuntime {
         return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
     }
     static boolean builtinHasMethod(String type,String name) {
+        if(type.equals("frozendict") && (name.equals("__repr__")||name.equals("__eq__")||name.equals("__ne__")||name.equals("__len__")||name.equals("__iter__")||name.equals("__contains__")||name.equals("__getitem__")))type="dict";
         if(NativeSubclass.isKind(type) && NativeSubclassMethods.hasMember(type,name))return true;
+        if(type.equals("float") && name.equals("__getformat__"))return true;
         if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
@@ -3568,6 +3588,12 @@ public final class PyRuntime {
     }
 
     static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(builtin.name.equals("float") && name.equals("__getformat__") && args.length==1){
+            if(!(args[0] instanceof String fk))throw new PyException("TypeError","__getformat__() argument must be str, not "+typeName(args[0]));
+            if(!fk.equals("double") && !fk.equals("float"))throw new PyException("ValueError","__getformat__() argument 1 must be 'double' or 'float'");
+            return "IEEE, little-endian";
+        }
+        if(builtin.name.equals("frozendict") && builtinHasMethod("frozendict",name) && !name.equals("fromkeys"))builtin=(PyBuiltinType)builtinType("dict");
         if(NativeSubclass.isKind(builtin.name)){Object nativeResult=NativeSubclassMethods.callUnbound(builtin,name,args);if(nativeResult!=MISSING)return nativeResult;}
         if((builtin.name.equals("set") || builtin.name.equals("frozenset")) && setMethodKnown(name,builtin.name.equals("frozenset"))){
             if(args.length==0 || !(args[0] instanceof Set<?> set) || builtin.name.equals("frozenset")!=(args[0] instanceof PyFrozenSet))throw new PyException("TypeError","set descriptor requires a "+builtin.name+" object");
@@ -3698,6 +3724,8 @@ public final class PyRuntime {
         if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
             requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
         }
+        if((name.equals("__repr__")||name.equals("__str__")) && args.length==1 && !(args[0] instanceof PyInstance))
+            return name.equals("__repr__")?repr_(args[0]):str_(args[0]);
         throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
     }
 
@@ -3916,6 +3944,7 @@ public final class PyRuntime {
         }
         if(obj instanceof PyBuiltinType type && (name.equals("__name__") || name.equals("__qualname__")))return type.name;
         if(obj instanceof PyBuiltinType && name.equals("__module__"))return "builtins";
+        if(obj instanceof PyBuiltinType bt && name.equals("__flags__"))return (1L<<10)|(1L<<18)|switch(bt.name){case "int"->1L<<24;case "list"->1L<<25;case "tuple"->1L<<26;case "bytes"->1L<<27;case "str"->1L<<28;case "dict"->1L<<29;case "type"->1L<<31;default->0L;};
         if(obj instanceof PyBuiltinType type && name.equals("__mro__")){
             PyTuple mro=new PyTuple();
             for(String n=type.name;n!=null&&!n.equals("object");n=type.name.equals("bool")&&n.equals("bool")?"int":EXCEPTION_PARENTS.get(n))mro.items.add(builtinType(n));
@@ -3936,6 +3965,14 @@ public final class PyRuntime {
                 }));
                 view.putIfAbsent(attr,descriptor);
             }
+            if(type.name.equals("type")) for(String attr:new String[]{"__mro__","__dict__","__bases__","__name__","__qualname__","__module__"}){
+                NativeFunction descriptor=new NativeFunction(attr,(a,k)->{throw new PyException("TypeError","'"+attr+"' attribute descriptor of 'type' objects cannot be called");});
+                descriptor.attrs.put("__get__",new NativeFunction("__get__",(a,k)->{
+                    if(a.isEmpty()||a.get(0)==null)throw new PyException("TypeError","descriptor '"+attr+"' for 'type' objects needs a type");
+                    return getattr(a.get(0),attr);
+                }));
+                view.put(attr,descriptor);
+            }
             if(!EXCEPTION_PARENTS.containsKey(type.name) || type.name.equals("BaseException")) view.putIfAbsent("__new__",new BuiltinBoundMethod(type,"__new__"));
             return view;
         }
@@ -3948,6 +3985,7 @@ public final class PyRuntime {
             return new NativeFunction("__hash__",(a,k)->{if(a.size()!=1)throw new PyException("TypeError","expected 0 arguments, got "+Math.max(0,a.size()-1));return hash(a.get(0));});
         }
         if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof PyBuiltinType && (name.equals("__repr__")||name.equals("__str__")))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyComplex z){
             if(name.equals("real"))return z.real;
             if(name.equals("imag"))return z.imag;
@@ -4037,6 +4075,13 @@ public final class PyRuntime {
             if(name.equals("__name__")) return cls.name;
             if(name.equals("__qualname__")) return cls.qualname;
             if(name.equals("__module__")) return cls.attrs.get("__module__") instanceof String declared ? declared : cls.moduleName;
+            if(name.equals("__flags__")){
+                long flags=(1L<<9)|(1L<<10)|(1L<<14)|(1L<<18);
+                Object abs=cls.lookupAttr("__abstractmethods__");
+                if(abs!=MISSING && abs!=null && truth(abs))flags|=1L<<20;
+                if(cls.nativeKind!=null)flags|=switch(cls.nativeKind){case "int"->1L<<24;case "list"->1L<<25;case "tuple"->1L<<26;case "bytes"->1L<<27;case "str"->1L<<28;case "dict"->1L<<29;default->0L;};
+                return flags;
+            }
             if(cls.nativeKind!=null && name.equals("__bases__")) return explicitBasesTuple(cls);
             if(cls.nativeKind!=null && name.equals("__mro__")) {PyTuple t=new PyTuple(); t.items.addAll(typeMro(cls)); return t;}
             if(name.equals("__bases__")) {
@@ -4046,6 +4091,17 @@ public final class PyRuntime {
             }
             if(name.equals("__mro__")) {
                 PyTuple t=new PyTuple(); t.items.addAll(cls.mro);
+                if(cls.exceptionBase!=null){
+                    LinkedHashSet<String> excs=new LinkedHashSet<>();
+                    for(PyClass c:cls.mro)for(String b:c.ownExcBases)excs.add(b);
+                    LinkedHashSet<String> chain=new LinkedHashSet<>();
+                    for(String b:excs)chain.add(b);
+                    for(String b:excs)for(String n=EXCEPTION_PARENTS.get(b);n!=null;n=EXCEPTION_PARENTS.get(n))chain.add(n);
+                    chain.add("BaseException"); chain.remove("object");
+                    for(String n:chain)t.items.add(builtinType(n));
+                    t.items.add(builtinType("object"));
+                    return t;
+                }
                 if(cls.builtinBaseName!=null) t.items.add(builtinType(cls.builtinBaseName));
                 if(cls.builtinBaseName==null || !cls.builtinBaseName.equals("object")) t.items.add(builtinType("object"));
                 return t;
@@ -4099,6 +4155,7 @@ public final class PyRuntime {
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
+            if(name.equals("__init__"))return new BoundCallable(new NativeFunction("__init__",(a,k)->null),obj);
             if(name.equals("__format__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
             if(name.equals("__doc__")) return null;
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
@@ -4123,6 +4180,11 @@ public final class PyRuntime {
         if(obj instanceof PyFrame frame){PyFrameSupport.setFrameAttr(frame,name,value);return;}
         if(obj instanceof TypeParamsObject tp){tp.setattr(name,value);return;}
         if(obj instanceof PyCell cell && name.equals("cell_contents")){cell.set(value);return;}
+        if(obj instanceof PyTraceback tb){
+            if(!name.equals("tb_next"))throw new PyException("AttributeError","readonly attribute");
+            if(value!=null && !(value instanceof PyTraceback))throw new PyException("TypeError","expected traceback object or None, got '"+typeName(value)+"'");
+            tb.next=(PyTraceback)value;return;
+        }
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
             if(AnnotationSupport.isAnnotationName(name))AnnotationSupport.functionSet(function,name,value);
@@ -4229,7 +4291,7 @@ public final class PyRuntime {
         if (clsObj instanceof PyBuiltinType bt) {
             if(obj instanceof PyExceptionValue error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
             if(obj instanceof PyException error) return bt.name.equals("object") || exceptionIsSubclass(error.typeName,bt.name);
-            if(obj instanceof PyInstance exc && exc.cls.exceptionBase!=null) return bt.name.equals("object") || exceptionIsSubclass(exc.cls.name,bt.name);
+            if(obj instanceof PyInstance exc && exc.cls.exceptionBase!=null) return bt.name.equals("object") || classExcIs(exc.cls,bt.name);
             if(obj instanceof PyInstance nativeInst && nativeInst.payload!=null) return bt.name.equals("object") || bt.name.equals(nativeInst.cls.nativeKind);
             return switch(bt.name) {
                 case "object" -> true;
