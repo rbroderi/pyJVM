@@ -38,6 +38,21 @@ final class PosixFiles {
                 {"O_NOFOLLOW", 0400000L}, {"O_CLOEXEC", 02000000L}, {"O_SYNC", 04010000L}, {"O_DSYNC", 010000L}, {"O_NDELAY", 04000L},
                 {"SEEK_SET", 0L}, {"SEEK_CUR", 1L}, {"SEEK_END", 2L}, {"EX_OK", 0L}, {"WNOHANG", 1L}})
             m.attrs.put((String) c[0], c[1]);
+        fn(m, "waitpid", (a, k) -> { throw new PyException("ChildProcessError", "[Errno 10] No child processes"); });
+        fn(m, "wait", (a, k) -> { throw new PyException("ChildProcessError", "[Errno 10] No child processes"); });
+        fn(m, "WIFEXITED", (a, k) -> (IoUtil.asLong(a.get(0)) & 0x7f) == 0);
+        fn(m, "WEXITSTATUS", (a, k) -> (IoUtil.asLong(a.get(0)) >> 8) & 0xff);
+        fn(m, "WIFSIGNALED", (a, k) -> { long s = IoUtil.asLong(a.get(0)) & 0x7f; return s != 0 && s != 0x7f; });
+        fn(m, "WTERMSIG", (a, k) -> IoUtil.asLong(a.get(0)) & 0x7f);
+        fn(m, "WIFSTOPPED", (a, k) -> (IoUtil.asLong(a.get(0)) & 0xff) == 0x7f);
+        fn(m, "WSTOPSIG", (a, k) -> (IoUtil.asLong(a.get(0)) >> 8) & 0xff);
+        fn(m, "WIFCONTINUED", (a, k) -> IoUtil.asLong(a.get(0)) == 0xffff);
+        fn(m, "waitstatus_to_exitcode", (a, k) -> {
+            long st = IoUtil.asLong(a.get(0)), sig = st & 0x7f;
+            if (sig == 0) return (st >> 8) & 0xff;
+            if (sig == 0x7f) throw new PyException("ValueError", "invalid wait status: " + st);
+            return -sig;
+        });
         m.attrs.put("_have_functions", new ArrayList<Object>());
         fn(m, "_exit", (a, k) -> { IoFd.flushProcessStreams(); Runtime.getRuntime().halt((int) IoUtil.asLong(a.get(0))); return null; });
         fn(m, "open", (a, k) -> open(a, k));
