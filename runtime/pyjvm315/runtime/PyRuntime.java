@@ -4078,6 +4078,17 @@ public final class PyRuntime {
             }
             if(name.equals("__mro__")) {
                 PyTuple t=new PyTuple(); t.items.addAll(cls.mro);
+                if(cls.exceptionBase!=null){
+                    LinkedHashSet<String> excs=new LinkedHashSet<>();
+                    for(PyClass c:cls.mro)for(String b:c.ownExcBases)excs.add(b);
+                    LinkedHashSet<String> chain=new LinkedHashSet<>();
+                    for(String b:excs)chain.add(b);
+                    for(String b:excs)for(String n=EXCEPTION_PARENTS.get(b);n!=null;n=EXCEPTION_PARENTS.get(n))chain.add(n);
+                    chain.add("BaseException"); chain.remove("object");
+                    for(String n:chain)t.items.add(builtinType(n));
+                    t.items.add(builtinType("object"));
+                    return t;
+                }
                 if(cls.builtinBaseName!=null) t.items.add(builtinType(cls.builtinBaseName));
                 if(cls.builtinBaseName==null || !cls.builtinBaseName.equals("object")) t.items.add(builtinType("object"));
                 return t;

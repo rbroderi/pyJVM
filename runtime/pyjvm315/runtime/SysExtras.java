@@ -272,6 +272,8 @@ final class SysExtras {
             m.attrs.put("implementation", pi);
             pi.fields.put("version", vi);
             pi.fields.put("hexversion", hexversion());
+            String osName = System.getProperty("os.name", "").toLowerCase(), arch = System.getProperty("os.arch", "");
+            if (osName.contains("linux")) pi.fields.put("_multiarch", (arch.equals("aarch64") ? "aarch64" : arch.equals("amd64") || arch.equals("x86_64") ? "x86_64" : arch) + "-linux-gnu");
             if (LangVersion.atLeast(3, 14)) pi.fields.put("supports_isolated_interpreters", false);
         }
 
