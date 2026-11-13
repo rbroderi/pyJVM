@@ -2958,7 +2958,7 @@ public final class PyRuntime {
     public static boolean exceptionMatches(Object throwableObj, Object typeObj) {
         Throwable t = (Throwable)throwableObj;
         String requested = typeObj instanceof PyBuiltinType bt ? bt.name : (String)typeObj;
-        if(t instanceof PyException p && p.instance instanceof PyInstance inst && inst.cls.exceptionBase!=null && !(typeObj instanceof PyClass))return classExcIs(inst.cls,requested);
+        if(t instanceof PyException p && p.instance instanceof PyInstance inst && inst.cls.exceptionBase!=null && !(typeObj instanceof PyClass) && BUILTIN_EXCEPTION_NAMES.contains(requested))return classExcIs(inst.cls,requested);
         String actual = pythonExceptionType(t);
         return exceptionIsSubclass(actual, requested);
     }
@@ -2993,6 +2993,8 @@ public final class PyRuntime {
         Map.entry("IsADirectoryError","OSError"), Map.entry("NotADirectoryError","OSError"),
         Map.entry("ProcessLookupError","OSError")));
     static { BuiltinsExtra.registerExceptionTypes(EXCEPTION_PARENTS); }
+    /** Names of the built-in exception types (before any user class registers its own name in EXCEPTION_PARENTS). */
+    static final Set<String> BUILTIN_EXCEPTION_NAMES = new java.util.HashSet<>(EXCEPTION_PARENTS.keySet()); static { BUILTIN_EXCEPTION_NAMES.add("BaseException"); }
     /** Further exception bases of a class with several (class UnsupportedOperation(OSError, ValueError)). */
     static final Map<String,List<String>> EXTRA_EXCEPTION_PARENTS = new java.util.concurrent.ConcurrentHashMap<>();
     static boolean exceptionIsSubclass(String actual, String requested) {
