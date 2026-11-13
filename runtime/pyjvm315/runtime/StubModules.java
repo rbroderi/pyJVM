@@ -31,6 +31,19 @@ final class StubModules {
         return m;
     }
 
+    static PyModule resource() {
+        PyModule m = module("resource");
+        Object[] c = {"RLIMIT_CPU", 0L, "RLIMIT_FSIZE", 1L, "RLIMIT_DATA", 2L, "RLIMIT_STACK", 3L, "RLIMIT_CORE", 4L, "RLIMIT_NOFILE", 7L,
+            "RLIMIT_AS", 9L, "RLIM_INFINITY", -1L, "RUSAGE_SELF", 0L, "RUSAGE_CHILDREN", -1L};
+        for (int i = 0; i < c.length; i += 2) m.attrs.put((String) c[i], c[i + 1]);
+        NativeTypes.fn(m, "getrlimit", (a, k) -> NativeTypes.tuple(8388608L, -1L));
+        NativeTypes.fn(m, "setrlimit", (a, k) -> null);
+        NativeTypes.fn(m, "getpagesize", (a, k) -> 4096L);
+        unsupported(m, "getrusage");
+        m.attrs.put("error", PyRuntime.builtinType("OSError"));
+        return m;
+    }
+
     static PyModule pwd() {
         PyModule m = module("pwd");
         NativeTypes.fn(m, "getpwuid", (a, k) -> { throw new PyException("KeyError", "getpwuid(): uid not found"); });

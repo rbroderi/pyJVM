@@ -74,6 +74,11 @@ def main(argv):
         except unittest.SkipTest as exc:
             print("RESULT %s skipped-module %s" % (modname, exc))
             continue
+        except Exception as exc:   # a module that cannot be imported must not hide the other modules
+            print("RESULT %s import-error %s" % (modname, type(exc).__name__))
+            sys.stderr.write("import of %s failed: %s: %s\n" % (modname, type(exc).__name__, str(exc)[:200]))
+            failed = True
+            continue
         loader = unittest.TestLoader()
         if pattern:
             loader.testNamePatterns = ["*%s*" % pattern]
