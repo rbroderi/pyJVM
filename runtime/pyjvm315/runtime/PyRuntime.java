@@ -1811,7 +1811,8 @@ public final class PyRuntime {
     public static Object unpack(Object value, Object countObj) {
         int count = asIndex(countObj); ArrayList<Object> out = new ArrayList<>();
         for (Object x : iterable(value)) out.add(x);
-        if (out.size() != count) throw new IllegalArgumentException("cannot unpack sequence of size " + out.size() + " into " + count + " values");
+        if (out.size() < count) throw new PyException("ValueError", "not enough values to unpack (expected " + count + ", got " + out.size() + ")");
+        if (out.size() > count) throw new PyException("ValueError", "too many values to unpack (expected " + count + ")");
         return out;
     }
     public static Object unpackEx(Object value,Object beforeObj,Object afterObj) {
