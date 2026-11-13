@@ -44,6 +44,44 @@ final class StubModules {
         return m;
     }
 
+    /** Enough of {@code _socket} for {@code socket}, {@code selectors} and {@code asyncio} to import; sockets cannot be created. */
+    static PyModule socket() {
+        PyModule m = module("_socket");
+        PyClass sock = NativeTypes.define("_socket", "socket", null);
+        NativeTypes.method(sock, StubModules.class, "__init__", "sockInit", "self,family,type,proto,fileno", NativeTypes.defaults("family", -1L, "type", -1L, "proto", -1L, "fileno", null));
+        NativeTypes.finish(sock);
+        m.attrs.put("socket", sock);
+        m.attrs.put("SocketType", sock);
+        m.attrs.put("error", PyRuntime.builtinType("OSError"));
+        m.attrs.put("timeout", PyRuntime.builtinType("TimeoutError"));
+        for (String n : new String[]{"gaierror", "herror"}) {
+            PyClass c = NativeTypes.define("socket", n, (PyClass) PyRuntime.builtinType("OSError"));
+            NativeTypes.finish(c);
+            m.attrs.put(n, c);
+        }
+        Object[] c = {"AF_UNSPEC", 0L, "AF_UNIX", 1L, "AF_INET", 2L, "AF_INET6", 10L, "SOCK_STREAM", 1L, "SOCK_DGRAM", 2L, "SOCK_RAW", 3L,
+            "SOCK_NONBLOCK", 2048L, "SOCK_CLOEXEC", 524288L, "SOL_SOCKET", 1L, "SOL_IP", 0L, "SOL_TCP", 6L, "SOL_UDP", 17L,
+            "SO_REUSEADDR", 2L, "SO_TYPE", 3L, "SO_ERROR", 4L, "SO_BROADCAST", 6L, "SO_SNDBUF", 7L, "SO_RCVBUF", 8L, "SO_KEEPALIVE", 9L,
+            "SO_REUSEPORT", 15L, "IPPROTO_IP", 0L, "IPPROTO_TCP", 6L, "IPPROTO_UDP", 17L, "IPPROTO_IPV6", 41L, "TCP_NODELAY", 1L,
+            "SOMAXCONN", 4096L, "SHUT_RD", 0L, "SHUT_WR", 1L, "SHUT_RDWR", 2L, "MSG_PEEK", 2L, "MSG_DONTWAIT", 64L, "MSG_OOB", 1L,
+            "AI_PASSIVE", 1L, "AI_CANONNAME", 2L, "AI_NUMERICHOST", 4L, "NI_NUMERICHOST", 1L, "NI_NUMERICSERV", 2L, "EAI_NONAME", -2L,
+            "INADDR_ANY", 0L, "IPV6_V6ONLY", 26L, "has_ipv6", true};
+        for (int i = 0; i < c.length; i += 2) m.attrs.put((String) c[i], c[i + 1]);
+        NativeTypes.fn(m, "gethostname", (a, k) -> "localhost");
+        NativeTypes.fn(m, "getdefaulttimeout", (a, k) -> null);
+        NativeTypes.fn(m, "setdefaulttimeout", (a, k) -> null);
+        NativeTypes.fn(m, "htons", (a, k) -> Long.reverseBytes(IoUtil.asLong(a.get(0)) & 0xffff) >>> 48);
+        NativeTypes.fn(m, "ntohs", (a, k) -> Long.reverseBytes(IoUtil.asLong(a.get(0)) & 0xffff) >>> 48);
+        NativeTypes.fn(m, "htonl", (a, k) -> Long.reverseBytes(IoUtil.asLong(a.get(0)) & 0xffffffffL) >>> 32);
+        NativeTypes.fn(m, "ntohl", (a, k) -> Long.reverseBytes(IoUtil.asLong(a.get(0)) & 0xffffffffL) >>> 32);
+        unsupported(m, "getaddrinfo", "gethostbyname", "getnameinfo", "socketpair", "dup", "close", "inet_aton", "inet_pton", "inet_ntop");
+        return m;
+    }
+
+    public static Object sockInit(Object self, Object family, Object type, Object proto, Object fileno) {
+        throw new PyException("OSError", "sockets are not supported by pyJVM");
+    }
+
     static PyModule pwd() {
         PyModule m = module("pwd");
         NativeTypes.fn(m, "getpwuid", (a, k) -> { throw new PyException("KeyError", "getpwuid(): uid not found"); });
