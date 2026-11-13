@@ -401,6 +401,10 @@ public final class ImportSupport {
         path.add(dir == null ? Path.of("").toAbsolutePath().toString() : dir.toString());
         String pp = System.getenv("PYTHONPATH");
         if (pp != null) for (String p : pp.split(java.io.File.pathSeparator)) if (!p.isEmpty()) path.add(p);
+        // PYJVM_STDLIB_JAR: precompiled stdlib archives (tools/stdlib_status.py), searched after PYTHONPATH and before the stdlib
+        // sources; an archive built by another compiler/runtime or language version is reported and ignored (JarImport)
+        String jars = System.getenv("PYJVM_STDLIB_JAR");
+        if (jars != null) for (String p : jars.split(java.io.File.pathSeparator)) if (!p.isEmpty()) path.add(p);
         String stdlib = stdlibDir();
         if (stdlib != null) path.add(stdlib);
         sys.attrs.put("path", path);

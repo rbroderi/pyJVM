@@ -2003,7 +2003,7 @@ class Compiler:
                 else:
                     gen_try_except(stmt.body, stmt.handlers, stmt.orelse)
                 return
-            if self._contains_yield(stmt):
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and self._contains_yield(stmt):
                 raise CompileError(f"yield inside {type(stmt).__name__} is not implemented yet")
             self._stmt(stmt,b,scope,in_function=True)
 

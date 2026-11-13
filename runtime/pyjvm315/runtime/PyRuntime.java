@@ -217,6 +217,7 @@ public final class PyRuntime {
                 try { java.lang.reflect.Field field=cls.getField(f);Object value=field.get(null);if(value!=UNBOUND)return LazyImport.reifyField(value,field);break; } catch(NoSuchFieldException ignored) {}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
+        switch(name) { case "__name__": return module.name; case "__doc__": case "__spec__": case "__loader__": return null; default: break; }
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
     }
 
@@ -3904,6 +3905,10 @@ public final class PyRuntime {
         if((obj instanceof Long || obj instanceof BigInteger || obj instanceof Boolean) && IntMethods.NAMES.contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PySetIterator && Set.of("__iter__","__next__","__length_hint__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyLazyIterator && (name.equals("__iter__") || name.equals("__next__")))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof PyBuiltinFunction bf){
+            if(name.equals("__name__") || name.equals("__qualname__"))return bf.name;
+            if(name.equals("__doc__"))return null;
+        }
         if(obj instanceof NativeFunction nf){
             if(nf.attrs.containsKey(name))return nf.attrs.get(name);
             if(name.equals("__name__") || name.equals("__qualname__"))return nf.name;
@@ -4068,6 +4073,7 @@ public final class PyRuntime {
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
             if(name.equals("__subclasshook__"))return new NativeFunction("__subclasshook__",(a,k)->NOT_IMPLEMENTED);
             if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));
+            if(name.equals("mro"))return new NativeFunction("mro",(a,k)->new ArrayList<Object>(((PyTuple)getattr(cls,"__mro__")).items));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
@@ -4094,10 +4100,12 @@ public final class PyRuntime {
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
             if(name.equals("__format__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
+            if(name.equals("__doc__")) return null;
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
         {Object nativeValue=NativeSubclassMethods.plainAttribute(obj,name);if(nativeValue!=MISSING)return nativeValue;}
         if(obj instanceof PyObject && Set.of("__str__","__repr__","__hash__","__eq__","__ne__","__format__","__reduce_ex__","__sizeof__").contains(name))return new BuiltinBoundMethod(obj,name);
+        if(name.equals("__doc__") && !(obj instanceof PyModule)) return null;
         throw new PyException("AttributeError","'"+typeName(obj)+"' object has no attribute '"+name+"'");
     }
 
@@ -4251,6 +4259,8 @@ public final class PyRuntime {
                 case "filter" -> obj instanceof PyFilter;
                 case "slice" -> obj instanceof PySlice;
                 case "sentinel" -> obj instanceof TypeParamsSentinel;
+                case "module" -> obj instanceof PyModule;
+                case "function" -> obj instanceof PyFunction;
                 case "type" -> obj instanceof PyClass || obj instanceof PyBuiltinType;
                 case "BaseException", "Exception" -> obj instanceof PyExceptionValue || obj instanceof PyException;
                 default -> false;

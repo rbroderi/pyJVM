@@ -36,48 +36,55 @@ def module_name(root: Path, path: Path) -> tuple[str, bool]:
     return ".".join(parts), is_package
 
 
-def build_jar(out: Path, roots: list[Path], *, skip: set[str] | frozenset[str] = frozenset(), fingerprint: str | None = None,
-              feature_minor: int = -1) -> tuple[list[str], dict[str, str]]:
-    """Write ``out``; returns (module names included, {module name: reason} for the modules left out)."""
-    lines = ["pyjvm-jar\t1", f"lang\t{sys.version_info[0]}.{sys.version_info[1]}"]
+def write_jar(out: Path, entries: list[tuple[str, bool, str, bytes]], skipped: dict[str, str] | None = None, *,
+              fingerprint: str | None = None, lang: str | None = None) -> None:
+    """Write the archive from ready-made ``(module name, is_package, source path, class bytes)`` entries (atomically)."""
+    lines = ["pyjvm-jar\t1", f"lang\t{lang or '%d.%d' % sys.version_info[:2]}"]
     if fingerprint:
         lines.append(f"fingerprint\t{fingerprint}")
-    included: list[str] = []
-    skipped: dict[str, str] = {}
-    seen: set[str] = set()
     out.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=".pyjvm-", suffix=".tmp", dir=out.parent)
     os.close(fd)
     try:
         with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nCreated-By: pyjvm315 jarbuild\r\n\r\n")
-            for root in roots:
-                for path in sorted(root.rglob("*.py")):
-                    name, is_package = module_name(root, path)
-                    if not name or name in seen:
-                        continue
-                    seen.add(name)
-                    if name in skip or any(name.startswith(s + ".") for s in skip):
-                        skipped[name] = "excluded"
-                        continue
-                    relative = path.relative_to(root).as_posix()
-                    try:
-                        data = compile_for_exec(path.read_text(encoding="utf-8"), relative, "exec", 0, feature_minor)
-                    except (SyntaxError, CompileError, FrameError, RecursionError, UnicodeDecodeError) as exc:
-                        skipped[name] = f"{type(exc).__name__}: {exc}".splitlines()[0]
-                        continue
-                    entry = name + ".class"
-                    zf.writestr(entry, data)
-                    lines.append(f"module\t{name}\t{'pkg' if is_package else 'mod'}\t{entry}\t{relative}")
-                    included.append(name)
-            for name, reason in skipped.items():
+            for name, is_package, relative, data in entries:
+                entry = name + ".class"
+                zf.writestr(entry, data)
+                lines.append(f"module\t{name}\t{'pkg' if is_package else 'mod'}\t{entry}\t{relative}")
+            for name, reason in (skipped or {}).items():
                 lines.append(f"# skipped {name}: {reason}")
             zf.writestr(MANIFEST, "\n".join(lines) + "\n")
         os.replace(tmp_name, out)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
-    return included, skipped
+
+
+def build_jar(out: Path, roots: list[Path], *, skip: set[str] | frozenset[str] = frozenset(), fingerprint: str | None = None,
+              feature_minor: int = -1, lang: str | None = None) -> tuple[list[str], dict[str, str]]:
+    """Write ``out``; returns (module names included, {module name: reason} for the modules left out)."""
+    entries: list[tuple[str, bool, str, bytes]] = []
+    skipped: dict[str, str] = {}
+    seen: set[str] = set()
+    for root in roots:
+        for path in sorted(root.rglob("*.py")):
+            name, is_package = module_name(root, path)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            if name in skip or any(name.startswith(s + ".") for s in skip):
+                skipped[name] = "excluded"
+                continue
+            relative = path.relative_to(root).as_posix()
+            try:
+                data = compile_for_exec(path.read_text(encoding="utf-8"), relative, "exec", 0, feature_minor)
+            except (SyntaxError, CompileError, FrameError, RecursionError, UnicodeDecodeError) as exc:
+                skipped[name] = f"{type(exc).__name__}: {exc}".splitlines()[0]
+                continue
+            entries.append((name, is_package, relative, data))
+    write_jar(out, entries, skipped, fingerprint=fingerprint, lang=lang)
+    return [e[0] for e in entries], skipped
 
 
 def main(argv: list[str] | None = None) -> int:
