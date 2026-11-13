@@ -151,6 +151,11 @@ public final class PyRuntime {
         return module;
         }
     }
+    /** Makes the program being run visible as sys.modules['__main__'] (CPython does; enum.global_enum, pickle, doctest rely on it). */
+    public static void registerMain(Object classObj) {
+        if(ImportSupport.cachedModule("__main__")!=null) return;
+        PyModule module=new PyModule("__main__",(String)classObj); MODULE_CACHE.put("__main__",module); ImportSupport.register("__main__",module);
+    }
     public static Object importModule(Object nameObj,Object classObj) {
         String name=(String)nameObj, className=(String)classObj;
         PyModule cached=ImportSupport.cachedModule(name);
@@ -4070,6 +4075,7 @@ public final class PyRuntime {
                 return new UnboundMethod(cls,name);
             }
             if(cls.nativeKind!=null || name.equals("__base__")){Object nativeValue=NativeSubclassMethods.classAttribute(cls,name);if(nativeValue!=MISSING)return nativeValue;}
+            if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
             if(name.equals("__subclasshook__"))return new NativeFunction("__subclasshook__",(a,k)->NOT_IMPLEMENTED);
             if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));

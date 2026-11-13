@@ -972,6 +972,8 @@ class Compiler:
             b.invokestatic(RUNTIME2, "registerCarets", f"({OBJ}{OBJ})V")
         b.ldc_string(self.module_name); self._store_name("__name__", b, scope)
         if self.module_name == "__main__":
+            b.ldc_string(self.class_name.replace("/", ".")); b.invokestatic(RUNTIME, "registerMain", f"({OBJ})V")
+        if self.module_name == "__main__":
             b.aconst_null()
         else:
             b.ldc_string(self.package_name)
