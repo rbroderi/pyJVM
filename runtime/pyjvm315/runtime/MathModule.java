@@ -198,6 +198,35 @@ public final class MathModule {
                 try { result = PyRuntime.mul(result, PyLazyIterator.pull(source)); } catch (java.util.NoSuchElementException end) { return result; }
             }
         });
+        NativeTypes.fn(m, "sumprod", (a, k) -> {
+            List<Object> p = drain(a.get(0)), q = drain(a.get(1));
+            if (p.size() != q.size()) throw new PyException("ValueError", "Inputs are not the same length");
+            boolean anyFloat = false, generic = false;
+            for (List<Object> side : List.of(p, q)) for (Object o : side) {
+                if (o instanceof Double) anyFloat = true;
+                else if (!(o instanceof Long || o instanceof BigInteger || o instanceof Boolean)) generic = true;
+            }
+            if (generic) {
+                Object total = 0L;
+                for (int i = 0; i < p.size(); i++) total = PyRuntime.add(total, PyRuntime.mul(p.get(i), q.get(i)));
+                return total;
+            }
+            if (!anyFloat) {
+                BigInteger total = BigInteger.ZERO;
+                for (int i = 0; i < p.size(); i++) total = total.add(integer(p.get(i)).multiply(integer(q.get(i))));
+                return PyRuntime.compact(total);
+            }
+            boolean finite = true;
+            for (List<Object> side : List.of(p, q)) for (Object o : side) if (o instanceof Double d && (d.isNaN() || d.isInfinite())) finite = false;
+            if (!finite) {
+                double total = 0;
+                for (int i = 0; i < p.size(); i++) total += num(p.get(i)) * num(q.get(i));
+                return total;
+            }
+            java.math.BigDecimal total = java.math.BigDecimal.ZERO;   // exact products and sum, rounded once (CPython accumulates in extended precision)
+            for (int i = 0; i < p.size(); i++) total = total.add(exact(p.get(i)).multiply(exact(q.get(i))));
+            return total.doubleValue();
+        });
         NativeTypes.fn(m, "dist", (a, k) -> {
             List<Object> p = drain(a.get(0)), q = drain(a.get(1));
             if (p.size() != q.size()) throw new PyException("ValueError", "both points must have the same number of dimensions");
@@ -260,6 +289,9 @@ public final class MathModule {
         return m;
     }
 
+    private static java.math.BigDecimal exact(Object o) {
+        return o instanceof Double d ? new java.math.BigDecimal(d) : new java.math.BigDecimal(integer(o));
+    }
     private static List<Object> drain(Object iterable) {
         java.util.ArrayList<Object> out = new java.util.ArrayList<>();
         Object source = PyRuntime.iter(iterable);

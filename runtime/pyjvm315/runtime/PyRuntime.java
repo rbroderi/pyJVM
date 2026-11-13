@@ -3649,6 +3649,7 @@ public final class PyRuntime {
             if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+(inst.cls.moduleName.equals("builtins")?"":inst.cls.moduleName+".")+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
             return pyRepr(args[0]);
         }
+        if((name.equals("__repr__") || name.equals("__str__")) && !builtin.name.equals("object") && args.length==1 && !(args[0] instanceof PyInstance))return name.equals("__str__")?pyStr(args[0]):pyRepr(args[0]);
         if(builtin.name.equals("object") && name.equals("__init_subclass__")){requireArgs(name,args,0);return null;}
         if(builtin.name.equals("object") && name.equals("__new__")) {
             requireArgs(name,args,1);
@@ -4127,6 +4128,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
         {Object nativeValue=NativeSubclassMethods.plainAttribute(obj,name);if(nativeValue!=MISSING)return nativeValue;}
+        if(obj instanceof PyBuiltinType && (name.equals("__repr__") || name.equals("__str__")))return new BuiltinBoundMethod(obj,name);   // pprint keys its dispatch table on T.__repr__
         if(obj instanceof PyObject && Set.of("__str__","__repr__","__hash__","__eq__","__ne__","__format__","__reduce_ex__","__sizeof__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__doc__") && !(obj instanceof PyModule)) return null;
         throw new PyException("AttributeError","'"+typeName(obj)+"' object has no attribute '"+name+"'");
