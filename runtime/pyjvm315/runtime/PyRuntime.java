@@ -3451,6 +3451,7 @@ public final class PyRuntime {
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
         if(name.equals("__dir__") && type.equals("object"))return true;
         if(name.equals("__reduce_ex__") || name.equals("__reduce__"))return true;
+        if(name.equals("__init__") && type.equals("code"))return true;
         if(exceptionIsSubclass(type,"BaseException") && (name.equals("__init__") || name.equals("__new__")))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
@@ -3649,6 +3650,7 @@ public final class PyRuntime {
             Object r=eq(args[0],args[1]);
             return r==NOT_IMPLEMENTED?r:(Object)Boolean.valueOf(!truth(r));
         }
+        if(builtin.name.equals("code") && name.equals("__init__")) throw new PyException("ValueError","no signature found for builtin type <class 'code'>");
         if(builtin.name.equals("object") && name.equals("__init__")){requireArgs(name,args,1);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__delattr__")){requireArgs(name,args,2);delattr(args[0],args[1]);return null;}
