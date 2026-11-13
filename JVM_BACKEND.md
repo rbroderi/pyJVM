@@ -104,15 +104,32 @@ that `exec(code, module.__dict__)` or `sys.modules` insertion would treat as a m
 `_tokenize.TokenizerIter(readline, *, extra_tokens, encoding=None)` is native (`TokenizeModule`) and wraps the parser
 package's `Tokenizer`, the lexer the self-hosted parser uses, so `tokenize.py` (and with it `linecache`, `traceback`,
 `inspect`) imports and `tokenize.generate_tokens` / `tokenize.tokenize` / `untokenize` produce CPython's token stream:
-types numbered as in the emulated version's `token.py`, positions, and the physical `line` of every token. Known gaps:
+types numbered as in the emulated version's `token.py`, positions, and the physical `line` of every token.
 
-- `readline` is read to the end on the first `__next__`; CPython pulls one line at a time (visible only with an
-  interactive or infinite source).
-- Tokens before a lexical error are yielded and then `SyntaxError` / `IndentationError` is raised, as in CPython, but
-  the message and offset are the pyJVM parser's and do not always match the C tokenizer's. Covered: unterminated
-  strings, unclosed brackets (`unexpected EOF in multi-line statement`), inconsistent dedent. Not diagnosed at this
-  level: mixed tabs and spaces (`TabError`) and malformed numbers (`0x`, `1_` lex as NUMBER followed by NAME/OP).
+- `readline` is called lazily, one line each time the queued tokens run out, as CPython does: generators, interactive
+  sources, `StopIteration` (end of input) and exceptions from `readline` behave the same, and the tokens of a line are
+  yielded before the next line is requested. `Tokenizer.Stream` re-scans the logical line being read (tokens before the
+  unfinished construct are stable, so only new ones are queued) and carries the indentation stacks between logical lines;
+  inside brackets only the nesting is carried, so long literals are not re-scanned. A last line without a terminator gets
+  the implicit newline of the C tokenizer (its NEWLINE/NL token has an empty string).
+- The C tokenizer's lexical errors are diagnosed in this mode only (the parser keeps its lenient lexing and its own
+  messages), after the tokens before them, with CPython's message and offset: `TabError` (inconsistent use of tabs and
+  spaces, by comparing the column with tab size 8 and with tab size 1) and `IndentationError` for a bad dedent (offset =
+  length of the line including its terminator; no DEDENT is yielded before the error; `end_lineno`/`end_offset` are
+  `None`); malformed numbers (`0x`, `0x_`, `1_`, `1__0`, `0b2`, `0o8`, `1e+`, `1.e+`, `1_000_`; with
+  `extra_tokens=False` also `1abc` and leading zeros, as the C tokenizer only relaxes those for tokenize); a character after
+  a line-continuation backslash; EOF after a continuation or inside brackets or an f-string replacement field (`unexpected
+  EOF in multi-line statement`); unterminated strings and f-strings (`... (detected at line N)`, positioned at the start of
+  the string); NUL bytes. Every non-ASCII character is an identifier character, as in the C tokenizer.
+  `tokenize.py` turns these into `TokenError` (or re-raises the `IndentationError`/`TabError`). Unmatched closing
+  brackets are not an error here (neither in CPython's tokenize mode).
 - `extra_tokens=False` (the parser's own token view, reached only through `python -m tokenize -e` and CPython's tests) is
   derived from the same stream: exact operator types, no COMMENT/NL, empty NEWLINE/INDENT/DEDENT strings with CPython's
-  `-1` columns. Type comments and the C tokenizer's `\r` handling are not reproduced.
+  `-1` columns; the end-of-file tokens take the last line's position with an empty `line` after skipped trailing
+  comments or blank lines, and an empty source yields nothing. Verified against CPython on ~40 stdlib files and edge cases
+  (`tests/conformance/tokenize_stress.py`, `tokenize_errors.py`). Type comments (only produced when the parser asks for
+  them) are not reproduced.
+- Not reproduced: the `DeprecationWarning` for `1if`-style literals; the exact offset of a stray backslash or EOF after a
+  continuation inside a multi-line bracket group (offsets are counted from the start of the logical line, as readline-driven
+  CPython does for plain continuations); a `readline` that returns several lines at once is tokenized as one chunk.
 - Under the 3.13 lane `t"..."` lexes as NAME + STRING, from 3.14 on as TSTRING tokens.

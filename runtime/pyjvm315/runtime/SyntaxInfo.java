@@ -5,10 +5,13 @@ package pyjvm315.runtime;
 final class SyntaxInfo {
     final String filename, text;
     final long lineno, offset, endLineno, endOffset;
+    boolean noEnd, noEndOffset;   // errors from the C tokenizer: IndentationError / TabError carry no end position, EOF in a statement no end column
 
-    SyntaxInfo(String filename, long lineno, long offset, String text) {
+    SyntaxInfo(String filename, long lineno, long offset, String text) { this(filename, lineno, offset, text, offset); }
+
+    SyntaxInfo(String filename, long lineno, long offset, String text, long endOffset) {
         this.filename = filename; this.lineno = lineno; this.offset = offset; this.text = text;
-        this.endLineno = lineno; this.endOffset = offset;
+        this.endLineno = lineno; this.endOffset = endOffset;
     }
 
     /** The error CPython raises for a parser failure at {@code line}:{@code column} of {@code source}. */
@@ -43,8 +46,8 @@ final class SyntaxInfo {
             case "lineno" -> lineno;
             case "offset" -> offset;
             case "text" -> text;
-            case "end_lineno" -> endLineno;
-            case "end_offset" -> endOffset;
+            case "end_lineno" -> noEnd ? null : endLineno;
+            case "end_offset" -> noEnd || noEndOffset ? null : endOffset;
             case "print_file_and_line" -> null;
             default -> NONE;
         };

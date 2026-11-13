@@ -108,5 +108,5 @@ final class PyClass {
         }
         mro = List.copyOf(out);
     }
-    @Override public String toString() { return "<class '" + (moduleName.equals("builtins") ? "" : moduleName + ".") + name + "'>"; }
+    @Override public String toString() { String m = attrs.get("__module__") instanceof String declared ? declared : moduleName; return "<class '" + (m.equals("builtins") ? "" : m + ".") + name + "'>"; }
 }

@@ -85,12 +85,17 @@ final class TypeParamsGeneric extends TypeParamsObject {
     static String reprItem(Object item) {
         if (item == null) return "None";
         if (item == PyRuntime.ELLIPSIS) return "...";
-        if (item instanceof PyBuiltinType t) return t.name.equals("NoneType") ? "None" : t.name;
-        if (item instanceof PyClass c) return c.moduleName.equals("builtins") ? c.qualname : c.moduleName + "." + c.qualname;
+        if (item instanceof PyBuiltinType t) return t.name.equals("NoneType") && LangVersion.atLeast(3, 14) ? "None" : t.name;
+        if (item instanceof PyClass c) { String m = c.attrs.get("__module__") instanceof String declared ? declared : c.moduleName; return m.equals("builtins") ? c.qualname : m + "." + c.qualname; }
         if (item instanceof List<?> list) {
             StringBuilder out = new StringBuilder("[");
             for (int i = 0; i < list.size(); i++) out.append(i == 0 ? "" : ", ").append(reprItem(list.get(i)));
             return out.append("]").toString();
+        }
+        if (item instanceof PyBuiltinFunction f) return f.name;   // builtins: shown by qualname alone
+        if (!(item instanceof TypeParamsGeneric)) {   // ga_repr_item: anything with __qualname__ and __module__ is shown module-qualified
+            Object qualname = PyRuntime.getattrDefault(item, "__qualname__", null), module = PyRuntime.getattrDefault(item, "__module__", null);
+            if (qualname instanceof String q && module instanceof String m && PyRuntime.getattrDefault(item, "__origin__", null) == null) return m.equals("builtins") ? q : m + "." + q;
         }
         return PyRuntime.pyRepr(item);
     }
