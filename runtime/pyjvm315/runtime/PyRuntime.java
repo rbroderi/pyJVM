@@ -4098,6 +4098,7 @@ public final class PyRuntime {
         }
         {Object nativeValue=NativeSubclassMethods.plainAttribute(obj,name);if(nativeValue!=MISSING)return nativeValue;}
         if(obj instanceof PyObject && Set.of("__str__","__repr__","__hash__","__eq__","__ne__","__format__","__reduce_ex__","__sizeof__").contains(name))return new BuiltinBoundMethod(obj,name);
+        if(name.equals("__doc__") && !(obj instanceof PyModule)) return null;
         throw new PyException("AttributeError","'"+typeName(obj)+"' object has no attribute '"+name+"'");
     }
 
@@ -4251,6 +4252,8 @@ public final class PyRuntime {
                 case "filter" -> obj instanceof PyFilter;
                 case "slice" -> obj instanceof PySlice;
                 case "sentinel" -> obj instanceof TypeParamsSentinel;
+                case "module" -> obj instanceof PyModule;
+                case "function" -> obj instanceof PyFunction;
                 case "type" -> obj instanceof PyClass || obj instanceof PyBuiltinType;
                 case "BaseException", "Exception" -> obj instanceof PyExceptionValue || obj instanceof PyException;
                 default -> false;

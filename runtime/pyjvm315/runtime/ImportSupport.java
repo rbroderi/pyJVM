@@ -432,6 +432,17 @@ public final class ImportSupport {
         impl.put("version", sys.attrs.get("version_info"));
         impl.put("hexversion", ((long) LangVersion.MAJOR << 24) | ((long) LangVersion.MINOR << 16) | 0xf0L);
         sys.attrs.put("implementation", namespaceObject("implementation", impl));
+        for (String pfx : new String[]{"prefix", "base_prefix", "exec_prefix", "base_exec_prefix"}) sys.attrs.put(pfx, System.getProperty("pyjvm.prefix", "/usr"));
+        sys.attrs.put("platlibdir", "lib");
+        LinkedHashMap<String,Object> floatInfo = new LinkedHashMap<>();
+        floatInfo.put("max", Double.MAX_VALUE); floatInfo.put("max_exp", 1024L); floatInfo.put("max_10_exp", 308L); floatInfo.put("min", Double.MIN_NORMAL);
+        floatInfo.put("min_exp", -1021L); floatInfo.put("min_10_exp", -307L); floatInfo.put("dig", 15L); floatInfo.put("mant_dig", 53L);
+        floatInfo.put("epsilon", Math.ulp(1.0)); floatInfo.put("radix", 2L); floatInfo.put("rounds", 1L);
+        if (!sys.attrs.containsKey("float_info")) sys.attrs.put("float_info", namespaceObject("float_info", floatInfo));
+        LinkedHashMap<String,Object> hashInfo = new LinkedHashMap<>();
+        hashInfo.put("width", 64L); hashInfo.put("modulus", 2305843009213693951L); hashInfo.put("inf", 314159L); hashInfo.put("nan", 0L);
+        hashInfo.put("imag", 1000003L); hashInfo.put("algorithm", "siphash13"); hashInfo.put("hash_bits", 64L); hashInfo.put("seed_bits", 128L); hashInfo.put("cutoff", 0L);
+        sys.attrs.put("hash_info", namespaceObject("hash_info", hashInfo));
         fn(sys, "audit", (a, k) -> null);
         fn(sys, "getfilesystemencoding", (a, k) -> "utf-8");
         fn(sys, "getfilesystemencodeerrors", (a, k) -> "surrogateescape");
