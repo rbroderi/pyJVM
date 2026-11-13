@@ -152,10 +152,13 @@ time (stdlib modules are compiled at run time by the self-hosted compiler); late
 
 ### Known gaps
 
-- `unittest.mock` imports `asyncio`, which needs `_socket` (and `_typing` for the pure-Python `typing`); both are
-  missing, so `unittest.mock` does not import yet. `tests/conformance/unittest_mock_basic.py` is written but not in the
-  passing set.
-- No `faulthandler`, `_socket`, real `fcntl`/`pwd`/`grp`, no subprocess spawning (`_posixsubprocess.fork_exec`,
+- `unittest.mock` imports and the basics work (`Mock`/`MagicMock`, `call` assertions, `side_effect`, `patch`, `patch.object`,
+  `patch.dict`, `Mock(spec=...)`; `tests/conformance/unittest_mock_basic.py`). Not working: `create_autospec`
+  (`delattr` of a magic method on the mock type) and configuring a magic method through `mm.__getitem__.return_value`.
+- `_typing` is built from embedded Python source (`TypingSource.java`) and shares the runtime's own `Generic` (the
+  implicit base of PEP 695 classes), so the pure-Python `typing` imports on the 3.13 and 3.15 lanes. `_socket`, `fcntl`,
+  `pwd`, `grp`, `resource` and `_posixsubprocess` are import-only shells.
+- No `faulthandler`, real sockets, real `fcntl`/`pwd`/`grp`, no subprocess spawning (`_posixsubprocess.fork_exec`,
   `os.waitpid` raise), so tests that spawn interpreters (`script_helper`) cannot run.
 - Test modules that depend on CPython internals (`sys.getrefcount`, `gc` tracking, `_testcapi`, bytecode, `marshal` of
   code objects) report those tests as errors or skips; the differing ones are listed by `run_cpython_test.py`.
