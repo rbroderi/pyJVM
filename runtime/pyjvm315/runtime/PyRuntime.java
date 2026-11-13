@@ -644,6 +644,7 @@ public final class PyRuntime {
         if (value instanceof PyTuple t) return !t.items.isEmpty();
         if(value instanceof PyInstance instance){
             PyMethod bm=instance.cls.lookupMethod("__bool__");
+            if(bm==null){Object viaAttr=classAttrDunder(instance,"__bool__");if(viaAttr instanceof Boolean vb)return vb;if(viaAttr==MISSING){viaAttr=classAttrDunder(instance,"__len__");if(viaAttr!=MISSING)return truth(viaAttr);}}
             if(bm!=null){Object out=invoke(instance,bm,new Object[0]);if(!(out instanceof Boolean))throw new PyException("TypeError","__bool__ should return bool");return (Boolean)out;}
             PyMethod lm=instance.cls.lookupMethod("__len__");
             if(lm!=null){Object out=invoke(instance,lm,new Object[0]);BigInteger n=bigInt(out);if(n.signum()<0)throw new PyException("ValueError","__len__() should return >= 0");return n.signum()!=0;}
@@ -1375,7 +1376,7 @@ public final class PyRuntime {
         if (isIntLike(value)) return compact(bigInt(value));
         if (value instanceof Double d) return compact(BigInteger.valueOf(d.longValue()));
         if (value instanceof String || value instanceof PyByteSequence) return NativeSubclass.parseInt(value, 10);   // ValueError for a malformed literal; int(b'32') as pickle protocol 0 does
-        if (value instanceof PyInstance w) return NativeSubclass.intOf(w);
+        if (value instanceof PyInstance w) {Object viaAttr=classAttrDunder(w,"__int__");if(viaAttr!=MISSING)return viaAttr;return NativeSubclass.intOf(w);}
         throw typeError("int() argument must be a string or a number", value);
     }
     public static Object float_(Object value) {
@@ -1624,6 +1625,13 @@ public final class PyRuntime {
         }
         return MISSING;
     }
+    /** A special method installed on the class as a plain attribute (a descriptor, as unittest.mock's MagicProxy does): MISSING when absent. */
+    static Object classAttrDunder(PyInstance instance,String name,Object... args) {
+        if(instance.cls.lookupMethod(name)!=null) return MISSING;
+        Object attr=instance.cls.lookupAttr(name);
+        if(attr==MISSING || attr==null) return MISSING;
+        return callFunction(descriptorGet(attr,instance,instance.cls),new ArrayList<>(Arrays.asList(args)),new LinkedHashMap<>());
+    }
     public static Object len(Object value) {
         {Object meta=metaSpecial(value,"__len__");if(meta!=MISSING)return meta;}
         long n;
@@ -1636,14 +1644,14 @@ public final class PyRuntime {
         else if (value instanceof PyDictView view) n = view.map.size();
         else if (value instanceof PyTuple t) n = t.items.size();
         else if (value instanceof PyRange r) return compact(r.length());
-        else if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__len__");if(m==null){if(instance.payload!=null)return len(instance.payload);throw typeError("object has no len()",value);}Object out=invoke(instance,m,new Object[0]);BigInteger bi=bigInt(out);if(bi.signum()<0)throw new PyException("ValueError","__len__() should return >= 0");return compact(bi);}
+        else if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__len__");if(m==null){Object viaAttr=classAttrDunder(instance,"__len__");if(viaAttr!=MISSING)return viaAttr;if(instance.payload!=null)return len(instance.payload);throw typeError("object has no len()",value);}Object out=invoke(instance,m,new Object[0]);BigInteger bi=bigInt(out);if(bi.signum()<0)throw new PyException("ValueError","__len__() should return >= 0");return compact(bi);}
         else throw typeError("object has no len()", value);
         return n;
     }
 
     public static Object getitem(Object value, Object key) {
         {Object meta=metaSpecial(value,"__getitem__",key);if(meta!=MISSING)return meta;}
-        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__getitem__");if(m!=null)return invoke(instance,m,new Object[]{key});if(instance.payload instanceof Map<?,?>)return NativeSubclass.dictGet(instance,key);if(instance.payload!=null)value=instance.payload;}
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__getitem__");if(m!=null)return invoke(instance,m,new Object[]{key});{Object viaAttr=classAttrDunder(instance,"__getitem__",key);if(viaAttr!=MISSING)return viaAttr;}if(instance.payload instanceof Map<?,?>)return NativeSubclass.dictGet(instance,key);if(instance.payload!=null)value=instance.payload;}
         if(value instanceof TypeParamsObject || value instanceof PyClass || value instanceof PyBuiltinType)return TypeParamsSupport.subscript(value,key);
         if (key instanceof PySlice sl) return sliceGet(value, sl);
         if (value instanceof PyByteSequence seq) {
@@ -1683,7 +1691,7 @@ public final class PyRuntime {
 
     @SuppressWarnings("unchecked")
     public static void setitem(Object value, Object key, Object item) {
-        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__setitem__");if(m!=null){invoke(instance,m,new Object[]{key,item});return;}if(instance.payload!=null)value=instance.payload;}
+        if(value instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__setitem__");if(m!=null){invoke(instance,m,new Object[]{key,item});return;}if(classAttrDunder(instance,"__setitem__",key,item)!=MISSING)return;if(instance.payload!=null)value=instance.payload;}
         if (value instanceof Map<?, ?> m) { ((Map<Object, Object>)m).put(key, item); return; }
         if(key instanceof PySlice sl && value instanceof PyByteArray array){byteArraySetSlice(array,sl,item);return;}
         if(key instanceof PySlice sl && value instanceof List<?>){NativeSubclassMethods.listSetSlice((List<Object>)value,sl,item);return;}
@@ -1722,7 +1730,7 @@ public final class PyRuntime {
 
     public static Object contains(Object container, Object needle) {
         {Object meta=metaSpecial(container,"__contains__",needle);if(meta!=MISSING)return meta;}
-        if(container instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__contains__");if(m!=null)return invoke(instance,m,new Object[]{needle});if(instance.payload!=null){container=instance.payload;if(container instanceof String || container instanceof PyByteSequence)needle=NativeSubclass.unwrap(needle);}}
+        if(container instanceof PyInstance instance){PyMethod m=instance.cls.lookupMethod("__contains__");if(m!=null)return invoke(instance,m,new Object[]{needle});{Object viaAttr=classAttrDunder(instance,"__contains__",needle);if(viaAttr!=MISSING)return truth(viaAttr);}if(instance.payload!=null){container=instance.payload;if(container instanceof String || container instanceof PyByteSequence)needle=NativeSubclass.unwrap(needle);}}
         if (container instanceof String s && needle instanceof String n) return s.contains(n);
         if(container instanceof PyByteSequence seq) {
             if(isIntLike(needle)) {
