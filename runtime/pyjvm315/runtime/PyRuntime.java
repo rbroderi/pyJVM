@@ -3426,6 +3426,7 @@ public final class PyRuntime {
         return instantiate(sup.cls,new Object[]{sup.currentClass,instance});
     }
     static boolean builtinHasMethod(String type,String name) {
+        if(type.equals("frozendict") && (name.equals("__repr__")||name.equals("__eq__")||name.equals("__ne__")||name.equals("__len__")||name.equals("__iter__")||name.equals("__contains__")||name.equals("__getitem__")))type="dict";
         if(NativeSubclass.isKind(type) && NativeSubclassMethods.hasMember(type,name))return true;
         if(type.equals("set") || type.equals("frozenset"))return setMethodKnown(name,type.equals("frozenset"));
         if(name.equals("__round__") && Set.of("int","bool","float").contains(type))return true;
@@ -3567,6 +3568,7 @@ public final class PyRuntime {
     }
 
     static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(builtin.name.equals("frozendict") && builtinHasMethod("frozendict",name) && !name.equals("fromkeys"))builtin=(PyBuiltinType)builtinType("dict");
         if(NativeSubclass.isKind(builtin.name)){Object nativeResult=NativeSubclassMethods.callUnbound(builtin,name,args);if(nativeResult!=MISSING)return nativeResult;}
         if((builtin.name.equals("set") || builtin.name.equals("frozenset")) && setMethodKnown(name,builtin.name.equals("frozenset"))){
             if(args.length==0 || !(args[0] instanceof Set<?> set) || builtin.name.equals("frozenset")!=(args[0] instanceof PyFrozenSet))throw new PyException("TypeError","set descriptor requires a "+builtin.name+" object");
@@ -3697,6 +3699,8 @@ public final class PyRuntime {
         if((builtin.name.equals("bytes")||builtin.name.equals("bytearray")) && name.equals("maketrans")) {
             requireArgs(name,args,2); return bytesMaketrans(args[0],args[1]);
         }
+        if((name.equals("__repr__")||name.equals("__str__")) && args.length==1 && !(args[0] instanceof PyInstance))
+            return name.equals("__repr__")?repr_(args[0]):str_(args[0]);
         throw new PyException("AttributeError","type object '"+builtin.name+"' has no method '"+name+"'");
     }
 
@@ -3931,6 +3935,14 @@ public final class PyRuntime {
                 }));
                 view.putIfAbsent(attr,descriptor);
             }
+            if(type.name.equals("type")) for(String attr:new String[]{"__mro__","__dict__","__bases__","__name__","__qualname__","__module__"}){
+                NativeFunction descriptor=new NativeFunction(attr,(a,k)->{throw new PyException("TypeError","'"+attr+"' attribute descriptor of 'type' objects cannot be called");});
+                descriptor.attrs.put("__get__",new NativeFunction("__get__",(a,k)->{
+                    if(a.isEmpty()||a.get(0)==null)throw new PyException("TypeError","descriptor '"+attr+"' for 'type' objects needs a type");
+                    return getattr(a.get(0),attr);
+                }));
+                view.put(attr,descriptor);
+            }
             if(!EXCEPTION_PARENTS.containsKey(type.name) || type.name.equals("BaseException")) view.putIfAbsent("__new__",new BuiltinBoundMethod(type,"__new__"));
             return view;
         }
@@ -3943,6 +3955,7 @@ public final class PyRuntime {
             return new NativeFunction("__hash__",(a,k)->{if(a.size()!=1)throw new PyException("TypeError","expected 0 arguments, got "+Math.max(0,a.size()-1));return hash(a.get(0));});
         }
         if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
+        if(obj instanceof PyBuiltinType && (name.equals("__repr__")||name.equals("__str__")))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyComplex z){
             if(name.equals("real"))return z.real;
             if(name.equals("imag"))return z.imag;
