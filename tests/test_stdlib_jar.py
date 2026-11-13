@@ -19,7 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOL = ROOT / "tools" / "stdlib_status.py"
-MODULES = ["json", "json.decoder", "textwrap", "bisect", "string", "heapq"]
+MODULES = ["json", "json.decoder", "json.encoder", "json.scanner", "textwrap", "bisect", "string", "heapq"]
 LANES = ["3.13", "3.15"]
 
 
