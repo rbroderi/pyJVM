@@ -4126,6 +4126,7 @@ public final class PyRuntime {
             if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
+            if(name.equals("__doc__"))return null;
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
