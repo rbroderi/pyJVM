@@ -244,6 +244,10 @@ JAR_MAIN = """
         print(type(e).__name__, e)
 """
 
+def _lang(kit):
+    return "%d.%d" % reference_version(kit.lane)
+
+
 JAR_FILES = {
     "jpkg/__init__.py": "NAME = 'jpkg'\nfrom . import sub\n",
     "jpkg/sub/__init__.py": "def twice(x):\n    return 2 * x\n",
@@ -258,7 +262,7 @@ def test_jar_finder_serves_precompiled_modules(kit, tmp_path):
     jar = tmp_path / "mods.jar"
     # `broken` fails to compile into the jar (not valid Python): the import must fall through to the next sys.path entry
     (src / "broken.py").write_text("WHERE = 'jar'\ndef (:\n", encoding="utf-8")
-    included, skipped = build_jar(jar, [src])
+    included, skipped = build_jar(jar, [src], lang=_lang(kit))
     assert "broken" in skipped and sorted(included) == ["jpkg", "jpkg.leaf", "jpkg.sub", "jpkg.sub.deep"]
     shutil.rmtree(src / "jpkg")                    # prove the package comes from the jar, not from the directory
     (src / "broken.py").write_text("WHERE = 'source'\n", encoding="utf-8")
@@ -281,7 +285,7 @@ def test_jar_finder_serves_precompiled_modules(kit, tmp_path):
 def test_jar_with_foreign_fingerprint_is_ignored(kit, tmp_path):
     src = _libs(tmp_path, {"cmod.py": "def answer():\n    return 'jar'\n"})
     stale = tmp_path / "stale.jar"
-    build_jar(stale, [src], fingerprint="0" * 64)
+    build_jar(stale, [src], fingerprint="0" * 64, lang=_lang(kit))
     (src / "cmod.py").write_text("def answer():\n    return 'source'\n", encoding="utf-8")
     prog = kit.program(MAIN)
     result = kit.run(prog, env={"ROOT": str(stale), "PYTHONPATH": str(src)}, cwd=tmp_path)

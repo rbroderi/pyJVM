@@ -62,7 +62,7 @@ def write_jar(out: Path, entries: list[tuple[str, bool, str, bytes]], skipped: d
 
 
 def build_jar(out: Path, roots: list[Path], *, skip: set[str] | frozenset[str] = frozenset(), fingerprint: str | None = None,
-              feature_minor: int = -1) -> tuple[list[str], dict[str, str]]:
+              feature_minor: int = -1, lang: str | None = None) -> tuple[list[str], dict[str, str]]:
     """Write ``out``; returns (module names included, {module name: reason} for the modules left out)."""
     entries: list[tuple[str, bool, str, bytes]] = []
     skipped: dict[str, str] = {}
@@ -83,7 +83,7 @@ def build_jar(out: Path, roots: list[Path], *, skip: set[str] | frozenset[str] =
                 skipped[name] = f"{type(exc).__name__}: {exc}".splitlines()[0]
                 continue
             entries.append((name, is_package, relative, data))
-    write_jar(out, entries, skipped, fingerprint=fingerprint)
+    write_jar(out, entries, skipped, fingerprint=fingerprint, lang=lang)
     return [e[0] for e in entries], skipped
 
 
