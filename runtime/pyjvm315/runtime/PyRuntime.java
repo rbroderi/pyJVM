@@ -3075,6 +3075,12 @@ public final class PyRuntime {
             return;
         }
         if(base instanceof PyBuiltinType nativeBase && NativeSubclass.isKind(nativeBase.name)){ NativeSubclass.addBase(target,nativeBase); return; }
+        if(!(base instanceof PyBuiltinType) && base!=null && Boolean.TRUE.equals(hasattr(base,"__mro_entries__"))){   // PEP 560
+            PyTuple one=new PyTuple(); one.items.add(base);
+            Object resolved=callFunction(getattr(base,"__mro_entries__"),new ArrayList<>(List.of(one)),new LinkedHashMap<>());
+            for(Object entry:iterable(resolved)) classAddBase(cls,entry);
+            return;
+        }
         throw new PyException("TypeError","class base must be a class (got "+(base instanceof PyBuiltinType bt?"builtin type "+bt.name:typeName(base))+")");
     }
     static final Set<String> DESCRIPTOR_TYPES=Set.of("classmethod","staticmethod","property");
