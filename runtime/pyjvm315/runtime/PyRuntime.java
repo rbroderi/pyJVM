@@ -2874,6 +2874,7 @@ public final class PyRuntime {
         if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
         PyCode code=new PyCode(name,filename,firstline);
         PyFrame shown=new PyFrame(code,locals); shown.fixedLine=line;
+        if(active!=null && active.name.equals(name) && active.filename.equals(filename)) shown.owner=active.owner;
         return code.shown=new PyTraceback(shown,line,current);
     }
     public static void tracebackAddFrame(Object throwableObj,Object nameObj,Object filenameObj,Object lineObj){
@@ -4149,6 +4150,11 @@ public final class PyRuntime {
         if(obj instanceof PyFrame frame){PyFrameSupport.setFrameAttr(frame,name,value);return;}
         if(obj instanceof TypeParamsObject tp){tp.setattr(name,value);return;}
         if(obj instanceof PyCell cell && name.equals("cell_contents")){cell.set(value);return;}
+        if(obj instanceof PyTraceback tb){
+            if(!name.equals("tb_next"))throw new PyException("AttributeError","readonly attribute");
+            if(value!=null && !(value instanceof PyTraceback))throw new PyException("TypeError","expected traceback object or None, got '"+typeName(value)+"'");
+            tb.next=(PyTraceback)value;return;
+        }
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))throw new PyException("AttributeError","readonly attribute");
             if(AnnotationSupport.isAnnotationName(name))AnnotationSupport.functionSet(function,name,value);

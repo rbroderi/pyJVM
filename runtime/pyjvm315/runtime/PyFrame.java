@@ -26,7 +26,7 @@ final class PyFrame {
     PyFrame(PyCode code){this(code,new LinkedHashMap<Object,Object>());}
     PyFrame(PyCode code,LinkedHashMap<Object,Object> locals){this.code=code;this.locals=locals;}
     /** Live frame: line and locals come from the active frame; {@code back} is set when the frame chain is captured. */
-    ActiveFrame active; PyFrame back; long fixedLine=-1; Object trace;
+    ActiveFrame active; Object owner; PyFrame back; long fixedLine=-1; Object trace;
     long lineno(){return active!=null?active.line:fixedLine>=0?fixedLine:code.coFirstlineno;}
     @Override public String toString(){return "<frame "+code.coName+">";}
 }

@@ -107,13 +107,20 @@ final class PyFrameSupport {
         return f;
     }
 
+    static Object globalsOf(PyFrame frame) {
+        return frame.active != null ? globalsOf(frame.active) : globalsOf(null, frame.owner);
+    }
+
     static Object globalsOf(ActiveFrame a) {
+        return a == null ? globalsOf(null, null) : globalsOf(a.namespace, a.owner);
+    }
+
+    private static Object globalsOf(java.util.Map<Object, Object> namespace, Object owner) {
         LinkedHashMap<Object, Object> m = new LinkedHashMap<>();
-        if (a == null) return m;
-        if (a.namespace != null) { m.putAll(a.namespace); return m; }
-        if (a.owner == null) return m;
+        if (namespace != null) { m.putAll(namespace); return m; }
+        if (owner == null) return m;
         try {
-            Class<?> c = ownerClass(a.owner);
+            Class<?> c = ownerClass(owner);
             Object unbound = unbound();
             for (Field field : c.getDeclaredFields()) {
                 String n = field.getName();
@@ -132,7 +139,7 @@ final class PyFrameSupport {
             case "f_locals" -> frame.locals;
             case "f_back" -> frame.back;
             case "f_lineno" -> frame.lineno();
-            case "f_globals" -> globalsOf(frame.active);
+            case "f_globals" -> globalsOf(frame);
             case "f_trace" -> frame.trace;
             case "f_lasti" -> 0L;
             default -> throw new PyException("AttributeError", "frame has no attribute '" + name + "'");
