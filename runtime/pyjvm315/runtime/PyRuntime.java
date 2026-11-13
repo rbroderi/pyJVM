@@ -2826,7 +2826,9 @@ public final class PyRuntime {
     }
     public static boolean withExitException(Object manager, Object throwableObj) {
         Throwable t=(Throwable)throwableObj;
-        Object result=callMethod(manager, "__exit__", new Object[]{builtinType(pythonExceptionType(t)), exceptionInstance(t), null});
+        Object exc=exceptionInstance(t);
+        Object excType=exc instanceof PyInstance pi && pi.cls.exceptionBase!=null ? pi.cls : builtinType(pythonExceptionType(t));
+        Object result=callMethod(manager, "__exit__", new Object[]{excType, exc, null});
         return truth(result);
     }
     public static Object asyncWithEnter(Object manager) {
