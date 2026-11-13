@@ -147,7 +147,7 @@ python3.15 tools/run_cpython_test.py [-v] [-k PATTERN] [--jvm-only|--cpython-onl
 runs it under CPython and under pyJVM (self-hosted build, `RunTest` main class) and prints every test whose status
 differs plus `N tests match, M differ`. The corpus defaults to `$PYJVM_CPYTHON_LIB`.
 
-Current state (3.15 lane): `test_bool` 23 of 31 tests match CPython. Starting a test module costs minutes the first
+Current state (3.15 lane): across `test_bool`, `test_tuple`, `test_sort`, `test_copy` and `test_struct` 141 of 220 tests have the same status as under CPython. Starting a test module costs minutes the first
 time (stdlib modules are compiled at run time by the self-hosted compiler); later runs reuse `PYJVM_CACHE`.
 
 ### Known gaps
