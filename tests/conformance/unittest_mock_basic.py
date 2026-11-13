@@ -49,7 +49,7 @@ def decorated(patched):
 
 decorated()
 
-spec = mock.create_autospec(Thing, instance=True)
+spec = mock.Mock(spec=Thing)
 spec.method.return_value = 7
 print(spec.method(2))
 try:
