@@ -29,7 +29,7 @@ import java.util.stream.Stream;
 final class PosixFiles {
     private PosixFiles() {}
 
-        private static PyClass dirEntryClass;
+        private static PyClass dirEntryClass, scandirClass;
 
     static void install(PyModule m) {
         m.attrs.put("F_OK", 0L); m.attrs.put("R_OK", 4L); m.attrs.put("W_OK", 2L); m.attrs.put("X_OK", 1L);
@@ -97,6 +97,13 @@ final class PosixFiles {
         PyRuntime.classAddProperty(dirEntryClass, "path", PosixFiles.class.getName(), "dePathProp", null);
         finish(dirEntryClass);
         m.attrs.put("DirEntry", dirEntryClass);
+        scandirClass = define("posix", "ScandirIterator", null);
+        method(scandirClass, PosixFiles.class, "__iter__", "deSelf", "self");
+        method(scandirClass, PosixFiles.class, "__next__", "sdNext", "self");
+        method(scandirClass, PosixFiles.class, "__enter__", "deSelf", "self");
+        methodVar(scandirClass, PosixFiles.class, "__exit__", "sdExit", "self", "args");
+        method(scandirClass, PosixFiles.class, "close", "sdClose", "self");
+        finish(scandirClass);
     }
 
     // ---- file descriptors (the table lives in IoFd) ------------------------------------------------
@@ -230,8 +237,18 @@ final class PosixFiles {
         } catch (IOException e) {
             throw PosixModule.osError(e, path);
         }
-        return entries.iterator();
+        return newInstance(scandirClass, entries.iterator());
     }
+
+    @SuppressWarnings("unchecked")
+    public static Object sdNext(Object self) {
+        java.util.Iterator<Object> it = state(self, java.util.Iterator.class, "posix.ScandirIterator");
+        if (it.hasNext()) return it.next();
+        throw new PyException("StopIteration", "");
+    }
+
+    public static Object sdClose(Object self) { setState(self, java.util.Collections.emptyIterator()); return null; }
+    public static Object sdExit(Object self, Object args) { return sdClose(self); }
 
     private static String[] de(Object self) { return state(self, String[].class, "posix.DirEntry"); }
 
