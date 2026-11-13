@@ -4147,6 +4147,7 @@ public final class PyRuntime {
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
+            if(name.equals("__init__"))return new BoundCallable(new NativeFunction("__init__",(a,k)->null),obj);
             if(name.equals("__format__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
