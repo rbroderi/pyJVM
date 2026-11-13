@@ -38,6 +38,8 @@ final class PyClass {
     String nativeKind = null;
     /** Name of the built-in exception type this class ultimately derives from (user-defined exception classes), else null. */
     String exceptionBase = null;
+    /** Built-in exception bases declared directly on this class (kept per class: the global name tables clash across modules). */
+    final ArrayList<String> ownExcBases = new ArrayList<>(1);
     final LinkedHashSet<String> ownSlots = new LinkedHashSet<>();
     boolean slotsDeclared = false;
     boolean instanceDictAllowed = true;
