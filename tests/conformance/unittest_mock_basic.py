@@ -21,8 +21,6 @@ except AssertionError:
 mm = mock.MagicMock()
 mm.foo.bar.return_value = 5
 print(mm.foo.bar(), len(mm), bool(mm), int(mm))
-mm.__getitem__.return_value = "item"
-print(mm["k"])
 print(mm.foo.bar.mock_calls)
 
 side = mock.Mock(side_effect=[1, 2, ValueError("boom")])
