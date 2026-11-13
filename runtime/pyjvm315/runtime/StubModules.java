@@ -55,7 +55,8 @@ final class StubModules {
         m.attrs.put("error", PyRuntime.builtinType("OSError"));
         m.attrs.put("timeout", PyRuntime.builtinType("TimeoutError"));
         for (String n : new String[]{"gaierror", "herror"}) {
-            PyClass c = NativeTypes.define("socket", n, (PyClass) PyRuntime.builtinType("OSError"));
+            PyClass c = (PyClass) PyRuntime.classCreate(n, "socket");
+            PyRuntime.classAddBase(c, PyRuntime.builtinType("OSError"));
             NativeTypes.finish(c);
             m.attrs.put(n, c);
         }
