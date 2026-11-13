@@ -30,7 +30,7 @@ public final class ImportSupport {
     static final PyDict MODULES = new PyDict();
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
     static final Set<String> NATIVE_NAMES = Set.of("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
-        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_posixsubprocess", "fcntl", "pwd", "grp");
+        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_posixsubprocess", "fcntl", "pwd", "grp", "resource", "_socket", "_typing");
     private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal"};
 
     private static boolean bootstrapping, bootstrapped;
@@ -70,7 +70,7 @@ public final class ImportSupport {
             case "binascii" -> BinasciiModule.create(); case "_random" -> RandomModule.create(); case "array" -> ArrayModule.create(); case "zlib" -> ZlibModule.create(); case "_signal" -> SignalModule.create(); case "select" -> SelectModule.create(); case "_opcode" -> OpcodeModule.create(); case "_md5" -> HashModule.create("_md5", "md5"); case "_sha1" -> HashModule.create("_sha1", "sha1"); case "_sha2" -> HashModule.create("_sha2", "sha224", "sha256", "sha384", "sha512");
             case "_sre" -> SreModule.create();
             case "_tokenize" -> TokenizeModule.create();
-            case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp();
+            case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> StubModules.socket(); case "_typing" -> typingModule();
             default -> throw new PyException("ModuleNotFoundError", new PyExcArgs(tuple("No module named '" + name + "'"), null, attrs("name", name)));
         };
     }
@@ -376,6 +376,25 @@ public final class ImportSupport {
         String text;
         try { text = Files.readString(file, StandardCharsets.UTF_8); }
         catch (IOException e) { throw new PyException("ImportError", "cannot read " + file + ": " + e.getMessage()); }
+        return execText(name, text, filename);
+    }
+
+    /** {@code _typing}: Python source plus the runtime's own {@code Generic}, the implicit base of PEP 695 classes. */
+    private static PyModule typingModule() {
+        PyModule m = execText("_typing", TypingSource.TEXT, "<_typing>");
+        PyClass generic = TypeParamsGeneric.GENERIC;
+        for (String[] hook : new String[][]{{"__class_getitem__", "_generic_class_getitem_hook"}, {"__init_subclass__", "_generic_init_subclass_hook"}}) {
+            Object fn = m.dict.get(hook[1]);
+            Object classmethod = PyRuntime.callFunction(PyRuntime.builtinType("classmethod"), new ArrayList<Object>(List.of(fn)), new LinkedHashMap<Object,Object>());
+            PyRuntime.classAddAttr(generic, hook[0], classmethod);
+        }
+        PyRuntime.classAddAttr(generic, "_is_protocol", false);
+        m.dict.put("Generic", generic);
+        return m;
+    }
+
+    /** A module whose source is built into the runtime ({@code _typing}); it runs in a fresh module namespace. */
+    static PyModule execText(String name, String text, String filename) {
         PyModule m = (PyModule) moduleCall(new ArrayList<Object>(List.of(name)), new LinkedHashMap<Object,Object>());
         register(name, m);
         PyCode code = (PyCode) ExecSupport.compileBuiltin(new ArrayList<Object>(List.of(text, filename, "exec")), new LinkedHashMap<Object,Object>());

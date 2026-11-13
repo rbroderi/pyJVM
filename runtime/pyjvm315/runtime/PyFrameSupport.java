@@ -161,6 +161,7 @@ final class PyFrameSupport {
             case "co_filename" -> code.coFilename;
             case "co_firstlineno" -> code.coFirstlineno;
             case "co_flags", "co_argcount", "co_posonlyargcount", "co_kwonlyargcount", "co_nlocals", "co_stacksize" -> 0L;
+            case "co_freevars", "co_cellvars", "co_varnames", "co_names", "co_consts" -> new PyTuple();
             case "co_code" -> throw noBytecode();
             default -> throw new PyException("AttributeError", "code has no attribute '" + name + "'");
         };

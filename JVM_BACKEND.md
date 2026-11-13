@@ -163,3 +163,50 @@ Counts are modules affected in the manifest probe (approximate where one cause h
 | missing native modules (`_socket`, `_typing`, `_ctypes`, `_posixsubprocess`, `_curses`, `_sqlite3`, `_codecs_*`) | many | unimplemented native modules (out of scope) | not fixed; `pprint`, `inspect`, `unittest` still stop at `_typing` on the 3.13 lane |
 | `encodings.utf_7` codec | 1 | runtime gap (no utf-7 codec) | not fixed |
 | dict view types are not named `dict_keys`/`dict_values`/`dict_items`; `str()` of an `IntEnum` member after `global_enum` | small | runtime divergences | not fixed |
+
+## unittest and CPython's test modules
+
+`import unittest` works under pyJVM and a `TestCase` suite runs end to end: `unittest.main()`, `python -m unittest`,
+discovery, `TextTestRunner` output and tracebacks, `assertRaises`/`assertRaisesRegex`, `subTest`, `skip*`,
+`expectedFailure`, `setUp`/`tearDown`/`setUpClass`. The differential cases are `tests/conformance/unittest_basic.py`,
+`unittest_subtests.py` and `support_helpers.py` (all pass on the 3.15 lane; `support_helpers` needs CPython's `Lib/test`
+and prints `test.support unavailable` without it). `test.support` imports and its common helpers work
+(`import_helper`, `os_helper` incl. `temp_dir`/`EnvironmentVarGuard`, `warnings_helper`, `swap_attr`, `captured_stdout`,
+`cpython_only` - skipped, because `sys.implementation.name` is not `cpython` - and `check_impl_detail`).
+
+Supporting runtime work: `time.struct_time`, `gmtime`/`localtime`/`mktime`/`strftime`/`asctime`/`ctime` (and
+`strptime` through `_strptime`), `os.scandir` as a context-manager iterator, `sys.modules['__main__']`, assignable
+`tb_next`, `f_globals` of traceback frames, exception matching by class identity (same-named classes in different
+modules no longer clash), importable shells of `_posixsubprocess`, `fcntl`, `pwd`, `grp` (every operation raises), and
+the wait-status helpers of `os`.
+
+### Running a CPython test module
+
+```
+PYJVM_CPYTHON_LIB=/path/to/cpython/Lib \
+PYJVM_CACHE=/tmp/pc PYJVM_BUILD_CACHE=/tmp/bc \
+python3.15 tools/run_cpython_test.py [-v] [-k PATTERN] [--jvm-only|--cpython-only] test_bool test_tuple ...
+```
+
+`libregrtest` itself is not used (it needs `faulthandler`, subprocess workers and `signal` features pyJVM lacks).
+`tools/pyjvm_regrtest.py` is the in-process runner: it imports `test.<name>`, runs its unittest suite and prints one
+`RESULT <test id> <ok|FAIL|ERROR|skipped|expected failure|unexpected success>` line per test. `run_cpython_test.py`
+runs it under CPython and under pyJVM (self-hosted build, `RunTest` main class) and prints every test whose status
+differs plus `N tests match, M differ`. The corpus defaults to `$PYJVM_CPYTHON_LIB`.
+
+Current state (3.15 lane): across `test_bool`, `test_tuple`, `test_sort`, `test_copy` and `test_struct` 141 of 220 tests have the same status as under CPython. Starting a test module costs minutes the first
+time (stdlib modules are compiled at run time by the self-hosted compiler); later runs reuse `PYJVM_CACHE`.
+
+### Known gaps
+
+- `unittest.mock` imports and the basics work (`Mock`/`MagicMock`, `call` assertions, `side_effect`, `patch`, `patch.object`,
+  `patch.dict`, `Mock(spec=...)`; `tests/conformance/unittest_mock_basic.py`). Not working: `create_autospec`
+  (`delattr` of a magic method on the mock type) and configuring a magic method through `mm.__getitem__.return_value`.
+- `_typing` is built from embedded Python source (`TypingSource.java`) and shares the runtime's own `Generic` (the
+  implicit base of PEP 695 classes), so the pure-Python `typing` imports on the 3.13 and 3.15 lanes. `_socket`, `fcntl`,
+  `pwd`, `grp`, `resource` and `_posixsubprocess` are import-only shells.
+- No `faulthandler`, real sockets, real `fcntl`/`pwd`/`grp`, no subprocess spawning (`_posixsubprocess.fork_exec`,
+  `os.waitpid` raise), so tests that spawn interpreters (`script_helper`) cannot run.
+- Test modules that depend on CPython internals (`sys.getrefcount`, `gc` tracking, `_testcapi`, bytecode, `marshal` of
+  code objects) report those tests as errors or skips; the differing ones are listed by `run_cpython_test.py`.
+- `f_globals` of a live frame omits some entries (for example functions defined in `__main__`).

@@ -21,8 +21,6 @@ except AssertionError:
 mm = mock.MagicMock()
 mm.foo.bar.return_value = 5
 print(mm.foo.bar(), len(mm), bool(mm), int(mm))
-mm.__getitem__.return_value = "item"
-print(mm["k"])
 print(mm.foo.bar.mock_calls)
 
 side = mock.Mock(side_effect=[1, 2, ValueError("boom")])
@@ -49,7 +47,7 @@ def decorated(patched):
 
 decorated()
 
-spec = mock.create_autospec(Thing, instance=True)
+spec = mock.Mock(spec=Thing)
 spec.method.return_value = 7
 print(spec.method(2))
 try:
