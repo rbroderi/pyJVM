@@ -1343,6 +1343,10 @@ public final class PyRuntime {
             Object result=binarySpecial(a,b,left,right,true);
             if(result!=NOT_IMPLEMENTED)return result;
         }
+        if((a instanceof PyDictView || b instanceof PyDictView) && (a instanceof PyDictView || a instanceof Set<?>) && (b instanceof PyDictView || b instanceof Set<?>)){
+            Object[] ops=viewOperands(a,b);   // keys()/items() views order like sets
+            if(ops!=null){a=ops[0];b=ops[1];}
+        }
         if(a instanceof Set<?> x && b instanceof Set<?> y)return switch(fallback){case -2->x.size()<y.size() && y.containsAll(x);case -1->y.containsAll(x);case 1->x.containsAll(y);default->x.size()>y.size() && x.containsAll(y);};
         List<?> xs=a instanceof PyTuple tuple?tuple.items:a instanceof List<?> list?list:null;
         List<?> ys=b instanceof PyTuple tuple?tuple.items:b instanceof List<?> list?list:null;
@@ -3297,7 +3301,11 @@ public final class PyRuntime {
         if(spec instanceof String one) rawNames.add(one);
         else if(spec instanceof PyTuple tuple) rawNames.addAll(tuple.items);
         else if(spec instanceof List<?> list) rawNames.addAll(list);
-        else throw new PyException("TypeError","__slots__ must be a string or iterable of strings");
+        else {
+            Iterable<?> items;
+            try { items=iterable(spec); } catch(PyException e) { if(!e.typeName.equals("TypeError")) throw e; throw new PyException("TypeError","__slots__ must be a string or iterable of strings"); }
+            for(Object item:items) rawNames.add(item);
+        }
 
         LinkedHashSet<String> names=new LinkedHashSet<>();
         boolean weakrefSlot=false;
@@ -3941,6 +3949,14 @@ public final class PyRuntime {
                 }));
                 view.putIfAbsent(attr,descriptor);
             }
+            if(type.name.equals("type")) for(String attr:new String[]{"__mro__","__bases__","__base__"}){   // inspect._static_getmro = type.__dict__['__mro__'].__get__
+                NativeFunction descriptor=new NativeFunction(attr,(a,k)->{throw new PyException("TypeError","'"+attr+"' attribute descriptor of 'type' objects cannot be called");});
+                descriptor.attrs.put("__get__",new NativeFunction("__get__",(a,k)->{
+                    if(a.isEmpty() || !(a.get(0) instanceof PyClass || a.get(0) instanceof PyBuiltinType))throw new PyException("TypeError","descriptor '"+attr+"' for 'type' objects doesn't apply to a '"+(a.isEmpty()?"?":typeName(a.get(0)))+"' object");
+                    return getattr(a.get(0),attr);
+                }));
+                view.putIfAbsent(attr,descriptor);
+            }
             if(!EXCEPTION_PARENTS.containsKey(type.name) || type.name.equals("BaseException")) view.putIfAbsent("__new__",new BuiltinBoundMethod(type,"__new__"));
             return view;
         }
@@ -4082,6 +4098,7 @@ public final class PyRuntime {
             if(name.equals("mro"))return new NativeFunction("mro",(a,k)->new ArrayList<Object>(((PyTuple)getattr(cls,"__mro__")).items));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
+            if(name.equals("__doc__"))return null;   // a class without a docstring has __doc__ None
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
@@ -4105,7 +4122,7 @@ public final class PyRuntime {
             PyMethod getattrMethod=instance.cls.lookupMethod("__getattr__");
             if(getattrMethod!=null) return invoke(instance,getattrMethod,new Object[]{name});
             if(name.equals("__dir__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
-            if(name.equals("__format__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
+            if(name.equals("__format__") || name.equals("__init__"))return new BoundCallable(new BuiltinBoundMethod(builtinType("object"),name),obj);
             if(name.equals("__doc__")) return null;
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }

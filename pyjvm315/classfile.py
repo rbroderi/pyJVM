@@ -241,6 +241,13 @@ class CodeBuilder:
             self.emit_u2(0x13, idx)
 
     def ldc_string(self, value: str) -> None:
+        if len(value) > 10000 and sum(1 if 0 < ord(c) < 0x80 else 2 if ord(c) < 0x800 else 3 if ord(c) < 0x10000 else 6 for c in value) > 65535:
+            # a CONSTANT_Utf8 holds at most 65535 bytes: build long literals from pieces
+            self.ldc_string(value[:10000])
+            for start in range(10000, len(value), 10000):
+                self.ldc_string(value[start:start + 10000])
+                self.invokevirtual("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;")
+            return
         idx = self.cp.string(value)
         if idx <= 0xFF:
             self.emit(0x12, idx)

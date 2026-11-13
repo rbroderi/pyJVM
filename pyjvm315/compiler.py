@@ -802,7 +802,7 @@ class Compiler:
         if node.args.defaults:
             for name, expr in zip(positional[-len(node.args.defaults):], node.args.defaults): defaults[name] = expr
         kw_defaults = {a.arg: e for a, e in zip(node.args.kwonlyargs, node.args.kw_defaults) if e is not None}
-        direct_name = top_level and node.name not in self.functions
+        direct_name = top_level and node.name not in self.functions and node.name != "run"   # `run` is the exec/entry method of the module class
         java_name = node.name if direct_name else f"__py_nested_{self._method_counter}_{node.name}"
         if not direct_name: self._method_counter += 1
         function_field = self.global_fields.get(node.name, f"__py_function_{node.name}") if top_level else None
@@ -2682,7 +2682,7 @@ class Compiler:
                     if level:
                         parts = self.package_name.split('.') if self.package_name else []
                         up = level - 1
-                        if up > len(parts):
+                        if up > len(parts) or not parts:   # no known parent package: decided when the import runs
                             resolved = None
                         else:
                             base = parts[:len(parts)-up] if up else parts
