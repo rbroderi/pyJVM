@@ -116,3 +116,47 @@ types numbered as in the emulated version's `token.py`, positions, and the physi
   derived from the same stream: exact operator types, no COMMENT/NL, empty NEWLINE/INDENT/DEDENT strings with CPython's
   `-1` columns. Type comments and the C tokenizer's `\r` handling are not reproduced.
 - Under the 3.13 lane `t"..."` lexes as NAME + STRING, from 3.14 on as TSTRING tokens.
+
+## unittest and CPython's test modules
+
+`import unittest` works under pyJVM and a `TestCase` suite runs end to end: `unittest.main()`, `python -m unittest`,
+discovery, `TextTestRunner` output and tracebacks, `assertRaises`/`assertRaisesRegex`, `subTest`, `skip*`,
+`expectedFailure`, `setUp`/`tearDown`/`setUpClass`. The differential cases are `tests/conformance/unittest_basic.py`,
+`unittest_subtests.py` and `support_helpers.py` (all pass on the 3.15 lane; `support_helpers` needs CPython's `Lib/test`
+and prints `test.support unavailable` without it). `test.support` imports and its common helpers work
+(`import_helper`, `os_helper` incl. `temp_dir`/`EnvironmentVarGuard`, `warnings_helper`, `swap_attr`, `captured_stdout`,
+`cpython_only` - skipped, because `sys.implementation.name` is not `cpython` - and `check_impl_detail`).
+
+Supporting runtime work: `time.struct_time`, `gmtime`/`localtime`/`mktime`/`strftime`/`asctime`/`ctime` (and
+`strptime` through `_strptime`), `os.scandir` as a context-manager iterator, `sys.modules['__main__']`, assignable
+`tb_next`, `f_globals` of traceback frames, exception matching by class identity (same-named classes in different
+modules no longer clash), importable shells of `_posixsubprocess`, `fcntl`, `pwd`, `grp` (every operation raises), and
+the wait-status helpers of `os`.
+
+### Running a CPython test module
+
+```
+PYJVM_CPYTHON_LIB=/path/to/cpython/Lib \
+PYJVM_CACHE=/tmp/pc PYJVM_BUILD_CACHE=/tmp/bc \
+python3.15 tools/run_cpython_test.py [-v] [-k PATTERN] [--jvm-only|--cpython-only] test_bool test_tuple ...
+```
+
+`libregrtest` itself is not used (it needs `faulthandler`, subprocess workers and `signal` features pyJVM lacks).
+`tools/pyjvm_regrtest.py` is the in-process runner: it imports `test.<name>`, runs its unittest suite and prints one
+`RESULT <test id> <ok|FAIL|ERROR|skipped|expected failure|unexpected success>` line per test. `run_cpython_test.py`
+runs it under CPython and under pyJVM (self-hosted build, `RunTest` main class) and prints every test whose status
+differs plus `N tests match, M differ`. The corpus defaults to `$PYJVM_CPYTHON_LIB`.
+
+Current state (3.15 lane): `test_bool` 23 of 31 tests match CPython. Starting a test module costs minutes the first
+time (stdlib modules are compiled at run time by the self-hosted compiler); later runs reuse `PYJVM_CACHE`.
+
+### Known gaps
+
+- `unittest.mock` imports `asyncio`, which needs `_socket` (and `_typing` for the pure-Python `typing`); both are
+  missing, so `unittest.mock` does not import yet. `tests/conformance/unittest_mock_basic.py` is written but not in the
+  passing set.
+- No `faulthandler`, `_socket`, real `fcntl`/`pwd`/`grp`, no subprocess spawning (`_posixsubprocess.fork_exec`,
+  `os.waitpid` raise), so tests that spawn interpreters (`script_helper`) cannot run.
+- Test modules that depend on CPython internals (`sys.getrefcount`, `gc` tracking, `_testcapi`, bytecode, `marshal` of
+  code objects) report those tests as errors or skips; the differing ones are listed by `run_cpython_test.py`.
+- `f_globals` of a live frame omits some entries (for example functions defined in `__main__`).
