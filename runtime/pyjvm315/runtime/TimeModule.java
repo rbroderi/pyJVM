@@ -6,8 +6,7 @@ import java.time.Instant;
 import java.util.TimeZone;
 
 /**
- * {@code time}: clocks, {@code sleep} and the timezone constants. Calendar conversion ({@code gmtime},
- * {@code localtime}, {@code strftime}, {@code struct_time}) is not implemented and raises NotImplementedError.
+ * {@code time}: clocks, {@code sleep} and the timezone constants; calendar conversion is in {@link TimeCalendar}.
  */
 public final class TimeModule {
     private TimeModule() {}
@@ -43,9 +42,7 @@ public final class TimeModule {
             catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             return null;
         });
-        for (String name : new String[]{"gmtime", "localtime", "mktime", "strftime", "strptime", "asctime", "ctime"}) {
-            NativeTypes.fn(m, name, (a, k) -> { throw new PyException("NotImplementedError", "time." + name + " is not implemented (calendar conversion)"); });
-        }
+        TimeCalendar.install(m);
         TimeZone tz = TimeZone.getDefault();
         long offset = -tz.getRawOffset() / 1000;
         boolean dst = tz.useDaylightTime();

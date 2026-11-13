@@ -194,6 +194,7 @@ public final class PyRuntime {
     }
     static Object moduleDict(PyModule module) {
         if(module.dict!=null) return module.dict;
+        if(module.name.equals("__main__") && !module.className.startsWith("pyjvm315.runtime.")) return NamespacesModuleView.of(module.className);   // the live globals of the program
         if(module.name.equals("builtins") && module.className.equals("pyjvm315.runtime.Namespaces"))return Namespaces.builtinsDict();
         LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
         out.putAll(module.attrs);
@@ -222,6 +223,7 @@ public final class PyRuntime {
                 try { java.lang.reflect.Field field=cls.getField(f);Object value=field.get(null);if(value!=UNBOUND)return LazyImport.reifyField(value,field);break; } catch(NoSuchFieldException ignored) {}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
+        if(module.name.equals("__main__") && !module.className.startsWith("pyjvm315.runtime.")) {Map<Object,Object> view=NamespacesModuleView.of(module.className); if(view.containsKey(name)) return view.get(name);}
         switch(name) { case "__name__": return module.name; case "__doc__": case "__spec__": case "__loader__": return null; default: break; }
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
     }
@@ -506,6 +508,7 @@ public final class PyRuntime {
             }
             if(instance.payload!=null)return NativeSubclass.hash(instance);
         }
+        if(value instanceof BuiltinBoundMethod bound && bound.self instanceof PyBuiltinType)return normalizeHash((long)bound.hashCode());   // dict.__repr__ is a dict key in pprint
         return id(value);
     }
     static Object hashResult(Object result){
@@ -3303,7 +3306,7 @@ public final class PyRuntime {
         else if(spec instanceof List<?> list) rawNames.addAll(list);
         else {
             Iterable<?> items;
-            try { items=iterable(spec); } catch(PyException e) { if(!e.typeName.equals("TypeError")) throw e; throw new PyException("TypeError","__slots__ must be a string or iterable of strings"); }
+            items=iterable(spec);
             for(Object item:items) rawNames.add(item);
         }
 
