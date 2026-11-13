@@ -3058,7 +3058,7 @@ public final class PyRuntime {
         if(base instanceof PyClass pyBase){
             if(pyBase.name.equals("lock") && "_thread".equals(pyBase.moduleName)) throw new PyException("TypeError","type '_thread.lock' is not an acceptable base type");
             target.bases.add(pyBase);
-            if(target.attrs.get("__orig_bases__") instanceof PyTuple origTuple) origTuple.items.add(pyBase);
+            if(target.origBases!=null) target.origBases.items.add(pyBase);
             if(pyBase.exceptionBase!=null && target.exceptionBase==null){ target.exceptionBase=pyBase.exceptionBase; EXCEPTION_PARENTS.put(target.name,pyBase.name); }
             return;
         }
@@ -3079,11 +3079,12 @@ public final class PyRuntime {
         if(!(base instanceof PyBuiltinType) && base!=null && Boolean.TRUE.equals(hasattr(base,"__mro_entries__"))){   // PEP 560
             PyTuple one=new PyTuple(); one.items.add(base);
             PyClass owner=(PyClass)cls;
-            ArrayList<Object> origBases=owner.attrs.get("__orig_bases__") instanceof PyTuple prior ? new ArrayList<>(prior.items) : new ArrayList<Object>(owner.bases);
+            ArrayList<Object> origBases=owner.origBases!=null ? new ArrayList<>(owner.origBases.items) : new ArrayList<Object>(owner.bases);
             Object resolved=callFunction(getattr(base,"__mro_entries__"),new ArrayList<>(List.of(one)),new LinkedHashMap<>());
             for(Object entry:iterable(resolved)) classAddBase(cls,entry);
             origBases.add(base);
             PyTuple origTuple=new PyTuple(); origTuple.items.addAll(origBases);
+            owner.origBases=origTuple;
             owner.attrs.put("__orig_bases__",origTuple);
             return;
         }
@@ -3213,6 +3214,7 @@ public final class PyRuntime {
             if(!(e.getKey() instanceof String name) || name.equals("__classcell__")) continue;
             classAddAttr(cls,name,e.getValue());
         }
+        if(cls.origBases!=null && !cls.attrs.containsKey("__orig_bases__")) cls.attrs.put("__orig_bases__",cls.origBases);
     }
 
     static Object invokeMetaclassInstance(PyMethod method,PyClass cls,List<Object> args,Map<Object,Object> kwargs) {
