@@ -194,6 +194,7 @@ public final class PyRuntime {
     }
     static Object moduleDict(PyModule module) {
         if(module.dict!=null) return module.dict;
+        if(module.name.equals("__main__") && !module.className.startsWith("pyjvm315.runtime.")) return NamespacesModuleView.of(module.className);   // the live globals of the program
         if(module.name.equals("builtins") && module.className.equals("pyjvm315.runtime.Namespaces"))return Namespaces.builtinsDict();
         LinkedHashMap<Object,Object> out=new LinkedHashMap<>();
         out.putAll(module.attrs);
@@ -222,6 +223,7 @@ public final class PyRuntime {
                 try { java.lang.reflect.Field field=cls.getField(f);Object value=field.get(null);if(value!=UNBOUND)return LazyImport.reifyField(value,field);break; } catch(NoSuchFieldException ignored) {}
             }
         } catch(ReflectiveOperationException exc) { throw new RuntimeException(exc); }
+        if(module.name.equals("__main__") && !module.className.startsWith("pyjvm315.runtime.")) {Map<Object,Object> view=NamespacesModuleView.of(module.className); if(view.containsKey(name)) return view.get(name);}
         switch(name) { case "__name__": return module.name; case "__doc__": case "__spec__": case "__loader__": return null; default: break; }
         throw new PyException("AttributeError","module '"+module.name+"' has no attribute '"+name+"'");
     }
@@ -506,6 +508,7 @@ public final class PyRuntime {
             }
             if(instance.payload!=null)return NativeSubclass.hash(instance);
         }
+        if(value instanceof BuiltinBoundMethod bound && bound.self instanceof PyBuiltinType)return normalizeHash((long)bound.hashCode());   // dict.__repr__ is a dict key in pprint
         return id(value);
     }
     static Object hashResult(Object result){
@@ -1343,6 +1346,10 @@ public final class PyRuntime {
             Object result=binarySpecial(a,b,left,right,true);
             if(result!=NOT_IMPLEMENTED)return result;
         }
+        if((a instanceof PyDictView || b instanceof PyDictView) && (a instanceof PyDictView || a instanceof Set<?>) && (b instanceof PyDictView || b instanceof Set<?>)){
+            Object[] ops=viewOperands(a,b);   // keys()/items() views order like sets
+            if(ops!=null){a=ops[0];b=ops[1];}
+        }
         if(a instanceof Set<?> x && b instanceof Set<?> y)return switch(fallback){case -2->x.size()<y.size() && y.containsAll(x);case -1->y.containsAll(x);case 1->x.containsAll(y);default->x.size()>y.size() && x.containsAll(y);};
         List<?> xs=a instanceof PyTuple tuple?tuple.items:a instanceof List<?> list?list:null;
         List<?> ys=b instanceof PyTuple tuple?tuple.items:b instanceof List<?> list?list:null;
@@ -1804,7 +1811,8 @@ public final class PyRuntime {
     public static Object unpack(Object value, Object countObj) {
         int count = asIndex(countObj); ArrayList<Object> out = new ArrayList<>();
         for (Object x : iterable(value)) out.add(x);
-        if (out.size() != count) throw new IllegalArgumentException("cannot unpack sequence of size " + out.size() + " into " + count + " values");
+        if (out.size() < count) throw new PyException("ValueError", "not enough values to unpack (expected " + count + ", got " + out.size() + ")");
+        if (out.size() > count) throw new PyException("ValueError", "too many values to unpack (expected " + count + ")");
         return out;
     }
     public static Object unpackEx(Object value,Object beforeObj,Object afterObj) {
@@ -3157,6 +3165,12 @@ public final class PyRuntime {
                     throw new PyException("TypeError","__prepare__() must return a mapping");
                 namespace.clear();
                 for(var e:map.entrySet()) namespace.put(e.getKey(),e.getValue());
+                if(namespace.prepared!=null){
+                    // the class body stores __module__ and __qualname__ through the prepared mapping, as CPython's STORE_NAME does
+                    setitem(namespace.prepared,"__module__",cls.moduleName);
+                    setitem(namespace.prepared,"__qualname__",cls.qualname);
+                    mirrorPrepared(namespace);
+                }
                 namespace.putIfAbsent("__module__",cls.moduleName);
                 namespace.putIfAbsent("__qualname__",cls.qualname);
             }
@@ -3310,7 +3324,11 @@ public final class PyRuntime {
         if(spec instanceof String one) rawNames.add(one);
         else if(spec instanceof PyTuple tuple) rawNames.addAll(tuple.items);
         else if(spec instanceof List<?> list) rawNames.addAll(list);
-        else throw new PyException("TypeError","__slots__ must be a string or iterable of strings");
+        else {
+            Iterable<?> items;
+            items=iterable(spec);
+            for(Object item:items) rawNames.add(item);
+        }
 
         LinkedHashSet<String> names=new LinkedHashSet<>();
         boolean weakrefSlot=false;
@@ -3650,7 +3668,7 @@ public final class PyRuntime {
             Object r=eq(args[0],args[1]);
             return r==NOT_IMPLEMENTED?r:(Object)Boolean.valueOf(!truth(r));
         }
-        if(builtin.name.equals("object") && name.equals("__init__")){requireArgs(name,args,1);return null;}
+        if(builtin.name.equals("object") && name.equals("__init__")){return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__delattr__")){requireArgs(name,args,2);delattr(args[0],args[1]);return null;}
         if(name.equals("__reduce_ex__") || name.equals("__reduce__")) throw new PyException("NotImplementedError",builtin.name+"."+name+" is not implemented");
@@ -3662,6 +3680,7 @@ public final class PyRuntime {
             if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+(inst.cls.moduleName.equals("builtins")?"":inst.cls.moduleName+".")+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
             return pyRepr(args[0]);
         }
+        if((name.equals("__repr__") || name.equals("__str__")) && !builtin.name.equals("object") && args.length==1 && !(args[0] instanceof PyInstance))return name.equals("__str__")?pyStr(args[0]):pyRepr(args[0]);
         if(builtin.name.equals("object") && name.equals("__init_subclass__")){requireArgs(name,args,0);return null;}
         if(builtin.name.equals("object") && name.equals("__new__")) {
             requireArgs(name,args,1);
@@ -4126,12 +4145,14 @@ public final class PyRuntime {
                 return new UnboundMethod(cls,name);
             }
             if(cls.nativeKind!=null || name.equals("__base__")){Object nativeValue=NativeSubclassMethods.classAttribute(cls,name);if(nativeValue!=MISSING)return nativeValue;}
+            if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(metaAttr!=MISSING)return descriptorGet(metaAttr,cls,cls.metaclass);
             if(name.equals("__subclasshook__"))return new NativeFunction("__subclasshook__",(a,k)->NOT_IMPLEMENTED);
             if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));
             if(name.equals("mro"))return new NativeFunction("mro",(a,k)->new ArrayList<Object>(((PyTuple)getattr(cls,"__mro__")).items));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
+            if(name.equals("__doc__"))return null;   // a class without a docstring has __doc__ None
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");
         }
         if (obj instanceof PyInstance instance) {
@@ -4161,6 +4182,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
         {Object nativeValue=NativeSubclassMethods.plainAttribute(obj,name);if(nativeValue!=MISSING)return nativeValue;}
+        if(obj instanceof PyBuiltinType && (name.equals("__repr__") || name.equals("__str__")))return new BuiltinBoundMethod(obj,name);   // pprint keys its dispatch table on T.__repr__
         if(obj instanceof PyObject && Set.of("__str__","__repr__","__hash__","__eq__","__ne__","__format__","__reduce_ex__","__sizeof__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__doc__") && !(obj instanceof PyModule)) return null;
         throw new PyException("AttributeError","'"+typeName(obj)+"' object has no attribute '"+name+"'");

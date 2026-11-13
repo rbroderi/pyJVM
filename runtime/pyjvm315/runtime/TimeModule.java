@@ -6,8 +6,7 @@ import java.time.Instant;
 import java.util.TimeZone;
 
 /**
- * {@code time}: clocks, {@code sleep} and the timezone constants. Calendar conversion ({@code gmtime},
- * {@code localtime}, {@code strftime}, {@code struct_time}) is not implemented and raises NotImplementedError.
+ * {@code time}: clocks, {@code sleep} and the timezone constants; calendar conversion is in {@link TimeCalendar}.
  */
 public final class TimeModule {
     private TimeModule() {}
