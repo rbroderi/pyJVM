@@ -3460,6 +3460,7 @@ public final class PyRuntime {
         if(name.equals("__dir__") && type.equals("object"))return true;
         if(name.equals("__reduce_ex__") || name.equals("__reduce__"))return true;
         if(name.equals("__init__") && type.equals("code"))return true;
+        if(name.equals("__get__") && type.equals("function"))return true;
         if(exceptionIsSubclass(type,"BaseException") && (name.equals("__init__") || name.equals("__new__")))return true;
         if(name.equals("__format__") && Set.of("object","str","int","bool","float").contains(type))return true;
         return switch(type){
@@ -3596,6 +3597,8 @@ public final class PyRuntime {
     }
 
     static Object callBuiltinTypeMethod(PyBuiltinType builtin,String name,Object[] args) {
+        if(builtin.name.equals("function") && name.equals("__get__") && args.length>=2 && args[0] instanceof PyFunction fn0)
+            return callFunction(getattr(fn0,"__get__"),new ArrayList<>(Arrays.asList(args).subList(1,args.length)),new LinkedHashMap<>());
         if(builtin.name.equals("float") && name.equals("__getformat__") && args.length==1){
             if(!(args[0] instanceof String fk))throw new PyException("TypeError","__getformat__() argument must be str, not "+typeName(args[0]));
             if(!fk.equals("double") && !fk.equals("float"))throw new PyException("ValueError","__getformat__() argument 1 must be 'double' or 'float'");
