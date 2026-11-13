@@ -3640,7 +3640,7 @@ public final class PyRuntime {
             Object r=eq(args[0],args[1]);
             return r==NOT_IMPLEMENTED?r:(Object)Boolean.valueOf(!truth(r));
         }
-        if(builtin.name.equals("object") && name.equals("__init__")){requireArgs(name,args,1);return null;}
+        if(builtin.name.equals("object") && name.equals("__init__")){return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__delattr__")){requireArgs(name,args,2);delattr(args[0],args[1]);return null;}
         if(name.equals("__reduce_ex__") || name.equals("__reduce__")) throw new PyException("NotImplementedError",builtin.name+"."+name+" is not implemented");

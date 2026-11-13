@@ -14,4 +14,4 @@ class Month(IntEnum):
     FEBRUARY = 2
 
 
-print(globals()["JANUARY"], main.FEBRUARY, Month.__module__)
+print(int(globals()["JANUARY"]), int(main.FEBRUARY), Month.__module__)

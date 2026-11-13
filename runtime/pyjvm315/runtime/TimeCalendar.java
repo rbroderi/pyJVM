@@ -98,7 +98,7 @@ struct_time.__qualname__ = 'struct_time'
         boolean dst = t.getZone().getRules().isDaylightSavings(t.toInstant());
         long[] v = {t.getYear(), t.getMonthValue(), t.getDayOfMonth(), t.getHour(), t.getMinute(), t.getSecond(),
             t.getDayOfWeek().getValue() - 1, t.getDayOfYear(), dst ? 1 : 0};
-        String name = t.getZone() instanceof ZoneOffset ? "UTC" : java.util.TimeZone.getTimeZone(t.getZone()).getDisplayName(dst, java.util.TimeZone.SHORT);
+        String name = t.getZone() instanceof ZoneOffset ? "GMT" : java.util.TimeZone.getTimeZone(t.getZone()).getDisplayName(dst, java.util.TimeZone.SHORT);
         return new Fields(v, name, t.getOffset().getTotalSeconds());
     }
 
