@@ -41,6 +41,7 @@ public final class PosixModule {
         method(statResult, PosixModule.class, "__hash__", "srHash", "self");
         finish(statResult);
         m.attrs.put("stat_result", statResult);
+        m.attrs.put("terminal_size", TerminalSize.define());
         m.attrs.put("error", PyRuntime.builtinType("OSError"));
         fn(m, "getcwd", (a, k) -> cwd());
         fn(m, "fspath", (a, k) -> fspath(a.get(0)));

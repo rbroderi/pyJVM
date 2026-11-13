@@ -81,6 +81,7 @@ struct_time.__qualname__ = 'struct_time'
         NativeTypes.fn(m, "ctime", (a, k) -> asctime(at(a, ZoneId.systemDefault()).fields()));
         NativeTypes.fn(m, "strftime", (a, k) -> strftime(a));
         NativeTypes.fn(m, "strptime", (a, k) -> strptime(a));
+        m.attrs.put("_STRUCT_TM_ITEMS", 11L);
         m.lazyAttrs = attr -> { if (attr.equals("struct_time") && !m.attrs.containsKey(attr)) m.attrs.put(attr, structTime()); };
     }
 
