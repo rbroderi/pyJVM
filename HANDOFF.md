@@ -1,9 +1,20 @@
 # Hand-off notes
 
-Updated 2026-11-14. Branch: `ccr-53990e90-8do8kj`, head **46f8e0f** on origin. `origin/main` is still at 1654ee0. The branch is now worked from a fresh clone at `C:\Users\richa\workspace_local\pyjvm` (see Local environment). The earlier local session worked at `E:\pyjvm`; that drive is not mounted here.
+Updated 2026-11-15. Branch: `ccr-53990e90-8do8kj`, origin at **46f8e0f**, local head **b56997c** (wave 1, not pushed). `origin/main` is still at 1654ee0. The branch is now worked from a fresh clone at `C:\Users\richa\workspace_local\pyjvm` (see Local environment). The earlier local session worked at `E:\pyjvm`; that drive is not mounted here.
 
 ## State of the branch (read this first)
-- **46f8e0f** "Windows support (nt, winreg via FFM) and Java 25 re-target (R0-01)" sits on top of 4da983b (both cloud workers merged: unittest/`test.support`, compiler audit, `_typing`, `_socket`/`resource` shells). It holds the whole change set described below; nothing is left uncommitted.
+- **46f8e0f** "Windows support (nt, winreg via FFM) and Java 25 re-target (R0-01)" sits on top of 4da983b (both cloud workers merged: unittest/`test.support`, compiler audit, `_typing`, `_socket`/`resource` shells).
+- **Wave 1 (local commits after 46f8e0f, not pushed):**
+  - `dc786fe` Windows test fixes (see "Fresh clone" below).
+  - Agent B (`7202538`, `e9bc11c`, `99bebdc`, `5b14339`, `3534fc8`): real `putenv`/`unsetenv` (libc `setenv`/`unsetenv` via FFM on posix, `_wputenv_s` on nt), real `fchmod`, native `ast.get_source_segment`; `PosixNative` has its own `rethrow` (calling `WindowsNative` from posix code triggered its static init and failed on Linux).
+  - Agent C (merge `a66fda6`): runtime exceptions carry `__traceback__`, `f_globals is globals()`, `function.__globals__`, exact recursion depth, `sys.addaudithook`/`sys.audit` with events (`AuditEvents.java`), partial stdlib jar falls back to source.
+  - `3fb3251`: audit events for `os.putenv`/`os.unsetenv`/`os.fchmod` (as `os.chmod`).
+  - Agent A (merge `967778a`): `OSError(errno, ...)` returns the errno-mapped subclass; one table in `ErrnoModule.osErrorType`.
+  - Agent D (merge `b56997c`): `_winapi`, `msvcrt`, HANDLE-backed `nt.pipe`/`nt.dup2` (`WindowsHandles.java`). D's SetEnvironmentVariableW putenv was dropped in favour of B's `_wputenv_s`.
+  - New conformance cases: os_putenv, os_fchmod, ast_get_source_segment, audit_events, recursion_limit_depth, runtime_exc_traceback, oserror_errno_subclass, os_pipe, subprocess_windows.
+- **Wave 1 verification so far:** merged runtime compiles (`javac --release 25`). Before the merges: os_putenv, os_fchmod, ast_get_source_segment, os_platform pass on Linux (WSL) on both lanes; oserror_errno_subclass passes on both lanes (Windows); os_pipe passes on 3.15 (Windows). **Not yet run on the merged head:** audit_events (after `3fb3251`), subprocess_windows (D's CreateProcess fix), the 3.13 lane for D's cases, and every full gate. Runs were stopped for low memory; run checks one at a time, not alongside agents.
+- Baseline before wave 1 (`dc786fe`, Windows): conformance 3.15 333 passed / 20 failed / 3 skipped, 3.13 311 / 21 failed / 26 skipped / 1 unsupported. Failing on both: array_*, struct_*, zlib_*, main.py, io_files (Windows `open(dir)` gives PermissionError, not IsADirectoryError), select_files/signal_basic (POSIX-only), os_terminal_size/stdlib_imports_after_compiler_fixes (needed `_winapi`; recheck after D), sys_hooks (`import pdb` -> "cannot import name 'Union' from '_typing'"), super_builtin_boundary, sys_attrs, time_struct_time_and_strftime, unittest_mock_basic. 3.15 only: lazy_import_basic, zlib_315. 3.13 only: annotations_eager_function, typeparams_basic, typeparams_scopes. Logs in `pyjvm-work\logs`.
+- The probe compiled 2918/3000 (the minimum) but reported every compiling case as "previously compiling case regressed"; most likely a comparison bug on Windows (paths/line endings). Investigate before trusting it.
 - `ticket/r0-01-java25` (c34c92e) on origin is superseded by 46f8e0f; do not merge it.
 - Commit/push only when the user asks.
 
@@ -86,14 +97,22 @@ $env:PYJVM_BUILD_CACHE='C:\Users\richa\workspace_local\pyjvm-work\bc-conf'; $env
 8. Known sys gaps: only the C-level recursion limit (CPython raises at a fixed depth for deeply nested repr/compare; pyJVM relies on the JVM stack), `tb.tb_frame is sys._getframe()` False (traceback entries are separate frame objects), frames have no `f_builtins`. Done: exact Python-frame recursion limit, runtime exceptions carry tracebacks, `f.f_globals is globals()`, audit events (list in JVM_BACKEND.md), `cache_tag` None is intentional (reasoning in JVM_BACKEND.md).
 9. Roadmap Phases 4-6 and the interop track (I-01..I-06) not started. Native extension tickets R1-R4 not started.
 10. (done) A partial stdlib jar falls back to the PYJVM_STDLIB sources for submodules it lacks (`test_partial_jar_falls_back_to_source_for_missing_submodules`).
-11. `OSError(errno, ...)` constructed from Python is not mapped to its subclass (`OSError(2, 'x')` should be `FileNotFoundError`); the runtime has no errno -> subclass table at construction. Affects every platform.
-12. Pre-existing posix placeholders: `fchmod`, `putenv`, `unsetenv` return None without acting; `ast.get_source_segment` is missing.
+11. (done, A) `OSError(errno, ...)` maps to its subclass. Left: no `IOError`/`EnvironmentError`/`WindowsError` aliases; a user subclass called with `winerror=None` keeps the `[Errno]` form; `WindowsNative.winError` keeps 4-tuple args.
+12. (done, B) `fchmod`, `putenv`, `unsetenv` are real; `ast.get_source_segment` exists. The os_putenv case does not check a child process yet (needs subprocess on both OSes).
+13. Investigate the probe's "regressed" reporting on Windows (see State of the branch).
+14. `JAVA_HOME` optional: tools must keep working when it points at an older JDK.
 
 ### Known Windows gaps
 - java.nio-backed `os` functions other than `stat` report errors errno-style (`[Errno 2] ...`) where CPython on Windows reports `[WinError N] ...`.
 - `O_TEXT` descriptors do binary I/O (no CRLF translation); `os.open` without `O_BINARY` is binary here.
-- `_winapi` (process/handle subset: CreateProcess with STARTUPINFO and handle_list, CreatePipe, DuplicateHandle, Wait*, GetExitCodeProcess, TerminateProcess, GetStdHandle, GetFileType, OpenProcess, NeedCurrentDirectoryForExePath, ...) and `msvcrt` (`get_osfhandle`, `open_osfhandle`, `setmode`, `Get/SetErrorMode`) exist, so `subprocess` works for native executables. fd <-> HANDLE bridge: `IoFd.Fd.handle`; pipe ends and `open_osfhandle` descriptors are HANDLE-backed (`nativeIo`, ReadFile/WriteFile); `get_osfhandle` of a file descriptor opens a second (shadow) handle on the path at the channel's offset (java.nio does not expose its handle). `nt.pipe`, `nt.dup2`, `nt.putenv`/`unsetenv` (SetEnvironmentVariableW) are real. Not implemented: overlapped I/O/named pipes/CopyFile2/LCMapStringEx in `_winapi`, console and `locking` functions in `msvcrt`, text-mode translation for `setmode(O_TEXT)`, `get/set_inheritable` (still placeholders), POSIX `pipe`/`dup2`.
-- Absent like in posix: `spawnv`/`execv`/`system`/`startfile`, DLL directories, `listdrives`/`listvolumes`/`listmounts`, the ntpath accelerators (`_path_normpath`, `_path_splitroot_ex`, `_path_is*`, `_getvolumepathname`; ntpath falls back to Python).- `os.environ` writes do not reach the process environment (`putenv` is a no-op, as on posix).
+- `_winapi` (process/handle subset: CreateProcess with STARTUPINFO and handle_list, CreatePipe, DuplicateHandle, Wait*, GetExitCodeProcess, TerminateProcess, GetStdHandle, GetFileType, OpenProcess, NeedCurrentDirectoryForExePath, ...) and `msvcrt` (`get_osfhandle`, `open_osfhandle`, `setmode`, `Get/SetErrorMode`) exist, so `subprocess` works for native executables. fd <-> HANDLE bridge: `IoFd.Fd.handle`; pipe ends and `open_osfhandle` descriptors are HANDLE-backed (`nativeIo`, ReadFile/WriteFile); `get_osfhandle` of a file descriptor opens a second (shadow) handle on the path at the channel's offset (java.nio does not expose its handle). `nt.pipe`, `nt.dup2` and `nt.putenv`/`unsetenv` (`_wputenv_s`, so the CRT environment and child processes see the change, like CPython) are real. Not implemented: overlapped I/O/named pipes/CopyFile2/LCMapStringEx in `_winapi`, console and `locking` functions in `msvcrt`, text-mode translation for `setmode(O_TEXT)`, `get/set_inheritable` (still placeholders), POSIX `pipe`/`dup2`.
+- Absent like in posix: `spawnv`/`execv`/`system`/`startfile`, DLL directories, `listdrives`/`listvolumes`/`listmounts`, the ntpath accelerators (`_path_normpath`, `_path_splitroot_ex`, `_path_is*`, `_getvolumepathname`; ntpath falls back to Python).
+- `get_inheritable`/`set_inheritable` are still placeholders, against the no-placeholders rule; implement or remove them.
+
+## WSL (Linux gates)
+- Ubuntu 22.04 in WSL (14 GB RAM, 16 CPUs): `~/jdk-25` (Temurin 25.0.5), uv 0.13.8 with uv-managed 3.13.18/3.15.2, `~/cpython` at the same pinned commit, `~/pyjvm` cloned from the Windows repo (`/mnt/c/Users/richa/workspace_local/pyjvm`; update with `git pull --ff-only`), `.venv313`/`.venv315` with pytest.
+- `source ~/pyjvm-env.sh` sets JAVA_HOME/PATH/PYTHONPATH; `~/pyjvm-work/conf_cases.sh <cases...>` runs cases on both lanes.
+- Quoting through PowerShell -> `wsl` breaks double quotes: write a script file (Write tool on `\\wsl.localhost\Ubuntu\home\ubuntu\...`, then `sed -i "s/\r$//"`) and run that.
 
 ## Environment lessons (cloud container; may not apply locally)
 Container restarts ~every 7 min killed background jobs; stale half-built caches caused bogus failures ("no attribute compile_source") - wipe cache dirs and prefer `PYJVM_BUILD_CACHE` (atomic builds). Background JVM jobs must reset SIGINT (`perl -e '$SIG{INT}="DEFAULT"; exec @ARGV'`).
