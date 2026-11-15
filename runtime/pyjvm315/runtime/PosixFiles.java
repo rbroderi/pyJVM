@@ -281,7 +281,8 @@ final class PosixFiles {
             return;
         }
         byte[] n = envBytes(name), v = value == null ? null : envBytes(value);
-        for (byte b : n) if (b == '=') throw new PyException("ValueError", "illegal environment variable name");
+        // CPython's posix putenv rejects '=' itself; unsetenv leaves it to libc (EINVAL -> OSError 22)
+        if (v != null) for (byte b : n) if (b == '=') throw new PyException("ValueError", "illegal environment variable name");
         if (v == null) PosixNative.unsetenv(n); else PosixNative.setenv(n, v);
     }
 
