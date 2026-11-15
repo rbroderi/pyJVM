@@ -101,26 +101,8 @@ final class WindowsNative {
         };
     }
 
-    /** CPython's errno -> OSError subclass map on Windows (Objects/exceptions.c, MSVC and Winsock values). */
-    static String errorType(int errno) {
-        return switch (errno) {
-            case 2 -> "FileNotFoundError";
-            case 1, 13 -> "PermissionError";
-            case 17 -> "FileExistsError";
-            case 20 -> "NotADirectoryError";
-            case 21 -> "IsADirectoryError";
-            case 32, 10058 -> "BrokenPipeError";
-            case 10 -> "ChildProcessError";
-            case 3 -> "ProcessLookupError";
-            case 4 -> "InterruptedError";
-            case 11, 10035, 10036, 10037 -> "BlockingIOError";
-            case 138, 10060 -> "TimeoutError";
-            case 10061 -> "ConnectionRefusedError";
-            case 10053 -> "ConnectionAbortedError";
-            case 10054 -> "ConnectionResetError";
-            default -> "OSError";
-        };
-    }
+    /** CPython's errno -> OSError subclass map on Windows; the one table lives in {@link ErrnoModule#osErrorType}. */
+    static String errorType(int errno) { return ErrnoModule.osErrorType(errno); }
 
     /** {@code OSError} with errno, strerror, filename and winerror, typed by errno as CPython's OSError constructor does. */
     static PyException winError(int code, String filename) {

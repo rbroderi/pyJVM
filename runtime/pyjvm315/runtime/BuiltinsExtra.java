@@ -279,10 +279,86 @@ public final class BuiltinsExtra {
     static Object newException(String type, List<Object> args) {
         if (isGroupType(type)) return newGroup(type, args);
         if (type.startsWith("Unicode")) { PyExceptionValue u = CodecErrors.fromArgs(type, args); if (u != null) return u; }
+        if (args.size() >= 2 && args.size() <= 5 && ImportSupport.OS_ERRORS.contains(type)) return newOSError(type, args);
         if (args.isEmpty()) return new PyExceptionValue(type, null);
         if (args.size() == 1 && args.get(0) != null) return new PyExceptionValue(type, args.get(0));
         PyTuple all = new PyTuple(); all.items.addAll(args);
         return new PyExceptionValue(type, new PyExcArgs(all, null));
+    }
+
+    /** Python int value of an errno argument (bool included, as PyLong_Check), or null when it is not an int. */
+    private static Long errnoValue(Object o) {
+        if (o instanceof Boolean b) return b ? 1L : 0L;
+        if (o instanceof Long l) return l;
+        if (o instanceof Integer i) return (long) i;
+        return null;
+    }
+
+    /**
+     * OSError(errno, strerror[, filename[, winerror[, filename2]]]) as CPython's OSError.__new__/__init__: a call of exactly
+     * OSError with an int errno yields the errno-mapped subclass; on Windows an int winerror replaces errno by its mapped
+     * value; filename and filename2 are removed from args when a filename is given. Subclasses called directly are not remapped.
+     */
+    private static Object newOSError(String type, List<Object> args) {
+        Object errno = args.get(0);
+        args = new ArrayList<>(args);
+        LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
+        if (ImportSupport.WINDOWS) {
+            Object winerror = args.size() >= 4 ? args.get(3) : null;
+            Long w = errnoValue(winerror);
+            if (w != null && w >= Integer.MIN_VALUE && w <= Integer.MAX_VALUE) { errno = (long) WindowsNative.errnoOf(w.intValue()); args.set(0, errno); }
+            if (args.size() >= 4) attrs.put("winerror", winerror);
+        }
+        if (type.equals("OSError")) {
+            Long code = errnoValue(errno);
+            if (code != null) type = ErrnoModule.osErrorType(code);
+        }
+        Object filename = args.size() >= 3 ? args.get(2) : null;
+        attrs.put("errno", errno);
+        attrs.put("strerror", args.get(1));
+        attrs.put("filename", filename);
+        attrs.put("filename2", args.size() >= 5 ? args.get(4) : null);
+        PyTuple all = new PyTuple();
+        all.items.addAll(filename != null ? args.subList(0, 2) : args);
+        return new PyExceptionValue(type, new PyExcArgs(all, null, attrs));
+    }
+
+    /**
+     * errno/strerror/filename/filename2 of an instance of a user subclass of OSError built with 2..5 arguments, and the
+     * trimmed args tuple; subclasses that define __init__ or __new__ are left to them.
+     */
+    static void initOSErrorFields(PyInstance exc, Object[] args) {
+        if (args.length < 2 || args.length > 5 || !exceptionIsSubclass(exc.cls.exceptionBase, "OSError")) return;
+        if (exc.cls.lookupMethod("__init__") != null || exc.cls.lookupMethod("__new__") != null) return;
+        Object errno = args[0];
+        boolean mapped = false;
+        if (ImportSupport.WINDOWS) {
+            Object winerror = args.length >= 4 ? args[3] : null;
+            Long w = errnoValue(winerror);
+            if (w != null && w >= Integer.MIN_VALUE && w <= Integer.MAX_VALUE) { errno = (long) WindowsNative.errnoOf(w.intValue()); mapped = true; }
+            exc.fields.put("winerror", winerror);
+        }
+        exc.fields.put("errno", errno);
+        exc.fields.put("strerror", args[1]);
+        exc.fields.put("filename", args.length >= 3 ? args[2] : null);
+        exc.fields.put("filename2", args.length >= 5 ? args[4] : null);
+        if (mapped || args.length >= 3 && args[2] != null) {
+            PyTuple t = new PyTuple();
+            t.items.add(errno); t.items.add(args[1]);
+            if (!(args.length >= 3 && args[2] != null)) for (int i = 2; i < args.length; i++) t.items.add(args[i]);
+            exc.fields.put("args", t);
+        }
+    }
+
+    /** str() of an OSError-derived instance that carries errno/strerror fields, or null. */
+    static String osErrorStr(PyInstance exc) {
+        if (!exc.fields.containsKey("strerror") || !exc.fields.containsKey("errno") || !exceptionIsSubclass(exc.cls.exceptionBase, "OSError")) return null;
+        Object filename = exc.fields.get("filename"), filename2 = exc.fields.get("filename2");
+        boolean win = exc.fields.get("winerror") != null;
+        String head = win ? "[WinError " + pyStr(exc.fields.get("winerror")) : "[Errno " + pyStr(exc.fields.get("errno"));
+        head += "] " + pyStr(exc.fields.get("strerror"));
+        if (filename == null) return head;
+        return head + ": " + pyRepr(filename) + (filename2 == null ? "" : " -> " + pyRepr(filename2));
     }
 
     static boolean isExceptionObject(Object value) {

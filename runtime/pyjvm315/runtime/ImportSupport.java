@@ -179,7 +179,7 @@ public final class ImportSupport {
         return new PyExceptionValue(type, new PyExcArgs(all, null, a));
     }
 
-    private static final Set<String> OS_ERRORS = Set.of("OSError", "FileNotFoundError", "PermissionError", "FileExistsError",
+    static final Set<String> OS_ERRORS = Set.of("OSError", "FileNotFoundError", "PermissionError", "FileExistsError",
         "IsADirectoryError", "NotADirectoryError", "BlockingIOError", "ChildProcessError", "ConnectionError", "BrokenPipeError",
         "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError", "InterruptedError", "ProcessLookupError", "TimeoutError");
 
@@ -195,7 +195,7 @@ public final class ImportSupport {
             }
         }
         if (OS_ERRORS.contains(exc.typeName)) {
-            List<Object> items = payload != null ? payload.args.items : null;
+            List<Object> items = payload != null && payload.args.items.size() <= 5 ? payload.args.items : null;
             switch (name) {
                 case "errno": return items != null && items.size() >= 2 ? items.get(0) : null;
                 case "strerror": return items != null && items.size() >= 2 ? items.get(1) : null;
