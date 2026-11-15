@@ -274,11 +274,17 @@ final class PosixFiles {
 
     private static void setEnv(String who, Object name, Object value, int pos) {
         if (ImportSupport.WINDOWS) {
-            String n = envStr(who, name, 1, pos + 1), v = value == null ? "" : envStr(who, value, 2, pos + 1);
+            // like CPython's nt putenv/unsetenv: the str type check, then the audit event, then the value checks
+            Object n0 = NativeSubclass.unwrap(name), v0 = value == null ? null : NativeSubclass.unwrap(value);
+            if (!(n0 instanceof String))
+                throw new PyException("TypeError", who + "() argument" + (pos + 1 > 1 ? " 1" : "") + " must be str, not " + PyRuntime.typeName(n0));
+            if (value != null && !(v0 instanceof String))
+                throw new PyException("TypeError", who + "() argument 2 must be str, not " + PyRuntime.typeName(v0));
+            if (SysExtras.auditing()) SysExtras.audit(value == null ? "os.unsetenv" : "os.putenv", value == null ? new Object[]{name} : new Object[]{name, value});
+            String n = (String) n0, v = value == null ? "" : (String) v0;
             if (n.isEmpty() || n.indexOf('=', 1) >= 0) throw new PyException("ValueError", "illegal environment variable name");
+            if (n.indexOf('\0') >= 0 || v.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
             if (n.length() + v.length() >= 32767) throw new PyException("ValueError", "the environment variable is longer than 32767 characters");
-            // like CPython, the audit event is raised after validation, with the converted arguments
-            if (SysExtras.auditing()) SysExtras.audit(value == null ? "os.unsetenv" : "os.putenv", value == null ? new Object[]{n} : new Object[]{n, v});
             int err = WindowsNative.putenv(n, v);
             if (err != 0) throw PosixModule.osError("OSError", err, PosixModule.strerror(err), null);
             return;

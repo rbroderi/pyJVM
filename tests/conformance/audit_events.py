@@ -95,17 +95,17 @@ show("chmod", lambda: (open(p, "w").close(), os.chmod(p, 0o600)))
 show("utime", lambda: os.utime(p, (1, 1)))
 show("putenv", lambda: os.putenv("PYJVM_AUDIT_ENV", "v"))
 show("unsetenv", lambda: os.unsetenv("PYJVM_AUDIT_ENV"))
-show("putenv invalid", lambda: os.putenv("PYJVM=AUDIT", "v"))   # validation fails before the event
+show("putenv invalid", lambda: os.putenv("PYJVM=AUDIT", "v"))   # posix validates before the event, nt after it
 
 
 def fchmod_probe():
     fd = os.open(p, os.O_RDONLY)
     try:
         events.clear()
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, 0o600)   # on Windows a read-only descriptor fails with PermissionError (WinError 5)
+    finally:
         # the descriptor number differs between interpreters
         events[:] = [(e, tuple("FD" if x == fd else x for x in a)) for e, a in events]
-    finally:
         os.close(fd)
 
 

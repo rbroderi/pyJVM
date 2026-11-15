@@ -19,7 +19,7 @@ import java.util.Set;
 final class NativeSubclassMethods {
     private NativeSubclassMethods() {}
 
-    private static final String BYTES_METHODS = "decode hex find rfind index rindex partition rpartition count startswith endswith replace split join translate strip lstrip rstrip lower upper capitalize title swapcase";
+    private static final String BYTES_METHODS = "decode hex find rfind index rindex partition rpartition count startswith endswith replace split join translate strip lstrip rstrip lower upper capitalize title swapcase " + BinaryMethods.NAMES_TEXT;
     private static final String SET_METHODS = "copy union intersection difference symmetric_difference issubset issuperset isdisjoint";
     private static final String ARITH = "add sub mul truediv floordiv mod pow divmod lshift rshift and or xor";
     private static final HashMap<String, Set<String>> MEMBERS = new HashMap<>();

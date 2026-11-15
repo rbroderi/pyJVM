@@ -94,7 +94,21 @@ final class WindowsHandles {
         } catch (Throwable t) { throw rethrow(t); }
     }
 
+    /** Ends returned by _winapi.CreatePipe that are still open (subprocess wraps them in Handle objects). */
+    static final java.util.Set<Long> WINAPI_PIPE_ENDS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * Pipe ends that were the source of an inheritable duplicate in this process and are still open: subprocess drops
+     * such an original and relies on Handle.__del__ to close it (see WindowsWinApiModule.createProcess).
+     */
+    static final java.util.Set<Long> DUPLICATED_PIPE_ENDS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static void forget(long handle) {
+        WINAPI_PIPE_ENDS.remove(handle);
+        DUPLICATED_PIPE_ENDS.remove(handle);
+    }
+
     static void closeHandle(long handle) {
+        forget(handle);
         try (Arena a = Arena.ofConfined()) {
             MemorySegment st = a.allocate(CALL_STATE);
             if ((int) CLOSE.invokeExact(st, h(handle)) == 0) throw winError(lastError(st), null);
@@ -103,6 +117,7 @@ final class WindowsHandles {
 
     /** {@code _close}: a failure is an errno-style OSError. */
     static void closeFd(long handle) {
+        forget(handle);
         try (Arena a = Arena.ofConfined()) {
             MemorySegment st = a.allocate(CALL_STATE);
             if ((int) CLOSE.invokeExact(st, h(handle)) == 0) throw crtIoError(lastError(st));

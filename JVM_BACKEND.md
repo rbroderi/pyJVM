@@ -203,6 +203,21 @@ compiled-class cache (`PYJVM_CACHE`, `ClassCache`, `tests/test_class_cache.py`) 
 by the source and the compiler fingerprint instead, so `cache_tag` stays `None`, `sys.dont_write_bytecode` is only
 reported.
 
+## Finalizers and reference-counting timing
+
+`__del__` runs through JVM finalization (`GcFinalizable`, delivered on the creating thread by `WeakrefDelivery`), so it
+runs after a collection finds the object unreachable, not when the last reference goes away as in CPython. Finalizers
+also do not run at interpreter exit (CPython finalizes module globals at shutdown). `gc.collect()` forces a collection
+and runs the pending finalizers; the JVM has no way to collect selected objects.
+
+One stdlib path depends on the immediate timing: `subprocess` on Windows makes each pipe end inheritable with
+`DuplicateHandle` and drops the original `Handle`, whose `__del__` closes it. If the original write end stays open, the
+parent's reader never sees EOF and `communicate()` waits forever. `_winapi` therefore tracks the ends `CreatePipe`
+returned and which of them were the source of an inheritable duplicate; while such an original is still open,
+`_winapi.CreateProcess` runs a full collection (with finalizers) before the child starts, which leaves the process in
+the state CPython is in at that point. Closing a handle by any route (`CloseHandle`, `_close` of an `open_osfhandle`
+descriptor, `DUPLICATE_CLOSE_SOURCE`) clears its entry, so spawns without pipes do not collect.
+
 ## unittest and CPython's test modules
 
 `import unittest` works under pyJVM and a `TestCase` suite runs end to end: `unittest.main()`, `python -m unittest`,

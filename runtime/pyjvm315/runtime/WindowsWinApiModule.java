@@ -38,8 +38,7 @@ final class WindowsWinApiModule {
         m.attrs.put("INVALID_HANDLE_VALUE", unsigned(-1L));
         fn(m, "CloseHandle", (a, k) -> { WindowsHandles.closeHandle(handle(a.get(0))); return null; });
         fn(m, "CreatePipe", (a, k) -> createPipe(a.get(0), a.get(1)));
-        fn(m, "DuplicateHandle", (a, k) -> unsigned(WindowsHandles.duplicateHandle(handle(a.get(0)), handle(a.get(1)), handle(a.get(2)),
-            (int) IoUtil.asLong(a.get(3)), PyRuntime.truth(a.get(4)), a.size() > 5 ? (int) IoUtil.asLong(a.get(5)) : 0)));
+        fn(m, "DuplicateHandle", (a, k) -> duplicateHandle(a));
         fn(m, "GetCurrentProcess", (a, k) -> unsigned(WindowsHandles.currentProcess()));
         fn(m, "GetExitCodeProcess", (a, k) -> Integer.toUnsignedLong(WindowsHandles.exitCode(handle(a.get(0)))));
         fn(m, "GetFileType", (a, k) -> (long) WindowsHandles.fileType(handle(a.get(0))));
@@ -83,7 +82,26 @@ final class WindowsWinApiModule {
     private static Object createPipe(Object attributes, Object size) {
         if (attributes != null) throw new PyException("ValueError", "CreatePipe: pipe_attrs must be None");
         long[] ends = WindowsHandles.createPipe((int) IoUtil.asLong(size));
+        WindowsHandles.WINAPI_PIPE_ENDS.add(ends[0]);
+        WindowsHandles.WINAPI_PIPE_ENDS.add(ends[1]);
         return tuple(unsigned(ends[0]), unsigned(ends[1]));
+    }
+
+    private static final int DUPLICATE_CLOSE_SOURCE = 1;
+
+    private static Object duplicateHandle(List<Object> a) {
+        long srcProcess = handle(a.get(0)), src = handle(a.get(1)), dstProcess = handle(a.get(2));
+        boolean inherit = PyRuntime.truth(a.get(4));
+        int options = a.size() > 5 ? (int) IoUtil.asLong(a.get(5)) : 0;
+        long dup = WindowsHandles.duplicateHandle(srcProcess, src, dstProcess, (int) IoUtil.asLong(a.get(3)), inherit, options);
+        long self = WindowsHandles.currentProcess();
+        if (srcProcess == self && (options & DUPLICATE_CLOSE_SOURCE) != 0) {
+            WindowsHandles.WINAPI_PIPE_ENDS.remove(src);
+            WindowsHandles.DUPLICATED_PIPE_ENDS.remove(src);
+        } else if (inherit && srcProcess == self && dstProcess == self && WindowsHandles.WINAPI_PIPE_ENDS.contains(src)) {
+            WindowsHandles.DUPLICATED_PIPE_ENDS.add(src);
+        }
+        return unsigned(dup);
     }
 
     private static Object waitMany(Object handles, Object waitAll, Object millis) {
@@ -102,6 +120,13 @@ final class WindowsWinApiModule {
         if (a.get(2) != null || a.get(3) != null) throw new PyException("ValueError", "CreateProcess: proc_attrs and thread_attrs must be None");
         String app = optionalString(a.get(0), "CreateProcess"), cmd = optionalString(a.get(1), "CreateProcess");
         String cwd = a.get(7) == null ? PosixModule.cwd() : PosixModule.resolve(string(a.get(7), "CreateProcess")).toAbsolutePath().toString();
+        // Lib/subprocess.py makes each pipe end inheritable by duplicating it and relies on reference counting to close
+        // the original at once (Handle.__del__). Here those originals live until a collection; one still open in this
+        // process keeps the pipe from ever reporting EOF (communicate() then waits forever). The JVM cannot collect
+        // selected objects, so when such an original is still open, a full collection runs before the child starts:
+        // it closes every unreachable Handle, which is the state CPython is in at this point. Spawns without pipes, or
+        // whose originals were already closed, skip it.
+        if (PyRuntime.truth(a.get(4)) && !WindowsHandles.DUPLICATED_PIPE_ENDS.isEmpty()) WeakrefDelivery.collect();
         long[] r = WindowsHandles.createProcess(app, cmd, PyRuntime.truth(a.get(4)), (int) IoUtil.asLong(a.get(5)), environment(a.get(6)), cwd, startInfo(a.get(8)));
         return tuple(unsigned(r[0]), unsigned(r[1]), r[2], r[3]);
     }

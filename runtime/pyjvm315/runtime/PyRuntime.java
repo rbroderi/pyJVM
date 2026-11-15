@@ -2707,7 +2707,7 @@ public final class PyRuntime {
                 if(method.self instanceof PyBuiltinType listType && listType.name.equals("list") && method.name.equals("sort") && !args.isEmpty() && args.get(0) instanceof List<?>)
                     return callMethodDynamic(args.get(0),method.name,new ArrayList<>(args.subList(1,args.size())),kwargs);
                 if(method.self instanceof String fmt && method.name.equals("format")) return FormatTemplate.format(fmt,args,kwargs);
-                List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : method.self instanceof PyByteSequence && method.name.equals("decode") ? List.of("encoding","errors") : null;
+                List<String> params=method.self instanceof String ? StringMethods.PARAMS.get(method.name) : isIntLike(method.self) ? IntMethods.PARAMS.get(method.name) : method.self instanceof PyByteSequence ? BinaryMethods.PARAMS.get(method.name) : null;
                 if(params==null) throw new PyException("TypeError","method takes no keyword arguments");
                 Object[] positional=new Object[Math.max(args.size(),params.size())]; int highest=args.size();
                 for(int i=0;i<args.size();i++) positional[i]=args.get(i);

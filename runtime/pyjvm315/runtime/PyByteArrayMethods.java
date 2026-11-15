@@ -96,7 +96,7 @@ final class PyByteArrayMethods {
             case "capitalize" -> { requireArgs(name,args,0); yield binaryCase(bytes,"capitalize"); }
             case "title" -> { requireArgs(name,args,0); yield binaryCase(bytes,"title"); }
             case "swapcase" -> { requireArgs(name,args,0); yield binaryCase(bytes,"swapcase"); }
-            default -> throw new PyException("AttributeError","'bytearray' object has no attribute '"+name+"'");
+            default -> BinaryMethods.call(bytes,name,args);
         };
     }
 }
