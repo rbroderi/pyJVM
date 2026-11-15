@@ -164,6 +164,45 @@ Counts are modules affected in the manifest probe (approximate where one cause h
 | `encodings.utf_7` codec | 1 | runtime gap (no utf-7 codec) | not fixed |
 | dict view types are not named `dict_keys`/`dict_values`/`dict_items`; `str()` of an `IntEnum` member after `global_enum` | small | runtime divergences | not fixed |
 
+## sys: recursion limit, audit events, bytecode caching
+
+**Recursion limit.** Like CPython 3.12+ only Python frames count (per thread, module frame included): entering the
+(limit+1)th active Python frame (function, method, generator resume, class body, module body) raises
+`RecursionError: maximum recursion depth exceeded`, which is the depth CPython 3.13 and 3.15 stop at (a recursive
+function started from the module reaches `limit - 2` calls, `tests/conformance/recursion_limit_depth.py`).
+`sys.setrecursionlimit(n)` raises `RecursionError` when `n` is not above the current depth, as CPython does. Remaining
+differences: CPython has a second, C-level recursion limit (repr/compare/pickle of deeply nested data) that raises at a
+fixed depth; pyJVM has none and relies on the JVM stack, so such recursion ends in a `RecursionError` at a depth set by
+`-Xss`, and a recursion limit above what the JVM stack can hold ends in a `StackOverflowError` that is turned into a
+`RecursionError` before the limit is reached. importlib runs from source here, so its
+frames count as in CPython, but CPython's frozen importlib adds its own frames in a slightly different number.
+
+**Audit events (PEP 578).** `sys.addaudithook` / `sys.audit` work as in CPython (hooks cannot be removed, a hook that
+raises vetoes the event, argument errors match). The runtime raises these events with CPython's argument shapes
+(verified against 3.13 and 3.15 in `tests/conformance/audit_events.py`): `open` (`open()`, `io.open`, `FileIO`, `os.open`;
+flags in the platform's O_* values), `compile`, `exec` (`exec`, `eval`, and every module body run by the import system),
+`import` (not-yet-imported module, its parents and from-list submodules, with `sys.path`, `sys.meta_path`,
+`sys.path_hooks`), `os.listdir`, `os.scandir`, `os.chdir`, `os.mkdir`, `os.rmdir`, `os.remove`, `os.rename` (also
+`replace`), `os.chmod`, `os.utime`, `os.link`, `os.symlink`, `os.kill`, `sys._getframe`, `sys._current_frames`,
+`sys._current_exceptions`, `sys._getframemodulename`, `sys.settrace`, `sys.setprofile`, `sys.addaudithook`,
+`time.sleep`, `builtins.input` and `builtins.input/result`. Events the pure-Python stdlib raises on its own come for free
+(`os.walk`, `shutil.*`, `tempfile.mkdtemp`, `glob.glob`). Not raised, because the operation is absent or a no-op here:
+`os.putenv`/`os.unsetenv` (placeholders), `marshal.*` (not implemented), `socket.*`, `subprocess.Popen`/`os.system`/`os.exec*`
+/`os.fork`, `ctypes.*`, `pickle.find_class`, `gc.*`, `builtins.id`, `object.__getattr__`/`__setattr__` on code and
+functions, `code.__new__`/`function.__new__`, `_thread.start_joinable_thread`. The runtime's own bootstrap (compiling
+importlib's sources, `_typing`, the jar finder) raises no events, as CPython's frozen importlib raises none.
+
+**Bytecode caching: `sys.implementation.cache_tag` is `None` on purpose.** importlib uses `cache_tag` to build `.pyc`
+names (`importlib.util.cache_from_source`, `py_compile`, `compileall`, `SourceFileLoader`'s bytecode writes) and treats
+`None` as "this implementation does not cache bytecode", which is legal (`cache_from_source` then raises
+`NotImplementedError`, and the source loader skips `.pyc` reads and writes). A real tag would be a promise that a
+`.pyc` in CPython's marshal format, holding a code object CPython can execute, is read and written; pyJVM compiles to
+JVM class files, has no code-object bytecode and its `marshal` cannot encode code objects, so such files could be
+neither produced nor consumed, and a tag such as `pyjvm-313` would only make importlib try (and fail) to write them. The
+compiled-class cache (`PYJVM_CACHE`, `ClassCache`, `tests/test_class_cache.py`) does the job of `.pyc` files and is keyed
+by the source and the compiler fingerprint instead, so `cache_tag` stays `None`, `sys.dont_write_bytecode` is only
+reported.
+
 ## unittest and CPython's test modules
 
 `import unittest` works under pyJVM and a `TestCase` suite runs end to end: `unittest.main()`, `python -m unittest`,
@@ -209,4 +248,5 @@ time (stdlib modules are compiled at run time by the self-hosted compiler); late
   `os.waitpid` raise), so tests that spawn interpreters (`script_helper`) cannot run.
 - Test modules that depend on CPython internals (`sys.getrefcount`, `gc` tracking, `_testcapi`, bytecode, `marshal` of
   code objects) report those tests as errors or skips; the differing ones are listed by `run_cpython_test.py`.
-- `f_globals` of a live frame omits some entries (for example functions defined in `__main__`).
+- `f_globals` of a live frame is the live module dict (`f.f_globals is globals()`). Traceback entries are separate frame
+  objects, so `tb.tb_frame is sys._getframe()` is still False, and frames have no `f_builtins`.

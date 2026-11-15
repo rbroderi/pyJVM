@@ -92,6 +92,7 @@ final class IoFile {
         flags |= read && write ? 2 : write ? 1 : 0;
         boolean cf = PyRuntime.truth(closefd);
         if (!cf && !isFd) throw new PyException("ValueError", "Cannot use closefd=False with file name");
+        if (!isFd && SysExtras.auditing()) SysExtras.audit("open", file, ms, AuditEvents.platformOpenFlags(flags));
         if (isFd) {
             IoFd.get(fd);
         } else if (opener != null) {

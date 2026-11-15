@@ -61,7 +61,7 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
         if (finished) throw new PyGeneratorEnd(returnValue);
         started = true;
         ActiveFrame logical=logicalFrame();
-        LOGICAL_FRAMES.get().push(logical);
+        pushChecked(logical);
         boolean traced=Tracing.enabled;
         try {
             if(traced){Tracing.call(logical);}
@@ -81,6 +81,7 @@ final class PyGenerator implements Iterator<Object>, Iterable<Object> {
                 PyException wrapped=new PyException("RuntimeError", "generator raised StopIteration"); wrapped.addFrame(displayName,filename,logical.firstlineno,logical.line); throw wrapped;
             }
             if (cause instanceof PyException p) { finished=true; p.addFrame(displayName,filename,logical.firstlineno,logical.line); throw p; }
+            if (BuiltinsExtra.isForeignPython(cause)) { finished=true; PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); lifted.addFrame(displayName,filename,logical.firstlineno,logical.line); throw lifted; }
             if (cause instanceof RuntimeException r) { finished=true; throw r; }
             if (cause instanceof Error e) { finished=true; throw e; }
             throw new RuntimeException(cause);

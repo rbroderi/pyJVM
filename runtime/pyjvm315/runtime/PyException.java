@@ -22,12 +22,15 @@ import java.util.Objects;
 import java.util.Set;
 
 final class PyException extends RuntimeException {
-    final String typeName; final Object value; Object instance; Object tracedFrame; SyntaxInfo syntax; Object cause; Object context; boolean suppressContext; PyTraceback traceback; boolean handledView; boolean reraised;   // reraised: thrown by an except* statement, never given an implicit context   // handledView: stands in for its instance on the handled stack, never copies state back
+    final String typeName; final Object value; Object instance; Object tracedFrame; ActiveFrame lastActive; SyntaxInfo syntax; Object cause; Object context; boolean suppressContext; PyTraceback traceback; boolean handledView; boolean reraised;   // reraised: thrown by an except* statement, never given an implicit context   // handledView: stands in for its instance on the handled stack, never copies state back
     PyException(String typeName, Object value) { this(typeName,value,null,null,false,null); }
     PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext) { this(typeName,value,cause,context,suppressContext,null); }
     PyException(String typeName, Object value, Object cause, Object context, boolean suppressContext, PyTraceback traceback) { super(value == null ? null : messageOf(value)); this.typeName=typeName; this.value=value; this.cause=cause; this.context=context; this.suppressContext=suppressContext; this.traceback=traceback; }
     private static String messageOf(Object value){ try { return pyStr(value); } catch (RuntimeException e) { return null; } }   // a failing __str__ is reported when the exception is printed
     void addFrame(String name,String filename,long firstline,long line){
+        ActiveFrame active=currentLogicalFrame();
+        if(active!=null && active==lastActive) return;   // this activation is already in the traceback (the call wrapper and the try dispatch both record it)
+        lastActive=active;
         boolean first=traceback==null;
         traceback=prependTraceback(traceback,name,filename,firstline,line);
         if(first) traceback.leafType=typeName;

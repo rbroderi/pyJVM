@@ -53,6 +53,7 @@ final class WindowsNtModule {
         fn(m, "_findfirstfile", (a, k) -> sameKind(a.get(0), WindowsNative.findFirstFile(absolute(PosixModule.pathString(a.get(0))), PosixModule.pathString(a.get(0)))));
         fn(m, "_getdiskusage", (a, k) -> diskUsage(PosixModule.pathString(a.get(0))));
         fn(m, "_path_splitroot", (a, k) -> WindowsNative.splitRoot(str(a.isEmpty() ? k.get("path") : a.get(0))));
+        AuditEvents.install(m);
         return m;
     }
 

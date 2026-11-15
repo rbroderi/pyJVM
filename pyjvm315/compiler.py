@@ -3463,8 +3463,8 @@ class Compiler:
         for stmt in orelse: self._stmt(stmt, b, scope, in_function)
         b.goto(done)
         b.mark(dispatch)
-        if reset_slot >= 0:
-            b.invokestatic(RUNTIME2, "liftForeign", "(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
+        # host failures (ZeroDivisionError, IndexError, RecursionError...) become real PyExceptions so they get a traceback
+        b.invokestatic(RUNTIME2, "liftForeign", "(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
         b.astore(exc_slot)
         b.aload(exc_slot); b.invokestatic(RUNTIME2, "attachContext", f"({OBJ})V")
         if reset_slot >= 0:

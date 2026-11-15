@@ -194,6 +194,7 @@ public final class BuiltinsExtra {
 
     static Object input(List<Object> args) {
         if (args.size() > 1) throw new PyException("TypeError", "input expected at most 1 argument, got " + args.size());
+        SysExtras.audit("builtins.input", args.isEmpty() ? null : args.get(0));
         Object stdin = currentStream("stdin"), stdout = currentStream("stdout");
         if (stdin == null) throw new PyException("RuntimeError", "input(): lost sys.stdin");
         String prompt = args.isEmpty() ? "" : pyStr(args.get(0));
@@ -204,7 +205,9 @@ public final class BuiltinsExtra {
         Object raw = callMethod(stdin, "readline", new Object[0]);
         if (!(NativeSubclass.unwrap(raw) instanceof String text)) throw new PyException("TypeError", "object.readline() returned non-string");
         if (text.isEmpty()) throw new PyException("EOFError", "EOF when reading a line");
-        return text.endsWith("\n") ? text.substring(0, text.length() - 1) : text;
+        String line = text.endsWith("\n") ? text.substring(0, text.length() - 1) : text;
+        SysExtras.audit("builtins.input/result", line);
+        return line;
     }
 
     @SuppressWarnings("unchecked")
@@ -413,10 +416,15 @@ public final class BuiltinsExtra {
         if (!stack.isEmpty() && exceptionInstance(stack.get(stack.size() - 1)) == value) stack.remove(stack.size() - 1);
     }
 
-    /** Host arithmetic / index failures become Python exceptions where an except clause can observe them. */
+    /** Whether {@code t} is a host failure that stands for a Python exception (ZeroDivisionError, IndexError, KeyError, TypeError, RecursionError). */
+    static boolean isForeignPython(Throwable t) {
+        return t instanceof ArithmeticException || t instanceof IndexOutOfBoundsException || t instanceof java.util.NoSuchElementException
+            || t instanceof ClassCastException || t instanceof IllegalArgumentException || t instanceof StackOverflowError;
+    }
+
+    /** Host arithmetic / index failures become real Python exceptions (with a traceback) where a frame or an except clause can observe them. */
     public static Throwable liftForeign(Throwable t) {
-        if (t instanceof ArithmeticException || t instanceof IndexOutOfBoundsException)
-            return new PyException(pythonExceptionType(t), exceptionValue(t));
+        if (isForeignPython(t)) return new PyException(pythonExceptionType(t), exceptionValue(t));
         return t;
     }
 

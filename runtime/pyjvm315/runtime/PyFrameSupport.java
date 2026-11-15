@@ -116,27 +116,17 @@ final class PyFrameSupport {
     }
 
     private static Object globalsOf(java.util.Map<Object, Object> namespace, Object owner) {
+        if (owner != null) return Namespaces.globalsOfOwner(owner);   // the live module dict: f_globals is globals()
         LinkedHashMap<Object, Object> m = new LinkedHashMap<>();
         if (namespace != null) { m.putAll(namespace); return m; }
-        if (owner == null) return m;
-        try {
-            Class<?> c = ownerClass(owner);
-            Object unbound = unbound();
-            for (Field field : c.getDeclaredFields()) {
-                String n = field.getName();
-                if (!n.startsWith("__py_global_") || !java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
-                field.setAccessible(true);
-                Object v = field.get(null);
-                if (v != unbound) m.put(n.substring("__py_global_".length()), v);
-            }
-        } catch (ReflectiveOperationException e) { throw new PyException("RuntimeError", "cannot read frame globals: " + e); }
         return m;
     }
 
     static Object frameAttr(PyFrame frame, String name) {
         return switch (name) {
             case "f_code" -> frame.code;
-            case "f_locals" -> frame.locals;
+            case "f_locals" -> frame.active != null && frame.active.name.equals("<module>") && (frame.active.namespace != null || frame.active.owner != null)
+                ? (frame.active.namespace != null ? frame.active.namespace : globalsOf(frame.active)) : frame.locals;   // a module's locals are its namespace (its globals)
             case "f_back" -> frame.back;
             case "f_lineno" -> frame.lineno();
             case "f_globals" -> globalsOf(frame);
