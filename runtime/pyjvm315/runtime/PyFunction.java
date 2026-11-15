@@ -112,7 +112,7 @@ final class PyFunction {
         if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
         for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
         logical.owner=owner;
-        LOGICAL_FRAMES.get().push(logical);
+        pushChecked(logical);
         try {
             Class<?> cls=ownerClass(owner);
             int hidden = envMode ? 1 : 0;
@@ -128,7 +128,7 @@ final class PyFunction {
         } catch (java.lang.reflect.InvocationTargetException exc) {
             Throwable cause=exc.getCause();
             if (cause instanceof PyException p) { BuiltinsExtra.attachContext(p,logical); p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
-            if (cause instanceof ArithmeticException || cause instanceof IndexOutOfBoundsException) { PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); BuiltinsExtra.attachContext(lifted,logical); lifted.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw lifted; }
+            if (BuiltinsExtra.isForeignPython(cause)) { PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); BuiltinsExtra.attachContext(lifted,logical); lifted.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw lifted; }
             if (cause instanceof RuntimeException r) throw r;
             if (cause instanceof Error e) throw e;
             throw new RuntimeException(cause);
@@ -150,7 +150,7 @@ final class PyFunction {
         if(vararg!=null)localNames.add(vararg); if(kwarg!=null)localNames.add(kwarg);
         for(int localIndex=0;localIndex<Math.min(localNames.size(),bound.length);localIndex++) logical.locals.put(localNames.get(localIndex),bound[localIndex]);
         logical.owner=owner;
-        LOGICAL_FRAMES.get().push(logical);
+        pushChecked(logical);
         boolean traced=true;
         try {
             if(traced) Tracing.call(logical);
@@ -171,7 +171,7 @@ final class PyFunction {
             Throwable cause=exc.getCause();
             if (cause instanceof PyException p && traced) Tracing.unwind(logical,p);
             if (cause instanceof PyException p) { BuiltinsExtra.attachContext(p,logical); p.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw p; }
-            if (cause instanceof ArithmeticException || cause instanceof IndexOutOfBoundsException) { PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); BuiltinsExtra.attachContext(lifted,logical); lifted.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw lifted; }
+            if (BuiltinsExtra.isForeignPython(cause)) { PyException lifted=new PyException(pythonExceptionType(cause),exceptionValue(cause)); BuiltinsExtra.attachContext(lifted,logical); lifted.addFrame(logical.name,logical.filename,logical.firstlineno,logical.line); throw lifted; }
             if (cause instanceof RuntimeException r) throw r;
             if (cause instanceof Error e) throw e;
             throw new RuntimeException(cause);

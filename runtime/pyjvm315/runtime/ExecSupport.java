@@ -260,6 +260,8 @@ final class ExecSupport {
         if (astOnly && (flags & PYCF_OPTIMIZED_AST) == PYCF_OPTIMIZED_AST)
             throw new PyException("NotImplementedError", "compile() flag PyCF_OPTIMIZED_AST needs constant folding of the AST, which is not implemented");
 
+        if (SysExtras.auditing())   // CPython reports the source as bytes (a str is encoded) and an AST as itself
+            SysExtras.audit("compile", source instanceof String s0 ? new PyBytes(s0.getBytes(StandardCharsets.UTF_8)) : source, file);
         if (AstModule.isNode(source)) {
             if (astOnly) {
                 AstModule.validateForCompile(source, m);
@@ -330,6 +332,7 @@ final class ExecSupport {
         }
         if (code.classBytes == null) throw new PyException("TypeError", who + "() cannot run this code object");
         Object[] ns = namespaces(who, globals, locals);
+        SysExtras.audit("exec", code);
         int depth = PyRuntime.logicalFrameDepth();
         try {
             LazyImport.enter(ns[0]);

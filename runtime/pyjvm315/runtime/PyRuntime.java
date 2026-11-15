@@ -97,6 +97,7 @@ public final class PyRuntime {
         if (value instanceof PyBuiltinFunction) return "builtin_function_or_method";
         if (value instanceof BuiltinBoundMethod) return "builtin_function_or_method";
         if (value instanceof PyCode) return "code";
+        if (value instanceof PyFrame) return "frame";
         if (value instanceof NativeFunction) return "builtin_function_or_method";
         if (value instanceof PyLazyIterator it) return it.pyTypeName();
         if(value instanceof PySlice)return "slice";
@@ -1074,7 +1075,7 @@ public final class PyRuntime {
             try{Object dictionary=varsValue(value);if(dictionary instanceof Map<?,?> map)names.addAll(map.keySet());}
             catch(PyException error){if(!error.typeName.equals("TypeError"))throw error;}
             classDirNames(instance.cls,names);
-        }else if(value instanceof PyFunction function){names.addAll(function.attrs.keySet());names.addAll(function.metadata.keySet());names.addAll(List.of("__closure__","__dict__","__get__"));}
+        }else if(value instanceof PyFunction function){names.addAll(function.attrs.keySet());names.addAll(function.metadata.keySet());names.addAll(List.of("__closure__","__dict__","__get__","__globals__"));}
         else if(value instanceof BoundCallable bound){names.addAll((List<?>)defaultDir(bound.function));names.addAll(List.of("__self__","__func__"));}
         else if(value instanceof PyManagedProperty){names.addAll(List.of("fget","fset","fdel","getter","setter","deleter","__get__","__set__","__delete__","__set_name__","__name__"));}
         else if(value instanceof PyTraceback){names.addAll(List.of("tb_frame","tb_lasti","tb_lineno","tb_next"));return new ArrayList<>(names);}
@@ -2866,12 +2867,21 @@ public final class PyRuntime {
     static final ThreadLocal<ArrayDeque<ActiveFrame>> LOGICAL_FRAMES=ThreadLocal.withInitial(() -> { ArrayDeque<ActiveFrame> d=new ArrayDeque<>(); FRAME_STACKS.put(Thread.currentThread(),d); return d; });
     /** A Python thread is ending: drop its per-thread runtime state. */
     static void threadFinished(){ FRAME_STACKS.remove(Thread.currentThread()); LOGICAL_FRAMES.remove(); BuiltinsExtra.HANDLED.remove(); }
+    /** Enter a Python frame: like CPython 3.12+ only Python frames count, and the (limit+1)th one raises RecursionError. */
+    static void pushChecked(ActiveFrame frame){
+        ArrayDeque<ActiveFrame> stack=LOGICAL_FRAMES.get();
+        if(stack.size()>=SysExtras.recursionLimit()) throw new PyException("RecursionError","maximum recursion depth exceeded");
+        stack.push(frame);
+    }
     public static void pushLogicalFrame(Object nameObj,Object filenameObj,Object firstlineObj){
-        LOGICAL_FRAMES.get().push(new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()));
+        ActiveFrame frame=new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue());
+        ActiveFrame enclosing=currentLogicalFrame();
+        if(enclosing!=null) frame.owner=enclosing.owner;   // a class body runs in its module's globals
+        pushChecked(frame);
     }
     public static void pushModuleFrame(Object nameObj,Object filenameObj,Object firstlineObj,Object owner){
         ActiveFrame frame=new ActiveFrame((String)nameObj,(String)filenameObj,bigInt(firstlineObj).longValue()); frame.owner=owner;
-        LOGICAL_FRAMES.get().push(frame);
+        pushChecked(frame);
     }
     public static void setFunctionGenerator(Object functionObj){((PyFunction)functionObj).generatorLike=true;}
     public static void traceLine(Object lineObj){Tracing.traceLine(lineObj);}
@@ -2890,7 +2900,10 @@ public final class PyRuntime {
         ActiveFrame active=currentLogicalFrame();
         LinkedHashMap<Object,Object> locals = active!=null && active.name.equals(name) && active.filename.equals(filename)
             ? active.locals : new LinkedHashMap<Object,Object>();
-        if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)) return current;
+        // without a live activation the same-named entry is taken as the one already recorded (PyException.addFrame dedupes live frames by identity,
+        // so recursion keeps one traceback entry per call)
+        if(current!=null && current.frame.code.coName.equals(name) && current.frame.code.coFilename.equals(filename)
+            && (active==null || current.frame.locals==locals)) return current;   // an exception re-raised in the activation that already recorded it (except* re-raise, raise e)
         PyCode code=new PyCode(name,filename,firstline);
         PyFrame shown=new PyFrame(code,locals); shown.fixedLine=line;
         if(active!=null && active.name.equals(name) && active.filename.equals(filename)) shown.owner=active.owner;
@@ -3936,6 +3949,7 @@ public final class PyRuntime {
         }
         if(obj instanceof PyFunction function){
             if(name.equals("__closure__"))return function.freeNames.isEmpty()?null:functionClosure(function);
+            if(name.equals("__globals__"))return Namespaces.globalsOfOwner(function.owner);
             if(name.equals("__dict__"))return function.attrs;
             if(AnnotationSupport.isAnnotationName(name))return AnnotationSupport.functionGet(function,name);
             if(name.equals("__get__"))return new BuiltinBoundMethod(obj,name);

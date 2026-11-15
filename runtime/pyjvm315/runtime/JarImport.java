@@ -40,6 +40,8 @@ final class JarImport {
     static final String HELPER = """
         import sys
         _ModuleSpec = sys.modules['_frozen_importlib'].ModuleSpec
+        _external = sys.modules['_frozen_importlib_external']
+        _stdlib = getattr(sys, '_stdlib_dir', None)
         _parsed = {}
         _warned = set()
 
@@ -137,7 +139,12 @@ final class JarImport {
                 spec = _ModuleSpec(fullname, JarLoader(self.archive, fullname, ispkg, entry, origin), origin=origin, is_package=ispkg)
                 spec.has_location = True
                 if ispkg:
-                    spec.submodule_search_locations = [self.archive + '/' + fullname.replace('.', '/')]
+                    locations = [self.archive + '/' + fullname.replace('.', '/')]
+                    # an archive may hold only some of a package's modules: the rest come from the stdlib sources
+                    source = _external._path_join(_stdlib, *fullname.split('.')) if _stdlib else None
+                    if source is not None and _external._path_isdir(source):
+                        locations.append(source)
+                    spec.submodule_search_locations = locations
                 return spec
 
             def invalidate_caches(self):
@@ -207,8 +214,10 @@ final class JarImport {
         m.dict.put("_make_code", fn("_make_code", JarImport::makeCode));
         m.dict.put("_lang", fn("_lang", (a, k) -> LangVersion.MAJOR + "." + LangVersion.MINOR));
         m.dict.put("_fingerprint", fn("_fingerprint", (a, k) -> ClassCache.fingerprint()));
-        PyCode code = (PyCode) ExecSupport.compileBuiltin(new ArrayList<Object>(List.of(HELPER, "<frozen pyjvm.jarimport>", "exec")), new LinkedHashMap<Object,Object>());
-        ExecSupport.run("exec", code, m.dict, m.dict, "exec");
+        SysExtras.unaudited(() -> {   // the finder's own helper has no CPython counterpart
+            PyCode code = (PyCode) ExecSupport.compileBuiltin(new ArrayList<Object>(List.of(HELPER, "<frozen pyjvm.jarimport>", "exec")), new LinkedHashMap<Object,Object>());
+            return ExecSupport.run("exec", code, m.dict, m.dict, "exec");
+        });
         helper = m;
     }
 

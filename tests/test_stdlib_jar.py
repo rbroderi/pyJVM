@@ -130,3 +130,27 @@ def test_jar_for_another_language_version_is_reported_and_ignored(lane, tmp_path
     assert proc.returncode == 0, proc.stderr[-500:]
     assert f"built for Python {other}" in proc.stderr
     assert ".jar" not in _marker(proc, "ORIGIN")
+
+
+def test_partial_jar_falls_back_to_source_for_missing_submodules(lane, tmp_path):
+    """A jar holding a package but not all of its submodules: the missing ones come from the PYJVM_STDLIB sources."""
+    missing = {"json.decoder", "json.encoder", "json.scanner"}
+
+    def drop(text):
+        keep = [line for line in text.splitlines() if not (line.startswith("module\t") and line.split("\t")[1] in missing)]
+        return "\n".join(keep) + "\n"
+
+    partial = _rewrite(lane["jar"], tmp_path / "partial.jar", drop)
+    full = _java(lane, "json", lane["jar"])
+    proc = _java(lane, "json", partial)
+    assert proc.returncode == 0 and _marker(proc, "IMPORT-FAIL") is None, proc.stdout[-500:] + proc.stderr[-500:]
+    assert ".jar" in _marker(proc, "ORIGIN")                     # the package itself still comes from the jar
+    assert _marker(proc, "SMOKE") == _marker(full, "SMOKE")      # dumps/loads need the three submodules, now read from source
+    assert _marker(proc, "SMOKE") not in (None, "-")
+    for sub in sorted(missing):
+        got = _java(lane, sub, partial)
+        assert got.returncode == 0 and _marker(got, "IMPORT-FAIL") is None, sub + got.stdout[-500:] + got.stderr[-500:]
+        assert ".jar" not in _marker(got, "ORIGIN"), sub          # imported from the source directory
+        assert _marker(got, "NAMES") == _marker(_java(lane, sub, lane["jar"]), "NAMES"), sub
+    kept = _java(lane, "json", partial)                          # modules still in the archive keep coming from it
+    assert ".jar" in _marker(kept, "ORIGIN")

@@ -37,13 +37,13 @@ public final class NativeModules {
         BuiltinsExtra.installSys(m);
         ImportSupport.installSys(m);
         SysExtras.install(m);
-        fn(m, "_getframe", (a, k) -> PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)));
+        fn(m, "_getframe", (a, k) -> { Object frame = PyFrameSupport.getFrame(a.isEmpty() ? null : a.get(0)); SysExtras.audit("sys._getframe", frame); return frame; });
         fn(m, "_pyjvm_fingerprint", (a, k) -> ClassCache.fingerprint());
-        fn(m, "settrace", (a, k) -> Tracing.settrace(a.get(0)));
+        fn(m, "settrace", (a, k) -> { SysExtras.audit("sys.settrace"); return Tracing.settrace(a.get(0)); });
         fn(m, "_settraceallthreads", (a, k) -> Tracing.setAllThreads(a.get(0), true));
         fn(m, "_setprofileallthreads", (a, k) -> Tracing.setAllThreads(a.get(0), false));
         fn(m, "gettrace", (a, k) -> Tracing.traceFn());
-        fn(m, "setprofile", (a, k) -> Tracing.setprofile(a.get(0)));
+        fn(m, "setprofile", (a, k) -> { SysExtras.audit("sys.setprofile"); return Tracing.setprofile(a.get(0)); });
         fn(m, "getprofile", (a, k) -> Tracing.profileFn());
         fn(m, "setswitchinterval", (a, k) -> {
             if (a.size() != 1 || !(a.get(0) instanceof Number n)) throw new PyException("TypeError", "setswitchinterval() argument must be float");
@@ -53,7 +53,7 @@ public final class NativeModules {
         });
         fn(m, "getswitchinterval", (a, k) -> switchInterval);
         fn(m, "_is_gil_enabled", (a, k) -> false);
-        fn(m, "_current_frames", (a, k) -> PyFrameSupport.currentFrames());
+        fn(m, "_current_frames", (a, k) -> { SysExtras.audit("sys._current_frames"); return PyFrameSupport.currentFrames(); });
         PyModule monitoring = new PyModule("sys.monitoring", "pyjvm315.runtime.Monitoring");
         Monitoring.install(monitoring);
         m.attrs.put("monitoring", monitoring);

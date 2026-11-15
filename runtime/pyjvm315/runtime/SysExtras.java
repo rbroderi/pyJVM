@@ -147,6 +147,8 @@ final class SysExtras {
     // ---------- limits and settings ----------
 
     private static volatile long recursionLimit = 1000;
+    /** sys.getrecursionlimit(): the most Python frames one thread may have active (module frame included). */
+    static long recursionLimit() { return recursionLimit; }
     private static volatile long dlopenFlags = 2;
     private static volatile long originDepth = 0;
     /** sys.get_int_max_str_digits(); 0 disables the limit. */
@@ -162,9 +164,22 @@ final class SysExtras {
                 + " digits; use sys.set_int_max_str_digits() to increase the limit");
     }
 
+    /** Whether any audit hook is installed (callers skip building the event arguments when none is). */
+    static boolean auditing() { return !AUDIT_HOOKS.isEmpty() && QUIET.get()[0] == 0; }
+
+    /** Depth of runtime-internal work (compiling importlib's own sources, _typing) that CPython does not report as events. */
+    private static final ThreadLocal<int[]> QUIET = ThreadLocal.withInitial(() -> new int[1]);
+
+    /** Run {@code body} without raising audit events: the runtime's own bootstrap has no CPython counterpart. */
+    static <T> T unaudited(java.util.function.Supplier<T> body) {
+        int[] depth = QUIET.get();
+        depth[0]++;
+        try { return body.get(); } finally { depth[0]--; }
+    }
+
     /** Raise an audit event (also usable from the runtime): calls every hook added with sys.addaudithook. */
     static void audit(String event, Object... args) {
-        if (AUDIT_HOOKS.isEmpty()) return;
+        if (!auditing()) return;
         PyTuple t = new PyTuple();
         for (Object a : args) t.items.add(a);
         for (Object hook : AUDIT_HOOKS)
@@ -282,6 +297,8 @@ final class SysExtras {
             if (a.size() != 1) throw new PyException("TypeError", "setrecursionlimit() takes exactly one argument (" + a.size() + " given)");
             long n = intArg(a.get(0));
             if (n < 1) throw new PyException("ValueError", "recursion limit must be greater or equal than 1");
+            long depth = PyRuntime.logicalFrameDepth();
+            if (depth >= n) throw new PyException("RecursionError", "cannot set the recursion limit to " + n + " at the recursion depth " + depth + ": the limit is too low");
             recursionLimit = n;
             return null;
         });
@@ -361,6 +378,7 @@ final class SysExtras {
         });
         fn(m, "addaudithook", (a, k) -> {
             if (a.size() != 1) throw new PyException("TypeError", "addaudithook() takes exactly one argument (" + a.size() + " given)");
+            audit("sys.addaudithook");   // reported to the hooks already installed; a hook that raises Exception vetoes the new one
             AUDIT_HOOKS.add(a.get(0));
             return null;
         });
@@ -371,6 +389,7 @@ final class SysExtras {
         fn(m, "_get_cpu_count_config", (a, k) -> -1L);
         fn(m, "_getframemodulename", (a, k) -> {
             Object depth = a.isEmpty() ? k.get("depth") : a.get(0);
+            audit("sys._getframemodulename", depth == null ? (Object) 0L : depth);
             Object frame;
             try { frame = PyFrameSupport.getFrame(depth == null ? 0L : depth); } catch (PyException e) { return null; }
             Object globals = PyRuntime.getattr(frame, "f_globals");
@@ -378,6 +397,7 @@ final class SysExtras {
             return name instanceof String ? name : null;
         });
         fn(m, "_current_exceptions", (a, k) -> {
+            audit("sys._current_exceptions");
             PyDict out = new PyDict();
             Object t = BuiltinsExtra.currentHandled();
             out.put(Thread.currentThread().threadId(), t == null ? null : PyRuntime.exceptionInstance(t));

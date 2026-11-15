@@ -377,6 +377,11 @@ public final class ImportSupport {
             call(boot, "_install", sys, imp);
             call(boot, "_install_external_importers");
             JarImport.install(sys);
+            // CPython 3.15's importlib raises the event itself (sys.audit in _find_and_load); 3.13 raises it from C
+            boolean bootstrapAudits;
+            try { bootstrapAudits = Files.readString(Path.of(stdlib, "importlib", "_bootstrap.py"), StandardCharsets.UTF_8).contains("sys.audit("); }
+            catch (IOException e) { bootstrapAudits = false; }
+            if (!bootstrapAudits) installImportAudit(boot);
             bootstrapModule = boot;
             bootstrapped = true;
         } finally {
@@ -385,6 +390,26 @@ public final class ImportSupport {
                 MODULES.remove("_frozen_importlib"); MODULES.remove("_frozen_importlib_external");
             }
         }
+    }
+
+    /**
+     * CPython raises the "import" audit event (name, None, sys.path, sys.meta_path, sys.path_hooks) from C, before importlib's
+     * _find_and_load, for every module that is not in sys.modules yet (or is still initializing), parents and from-list
+     * submodules included. importlib runs here from source, so the same call is intercepted in its namespace.
+     */
+    private static void installImportAudit(PyModule boot) {
+        Object original = PyRuntime.moduleGetattr(boot, "_find_and_load");
+        boot.dict.put("_find_and_load", new NativeFunction("_find_and_load", (a, k) -> {
+            if (SysExtras.auditing() && !a.isEmpty() && a.get(0) instanceof String name) {
+                Object loaded;
+                synchronized (MODULES) { loaded = MODULES.get(name); }
+                if (loaded == null || initializing(loaded)) {
+                    PyModule sys = (PyModule) MODULES.get("sys");
+                    SysExtras.audit("import", name, null, sys.attrs.get("path"), sys.attrs.get("meta_path"), sys.attrs.get("path_hooks"));
+                }
+            }
+            return PyRuntime.callFunction(original, new ArrayList<Object>(a), new LinkedHashMap<Object,Object>(k));
+        }));
     }
 
     private static Object call(PyModule m, String fn, Object... args) {
@@ -417,8 +442,10 @@ public final class ImportSupport {
     static PyModule execText(String name, String text, String filename) {
         PyModule m = (PyModule) moduleCall(new ArrayList<Object>(List.of(name)), new LinkedHashMap<Object,Object>());
         register(name, m);
-        PyCode code = (PyCode) ExecSupport.compileBuiltin(new ArrayList<Object>(List.of(text, filename, "exec")), new LinkedHashMap<Object,Object>());
-        ExecSupport.run("exec", code, m.dict, m.dict, "exec");
+        SysExtras.unaudited(() -> {   // runtime-internal modules (importlib's sources, _typing) have no CPython audit events
+            PyCode code = (PyCode) ExecSupport.compileBuiltin(new ArrayList<Object>(List.of(text, filename, "exec")), new LinkedHashMap<Object,Object>());
+            return ExecSupport.run("exec", code, m.dict, m.dict, "exec");
+        });
         return m;
     }
 
