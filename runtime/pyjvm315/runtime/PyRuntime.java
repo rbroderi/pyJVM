@@ -560,6 +560,8 @@ public final class PyRuntime {
             m=instance.cls.lookupMethod("__repr__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__repr__ returned non-string");return (String)out;}
             if(instance.cls.exceptionBase!=null && instance.fields.get("args") instanceof PyTuple a) {
+                String os=BuiltinsExtra.osErrorStr(instance);
+                if(os!=null) return os;
                 if(a.items.isEmpty()) return "";
                 return a.items.size()==1 ? pyStr(a.items.get(0)) : pyRepr(a);
             }
@@ -3566,7 +3568,7 @@ public final class PyRuntime {
         } else {
             created=cls.nativeKind!=null?NativeSubclass.allocate(cls,cls.nativeKind,args,kwargs):typeMro(cls).contains(builtinType("super"))?new PySuper(cls):PyInstance.create(cls);
             if(created instanceof PyInstance li && li.fields instanceof ThreadModule.LocalFields lf) lf.recordInit(args,kwargs);
-            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
+            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); BuiltinsExtra.initOSErrorFields(exc,args); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
         if(newMethod!=null && cls.exceptionBase!=null && created instanceof PyInstance made && made.cls.exceptionBase!=null && cls.lookupMethod("__init__")==null) ExceptionGroupSupport.setArgsField(made,args);

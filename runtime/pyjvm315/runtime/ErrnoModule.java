@@ -58,6 +58,48 @@ public final class ErrnoModule {
         "WSASYSNOTREADY", 10091, "WSAVERNOTSUPPORTED", 10092, "WSANOTINITIALISED", 10093, "WSAEDISCON", 10101
     };
 
+    /**
+     * CPython's errno -> OSError subclass map (Objects/exceptions.c errnomap) for the platform's own errno values, as the
+     * subclass name; "OSError" when the errno has no subclass.
+     */
+    static String osErrorType(long errno) {
+        if (errno < Integer.MIN_VALUE || errno > Integer.MAX_VALUE) return "OSError";
+        if (ImportSupport.WINDOWS) return switch ((int) errno) {   // MSVC and Winsock values
+            case 2 -> "FileNotFoundError";
+            case 1, 13 -> "PermissionError";
+            case 17 -> "FileExistsError";
+            case 20 -> "NotADirectoryError";
+            case 21 -> "IsADirectoryError";
+            case 32, 10058 -> "BrokenPipeError";
+            case 10 -> "ChildProcessError";
+            case 3 -> "ProcessLookupError";
+            case 4 -> "InterruptedError";
+            case 11, 10035, 10036, 10037 -> "BlockingIOError";
+            case 138, 10060 -> "TimeoutError";
+            case 10061 -> "ConnectionRefusedError";
+            case 10053 -> "ConnectionAbortedError";
+            case 10054 -> "ConnectionResetError";
+            default -> "OSError";
+        };
+        return switch ((int) errno) {   // Linux values
+            case 11, 114, 115 -> "BlockingIOError";      // EAGAIN/EWOULDBLOCK, EALREADY, EINPROGRESS
+            case 10 -> "ChildProcessError";              // ECHILD
+            case 32, 108 -> "BrokenPipeError";           // EPIPE, ESHUTDOWN
+            case 103 -> "ConnectionAbortedError";        // ECONNABORTED
+            case 111 -> "ConnectionRefusedError";        // ECONNREFUSED
+            case 104 -> "ConnectionResetError";          // ECONNRESET
+            case 17 -> "FileExistsError";                // EEXIST
+            case 2 -> "FileNotFoundError";               // ENOENT
+            case 21 -> "IsADirectoryError";              // EISDIR
+            case 20 -> "NotADirectoryError";             // ENOTDIR
+            case 4 -> "InterruptedError";                // EINTR
+            case 13, 1 -> "PermissionError";             // EACCES, EPERM
+            case 3 -> "ProcessLookupError";              // ESRCH
+            case 110 -> "TimeoutError";                  // ETIMEDOUT
+            default -> "OSError";
+        };
+    }
+
     static PyModule create() {
         PyModule m = new PyModule("errno", "pyjvm315.runtime.ErrnoModule");
         PyDict codes = new PyDict();

@@ -200,13 +200,13 @@ public final class PosixModule {
         java.util.LinkedHashMap<String,Object> attrs = new java.util.LinkedHashMap<>(a.attrs);
         attrs.put("filename2", path2);
         PyTuple t = a.args;
-        return new PyException(base.typeName, new PyExcArgs(tuple(t.items.get(0), t.items.get(1), path, null, path2), null, attrs));
+        return new PyException(base.typeName, new PyExcArgs(t, null, attrs));
     }
 
     static PyException osError(String type, int errno, String strerror, String path) {
         java.util.LinkedHashMap<String,Object> attrs = new java.util.LinkedHashMap<>();
         attrs.put("errno", (long) errno); attrs.put("strerror", strerror); attrs.put("filename", path);
-        PyTuple args = path == null ? tuple((long) errno, strerror) : tuple((long) errno, strerror, path);
+        PyTuple args = tuple((long) errno, strerror);   // CPython removes filename/filename2 from args
         return new PyException(type, new PyExcArgs(args, null, attrs));
     }
 
