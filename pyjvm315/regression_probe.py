@@ -230,8 +230,10 @@ def main(argv: list[str] | None = None) -> int:
     if ns.manifest:
         for result in report['results']:
             if Path(result['file']) in manifest_paths:
-                result['file'] = str(Path(result['file']).relative_to(ns.cpython_root))
-        report['manifest_sha256'] = hashlib.sha256(ns.manifest.read_bytes()).hexdigest()
+                # '/'-separated on every OS: the pinned baseline's case identities are POSIX paths
+                result['file'] = Path(result['file']).relative_to(ns.cpython_root).as_posix()
+        # hash with LF line endings: git checks the manifest out with CRLF on Windows (core.autocrlf)
+        report['manifest_sha256'] = hashlib.sha256(ns.manifest.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         commit = subprocess.run(['git', '-C', str(ns.cpython_root), 'rev-parse', 'HEAD'],
                                 text=True, capture_output=True)
         report['cpython_commit'] = commit.stdout.strip() if commit.returncode == 0 else None
