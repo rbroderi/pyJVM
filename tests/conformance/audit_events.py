@@ -93,6 +93,23 @@ show("chdir", lambda: os.chdir(d))
 os.chdir(here)
 show("chmod", lambda: (open(p, "w").close(), os.chmod(p, 0o600)))
 show("utime", lambda: os.utime(p, (1, 1)))
+show("putenv", lambda: os.putenv("PYJVM_AUDIT_ENV", "v"))
+show("unsetenv", lambda: os.unsetenv("PYJVM_AUDIT_ENV"))
+show("putenv invalid", lambda: os.putenv("PYJVM=AUDIT", "v"))   # validation fails before the event
+
+
+def fchmod_probe():
+    fd = os.open(p, os.O_RDONLY)
+    try:
+        events.clear()
+        os.fchmod(fd, 0o600)
+        # the descriptor number differs between interpreters
+        events[:] = [(e, tuple("FD" if x == fd else x for x in a)) for e, a in events]
+    finally:
+        os.close(fd)
+
+
+show("fchmod", fchmod_probe)
 show("walk", lambda: list(os.walk(d)))
 show("sys._getframe", lambda: sys._getframe() and None)
 show("sys.settrace", lambda: sys.settrace(None))

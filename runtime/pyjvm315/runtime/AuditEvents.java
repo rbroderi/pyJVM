@@ -50,6 +50,7 @@ final class AuditEvents {
         wrap(m, "rename", "os.rename", 2, rename);
         wrap(m, "replace", "os.rename", 2, rename);
         wrap(m, "chmod", "os.chmod", 2, (a, k) -> new Object[]{arg(a, k, 0, "path"), arg(a, k, 1, "mode"), dirFd(a, k, 2, "dir_fd")});
+        wrap(m, "fchmod", "os.chmod", 2, (a, k) -> new Object[]{a.get(0), a.get(1), -1L});
         wrap(m, "utime", "os.utime", 1, (a, k) -> new Object[]{arg(a, k, 0, "path"), arg(a, k, 1, "times"), k.get("ns"), dirFd(a, k, 99, "dir_fd")});
         wrap(m, "link", "os.link", 2, (a, k) -> new Object[]{arg(a, k, 0, "src"), arg(a, k, 1, "dst"), dirFd(a, k, 2, "src_dir_fd"), dirFd(a, k, 3, "dst_dir_fd")});
         wrap(m, "symlink", "os.symlink", 2, (a, k) -> new Object[]{arg(a, k, 0, "src"), arg(a, k, 1, "dst"), dirFd(a, k, 99, "dir_fd")});

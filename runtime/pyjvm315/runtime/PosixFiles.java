@@ -276,6 +276,8 @@ final class PosixFiles {
             String n = envStr(who, name, 1, pos + 1), v = value == null ? "" : envStr(who, value, 2, pos + 1);
             if (n.isEmpty() || n.indexOf('=', 1) >= 0) throw new PyException("ValueError", "illegal environment variable name");
             if (n.length() + v.length() >= 32767) throw new PyException("ValueError", "the environment variable is longer than 32767 characters");
+            // like CPython, the audit event is raised after validation, with the converted arguments
+            if (SysExtras.auditing()) SysExtras.audit(value == null ? "os.unsetenv" : "os.putenv", value == null ? new Object[]{n} : new Object[]{n, v});
             int err = WindowsNative.putenv(n, v);
             if (err != 0) throw PosixModule.osError("OSError", err, PosixModule.strerror(err), null);
             return;
@@ -283,6 +285,7 @@ final class PosixFiles {
         byte[] n = envBytes(name), v = value == null ? null : envBytes(value);
         // CPython's posix putenv rejects '=' itself; unsetenv leaves it to libc (EINVAL -> OSError 22)
         if (v != null) for (byte b : n) if (b == '=') throw new PyException("ValueError", "illegal environment variable name");
+        if (SysExtras.auditing()) SysExtras.audit(v == null ? "os.unsetenv" : "os.putenv", v == null ? new Object[]{new PyBytes(n)} : new Object[]{new PyBytes(n), new PyBytes(v)});
         if (v == null) PosixNative.unsetenv(n); else PosixNative.setenv(n, v);
     }
 
