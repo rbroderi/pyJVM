@@ -34,6 +34,13 @@ final class PosixNative {
     private static final MethodHandle UNSETENV = libc("unsetenv", FunctionDescriptor.of(JAVA_INT, ADDRESS));
     private static final MethodHandle FCHMOD = libc("fchmod", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
 
+    /** Own copy, not WindowsNative's: touching WindowsNative on POSIX runs its static init, which opens kernel32. */
+    private static RuntimeException rethrow(Throwable t) {
+        if (t instanceof RuntimeException r) return r;
+        if (t instanceof Error e) throw e;
+        return new IllegalStateException(t);
+    }
+
     private static MemorySegment cString(Arena a, byte[] b) {
         MemorySegment seg = a.allocate(b.length + 1L);
         MemorySegment.copy(b, 0, seg, java.lang.foreign.ValueLayout.JAVA_BYTE, 0, b.length);
@@ -45,21 +52,21 @@ final class PosixNative {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment state = a.allocate(CALL_STATE);
             if ((int) SETENV.invokeExact(state, cString(a, name), cString(a, value), 1) != 0) throw error(state);
-        } catch (Throwable t) { throw WindowsNative.rethrow(t); }
+        } catch (Throwable t) { throw rethrow(t); }
     }
 
     static void unsetenv(byte[] name) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment state = a.allocate(CALL_STATE);
             if ((int) UNSETENV.invokeExact(state, cString(a, name)) != 0) throw error(state);
-        } catch (Throwable t) { throw WindowsNative.rethrow(t); }
+        } catch (Throwable t) { throw rethrow(t); }
     }
 
     static void fchmod(int fd, int mode) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment state = a.allocate(CALL_STATE);
             if ((int) FCHMOD.invokeExact(state, fd, mode) != 0) throw error(state);
-        } catch (Throwable t) { throw WindowsNative.rethrow(t); }
+        } catch (Throwable t) { throw rethrow(t); }
     }
 
     private static PyException error(MemorySegment state) {
