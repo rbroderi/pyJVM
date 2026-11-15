@@ -233,14 +233,21 @@ final class PosixFiles {
 
     /**
      * fchmod. IoFd descriptors are FileChannels, not OS descriptors, so only the process streams (0-2, real descriptors)
-     * go to libc fchmod; the others change the mode of the path the descriptor was opened with (differs from fchmod only
-     * when the file was renamed or unlinked after open).
+     * go to libc fchmod; the others change the mode of the path the descriptor was opened with, but only if that path
+     * still names the same file (BasicFileAttributes.fileKey, dev+inode, recorded at open). Known divergence from
+     * fchmod: if the file was renamed or unlinked, or the name now belongs to another file, nothing is changed and
+     * OSError(ENOENT) (path gone) or OSError(ESTALE) (different file, or no identity available) is raised, where a real
+     * fchmod would still act on the open file.
      */
     private static Object fchmod(List<Object> a, Map<Object,Object> k) {
         checkFchmodArgs(a, k);
         long fd = fd(a.get(0)), mode = IoUtil.asLong(a.get(1));
         IoFd.Fd f = IoFd.get(fd);
         if (f.std >= 0) { PosixNative.fchmod((int) fd, (int) mode); return null; }
+        java.nio.file.Path p = PosixModule.resolve(f.path);
+        if (!java.nio.file.Files.exists(p)) throw PosixModule.osError("FileNotFoundError", 2, PosixModule.strerror(2), null);
+        Object now = IoFd.fileKey(p);
+        if (f.key == null || !f.key.equals(now)) throw PosixModule.osError("OSError", 116, "Stale file handle", null);
         return chmod(f.path, mode);
     }
 

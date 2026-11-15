@@ -29,6 +29,8 @@ final class IoFd {
 
     static final class Fd {
         FileChannel ch; boolean append; int refs = 1; String path; boolean dir; int std = -1; boolean readable, writable;
+        /** BasicFileAttributes.fileKey() of the file when opened (dev+inode on POSIX; null where unsupported). */
+        Object key;
     }
 
     private static final TreeMap<Integer,Fd> TABLE = new TreeMap<>();
@@ -93,7 +95,14 @@ final class IoFd {
         } catch (UnsupportedOperationException e) {
             try { f.ch = FileChannel.open(p, opts); } catch (IOException e2) { throw PosixModule.osError(e2, path); }
         }
+        f.key = fileKey(p);
         return register(f);
+    }
+
+    /** The identity of the file {@code p} resolves to (symlinks followed, as open and chmod do), or null if it cannot be read. */
+    static Object fileKey(Path p) {
+        try { return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class).fileKey(); }
+        catch (IOException | RuntimeException e) { return null; }
     }
 
     private static long umask = -1;
