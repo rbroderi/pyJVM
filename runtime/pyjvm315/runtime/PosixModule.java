@@ -173,6 +173,8 @@ public final class PosixModule {
             case 17 -> "File exists";
             case 20 -> "Not a directory";
             case 21 -> "Is a directory";
+            case 9 -> "Bad file descriptor";
+            case 12 -> "Cannot allocate memory";
             case 22 -> "Invalid argument";
             case 39 -> "Directory not empty";
             default -> "Unknown error " + errno;

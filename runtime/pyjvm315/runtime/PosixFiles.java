@@ -80,7 +80,7 @@ final class PosixFiles {
         fn(m, "symlink", (a, k) -> link(a, true));
         fn(m, "readlink", (a, k) -> readlink(a.get(0)));
         fn(m, "chmod", (a, k) -> chmod(PosixModule.pathString(a.get(0)), IoUtil.asLong(a.get(1))));
-        fn(m, "fchmod", (a, k) -> null);
+        fn(m, "fchmod", (a, k) -> fchmod(a, k));
         fn(m, "get_terminal_size", (a, k) -> { throw PosixModule.osError("OSError", 25, "Inappropriate ioctl for device", null); });
         fn(m, "mkdir", (a, k) -> mkdir(PosixModule.pathString(a.get(0))));
         fn(m, "rmdir", (a, k) -> delete(PosixModule.pathString(a.get(0)), true));
@@ -94,8 +94,8 @@ final class PosixFiles {
         fn(m, "urandom", (a, k) -> { byte[] b = new byte[(int) ((Number) a.get(0)).longValue()]; new SecureRandom().nextBytes(b); return new PyBytes(b); });
         fn(m, "cpu_count", (a, k) -> (long) Runtime.getRuntime().availableProcessors());
         fn(m, "device_encoding", (a, k) -> null);
-        fn(m, "putenv", (a, k) -> null);
-        fn(m, "unsetenv", (a, k) -> null);
+        fn(m, "putenv", (a, k) -> putenv(a, k));
+        fn(m, "unsetenv", (a, k) -> unsetenv(a, k));
         fn(m, "scandir", (a, k) -> scandir(a.isEmpty() ? null : a.get(0)));
 
         dirEntryClass = define("posix", "DirEntry", null);
@@ -229,6 +229,67 @@ final class PosixFiles {
         IoUtil.syncAll();
         try { Files.setPosixFilePermissions(PosixModule.resolve(path), IoFd.permissions(mode)); return null; }
         catch (IOException e) { throw PosixModule.osError(e, path); }
+    }
+
+    /**
+     * fchmod. IoFd descriptors are FileChannels, not OS descriptors, so only the process streams (0-2, real descriptors)
+     * go to libc fchmod; the others change the mode of the path the descriptor was opened with (differs from fchmod only
+     * when the file was renamed or unlinked after open).
+     */
+    private static Object fchmod(List<Object> a, Map<Object,Object> k) {
+        checkFchmodArgs(a, k);
+        long fd = fd(a.get(0)), mode = IoUtil.asLong(a.get(1));
+        IoFd.Fd f = IoFd.get(fd);
+        if (f.std >= 0) { PosixNative.fchmod((int) fd, (int) mode); return null; }
+        return chmod(f.path, mode);
+    }
+
+    static void checkFchmodArgs(List<Object> a, Map<Object,Object> k) {
+        if (!k.isEmpty()) throw new PyException("TypeError", "fchmod() takes no keyword arguments");
+        if (a.size() != 2) throw new PyException("TypeError", "fchmod expected 2 arguments, got " + a.size());
+    }
+
+    /** posix.putenv / unsetenv: nt takes str only (ValueError for '' or '=' after the first char, a 32767-character limit). */
+    private static Object putenv(List<Object> a, Map<Object,Object> k) {
+        if (!k.isEmpty()) throw new PyException("TypeError", "putenv() takes no keyword arguments");
+        if (a.size() != 2) throw new PyException("TypeError", "putenv expected 2 arguments, got " + a.size());
+        setEnv("putenv", a.get(0), a.get(1), 1);
+        return null;
+    }
+
+    private static Object unsetenv(List<Object> a, Map<Object,Object> k) {
+        if (!k.isEmpty()) throw new PyException("TypeError", "unsetenv() takes no keyword arguments");
+        if (a.size() != 1) throw new PyException("TypeError", ImportSupport.OS_MODULE + ".unsetenv() takes exactly one argument (" + a.size() + " given)");
+        setEnv("unsetenv", a.get(0), null, 0);
+        return null;
+    }
+
+    private static void setEnv(String who, Object name, Object value, int pos) {
+        if (ImportSupport.WINDOWS) {
+            String n = envStr(who, name, 1, pos + 1), v = value == null ? "" : envStr(who, value, 2, pos + 1);
+            if (n.isEmpty() || n.indexOf('=', 1) >= 0) throw new PyException("ValueError", "illegal environment variable name");
+            if (n.length() + v.length() >= 32767) throw new PyException("ValueError", "the environment variable is longer than 32767 characters");
+            int err = WindowsNative.putenv(n, v);
+            if (err != 0) throw PosixModule.osError("OSError", err, PosixModule.strerror(err), null);
+            return;
+        }
+        byte[] n = envBytes(name), v = value == null ? null : envBytes(value);
+        for (byte b : n) if (b == '=') throw new PyException("ValueError", "illegal environment variable name");
+        if (v == null) PosixNative.unsetenv(n); else PosixNative.setenv(n, v);
+    }
+
+    private static String envStr(String who, Object o, int arg, int total) {
+        o = NativeSubclass.unwrap(o);
+        if (!(o instanceof String s))
+            throw new PyException("TypeError", who + "() argument" + (total > 1 ? " " + arg : "") + " must be str, not " + PyRuntime.typeName(o));
+        if (s.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
+        return s;
+    }
+
+    private static byte[] envBytes(Object o) {
+        byte[] b = ((PyBytes) fsencode(o)).data;
+        for (byte x : b) if (x == 0) throw new PyException("ValueError", "embedded null byte");
+        return b;
     }
 
     private static Object unixId(String which) {

@@ -338,6 +338,23 @@ final class WindowsNative {
         } catch (Throwable t) { throw rethrow(t); }
     }
 
+    private static final MethodHandle WPUTENV_S = LINKER.downcallHandle(
+        SymbolLookup.libraryLookup("ucrtbase", Arena.global()).findOrThrow("_wputenv_s"), FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** The Universal CRT's {@code _wputenv_s}, as nt.putenv/unsetenv call it (an empty value removes the variable). Returns its errno_t. */
+    static int putenv(String name, String value) {
+        try (Arena a = Arena.ofConfined()) {
+            return (int) WPUTENV_S.invokeExact(wideRaw(a, name), wideRaw(a, value));
+        } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** UTF-16 copy that keeps lone surrogates (CPython's PyUnicode_AsWideCharString does). */
+    private static MemorySegment wideRaw(Arena a, String s) {
+        MemorySegment seg = a.allocate((s.length() + 1) * 2L, 2);
+        for (int i = 0; i < s.length(); i++) seg.set(java.lang.foreign.ValueLayout.JAVA_CHAR, i * 2L, s.charAt(i));
+        return seg;
+    }
+
     // ---- registry (status codes are returned, not left in GetLastError) --------------------------
 
     static final MethodHandle REG_OPEN = adv("RegOpenKeyExW", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));

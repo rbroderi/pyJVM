@@ -45,7 +45,7 @@ final class WindowsNtModule {
         fn(m, "open", (a, k) -> open(a, k));
         fn(m, "chmod", (a, k) -> chmod(PosixModule.pathString(a.get(0)), IoUtil.asLong(a.get(1)), PyRuntime.truth(kw(k, "follow_symlinks", true))));
         fn(m, "lchmod", (a, k) -> chmod(PosixModule.pathString(a.get(0)), IoUtil.asLong(a.get(1)), false));
-        fn(m, "fchmod", (a, k) -> chmod(IoFd.get(PosixFiles.fd(a.get(0))).path, IoUtil.asLong(a.get(1)), true));
+        fn(m, "fchmod", (a, k) -> { PosixFiles.checkFchmodArgs(a, k); return chmod(IoFd.get(PosixFiles.fd(a.get(0))).path, IoUtil.asLong(a.get(1)), true); });
         fn(m, "waitstatus_to_exitcode", (a, k) -> IoUtil.asLong(a.get(0)) >> 8);   // Windows waitpid reports exit code << 8
         fn(m, "get_terminal_size", (a, k) -> terminalSize(m, a.isEmpty() ? 1L : PosixFiles.fd(a.get(0))));
         fn(m, "_getfullpathname", (a, k) -> sameKind(a.get(0), WindowsNative.fullPath(absolute(PosixModule.pathString(a.get(0))), PosixModule.pathString(a.get(0)))));

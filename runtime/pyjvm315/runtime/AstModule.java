@@ -45,6 +45,7 @@ public final class AstModule {
         fn(m, "increment_lineno", (a, k) -> incrementLineno(a.get(0), a.size() > 1 ? a.get(1) : (Object) 1L));
         fn(m, "get_docstring", (a, k) -> getDocstring(a.get(0)));
         fn(m, "literal_eval", (a, k) -> literalEval(a.get(0)));
+        fn(m, "get_source_segment", (a, k) -> getSourceSegment(a, k));
         fn(m, "compare", (a, k) -> compare(a.get(0), a.get(1), truth(k.getOrDefault("compare_attributes", false))));
         m.attrs.put("NodeVisitor", visitorClass);
         m.attrs.put("NodeTransformer", transformerClass);
@@ -396,6 +397,72 @@ public final class AstModule {
             for (String a : new String[]{"lineno", "end_lineno"}) if (node.fields.get(a) instanceof Number v) node.fields.put(a, v.longValue() + n);
         }
         return null;
+    }
+
+    /** ast.get_source_segment, as in CPython's Lib/ast.py: columns are UTF-8 byte offsets into the line. */
+    private static Object getSourceSegment(List<Object> a, Map<Object, Object> k) {
+        String who = "get_source_segment()";
+        if (a.size() > 2) throw new PyException("TypeError", who + " takes 2 positional arguments but " + a.size() + " were given");
+        Object source = a.size() > 0 ? a.get(0) : k.get("source"), node = a.size() > 1 ? a.get(1) : k.get("node");
+        boolean padded = false;
+        for (var e : k.entrySet()) {
+            if ("padded".equals(e.getKey())) padded = truth(e.getValue());
+            else if (!"source".equals(e.getKey()) && !"node".equals(e.getKey()))
+                throw new PyException("TypeError", who + " got an unexpected keyword argument '" + e.getKey() + "'");
+            else if (a.size() > ("source".equals(e.getKey()) ? 0 : 1))
+                throw new PyException("TypeError", who + " got multiple values for argument '" + e.getKey() + "'");
+        }
+        if (source == null || node == null)
+            throw new PyException("TypeError", who + " missing 1 required positional argument: '" + (source == null ? "source" : "node") + "'");
+        Object none = new Object();
+        Object el = getattrDefault(node, "end_lineno", none), ec = getattrDefault(node, "end_col_offset", none);
+        Object ln = getattrDefault(node, "lineno", none), co = getattrDefault(node, "col_offset", none);
+        if (el == none || ec == none || ln == none || co == none) return null;
+        if (el == null || ec == null) return null;
+        int lineno = (int) (IoUtil.asLong(ln) - 1), endLineno = (int) (IoUtil.asLong(el) - 1);
+        int colOffset = (int) IoUtil.asLong(co), endColOffset = (int) IoUtil.asLong(ec);
+        if (source instanceof PyBytes) throw new PyException("TypeError", "cannot use a string pattern on a bytes-like object");
+        if (!(source instanceof String src)) throw new PyException("TypeError", "expected string or bytes-like object, got '" + typeName(source) + "'");
+        List<String> lines = splitLinesNoFf(src, endLineno + 1);
+        String first = lineAt(lines, lineno);
+        if (endLineno == lineno) return utf8Slice(first, colOffset, endColOffset);
+        StringBuilder out = new StringBuilder();
+        if (padded) {
+            for (char c : utf8Slice(first, 0, colOffset).toCharArray()) out.append(c == '\f' || c == '\t' ? c : ' ');
+        }
+        out.append(utf8Slice(first, colOffset, Integer.MAX_VALUE));
+        for (int i = Math.max(lineno + 1, 0); i < Math.min(endLineno, lines.size()); i++) out.append(lines.get(i));
+        out.append(utf8Slice(lineAt(lines, endLineno), 0, endColOffset));
+        return out.toString();
+    }
+
+    private static String lineAt(List<String> lines, int i) {
+        int j = i < 0 ? i + lines.size() : i;
+        if (j < 0 || j >= lines.size()) throw new PyException("IndexError", "list index out of range");
+        return lines.get(j);
+    }
+
+    /** str.encode()[from:to].decode() with Python slice clamping (strict UTF-8, so a cut inside a character raises). */
+    private static String utf8Slice(String line, int from, int to) {
+        byte[] b = Codecs.encode(line, "utf-8", "strict");
+        int n = b.length;
+        int f = from < 0 ? Math.max(from + n, 0) : Math.min(from, n), t = to < 0 ? Math.max(to + n, 0) : Math.min(to, n);
+        return f >= t ? "" : Codecs.decode(java.util.Arrays.copyOfRange(b, f, t), "utf-8", "strict");
+    }
+
+    /** The lines the parser sees: split after \r\n, \n or \r only (not form feed etc.); always ends with the empty remainder. */
+    private static List<String> splitLinesNoFf(String s, int maxLines) {
+        List<String> lines = new ArrayList<>();
+        int pos = 0, n = s.length();
+        while (lines.size() < maxLines) {
+            int i = pos;
+            while (i < n && s.charAt(i) != '\n' && s.charAt(i) != '\r') i++;
+            int end = i < n ? (s.charAt(i) == '\r' && i + 1 < n && s.charAt(i + 1) == '\n' ? i + 2 : i + 1) : n;
+            lines.add(s.substring(pos, end));
+            if (pos == n) break;
+            pos = end;
+        }
+        return lines;
     }
 
     private static Object getDocstring(Object node) {
