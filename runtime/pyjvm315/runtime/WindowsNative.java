@@ -26,12 +26,12 @@ import java.util.LinkedHashMap;
 final class WindowsNative {
     private WindowsNative() {}
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final SymbolLookup KERNEL32 = SymbolLookup.libraryLookup("kernel32", Arena.global());
+    static final Linker LINKER = Linker.nativeLinker();
+    static final SymbolLookup KERNEL32 = SymbolLookup.libraryLookup("kernel32", Arena.global());
     private static final SymbolLookup ADVAPI32 = SymbolLookup.libraryLookup("advapi32", Arena.global());
-    private static final StructLayout CALL_STATE = Linker.Option.captureStateLayout();
+    static final StructLayout CALL_STATE = Linker.Option.captureStateLayout();
     private static final VarHandle LAST_ERROR = CALL_STATE.varHandle(MemoryLayout.PathElement.groupElement("GetLastError"));
-    private static final Linker.Option CAPTURE = Linker.Option.captureCallState("GetLastError");
+    static final Linker.Option CAPTURE = Linker.Option.captureCallState("GetLastError");
 
     static final long INVALID_HANDLE = -1L;
 
@@ -41,7 +41,7 @@ final class WindowsNative {
     static final int IO_REPARSE_TAG_SYMLINK = 0xA000000C, IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
     static final int FILE_TYPE_DISK = 1, FILE_TYPE_CHAR = 2, FILE_TYPE_PIPE = 3;
 
-    private static MethodHandle k32(String name, FunctionDescriptor fd) { return LINKER.downcallHandle(KERNEL32.findOrThrow(name), fd, CAPTURE); }
+    static MethodHandle k32(String name, FunctionDescriptor fd) { return LINKER.downcallHandle(KERNEL32.findOrThrow(name), fd, CAPTURE); }
     private static MethodHandle adv(String name, FunctionDescriptor fd) { return LINKER.downcallHandle(ADVAPI32.findOrThrow(name), fd); }
 
     private static final MethodHandle CREATE_FILE = k32("CreateFileW", FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
@@ -61,7 +61,7 @@ final class WindowsNative {
 
     // ---- errors ----------------------------------------------------------------------------------
 
-    private static int lastError(MemorySegment state) { return (int) LAST_ERROR.get(state, 0L); }
+    static int lastError(MemorySegment state) { return (int) LAST_ERROR.get(state, 0L); }
 
     /** FormatMessageW's text for a Win32 error code, trimmed of trailing white space and dots as CPython does. */
     static String message(int code) {

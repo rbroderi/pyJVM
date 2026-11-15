@@ -19,7 +19,9 @@ import java.util.Map;
  * from Win32 file identity via FFM ({@link WindowsNative}). The accelerators ntpath uses when present
  * ({@code _path_normpath}, {@code _path_splitroot_ex}, {@code _path_is*}, {@code _getvolumepathname}) are absent, so
  * ntpath uses its pure-Python versions; process creation ({@code spawnv}, {@code execv}, {@code system},
- * {@code startfile}), {@code pipe}/{@code dup2} and DLL directories are absent as they are in posix.
+ * {@code startfile}) and DLL directories are absent as they are in posix. {@code pipe}, {@code dup2}, {@code putenv}
+ * and {@code unsetenv} are real here ({@link WindowsHandles}: pipe ends are {@link IoFd} entries backed by a Win32
+ * HANDLE; the environment is the process's own, so children inherit it).
  */
 final class WindowsNtModule {
     private WindowsNtModule() {}
@@ -52,8 +54,28 @@ final class WindowsNtModule {
         fn(m, "_getfinalpathname", (a, k) -> sameKind(a.get(0), WindowsNative.finalPath(absolute(PosixModule.pathString(a.get(0))), PosixModule.pathString(a.get(0)))));
         fn(m, "_findfirstfile", (a, k) -> sameKind(a.get(0), WindowsNative.findFirstFile(absolute(PosixModule.pathString(a.get(0))), PosixModule.pathString(a.get(0)))));
         fn(m, "_getdiskusage", (a, k) -> diskUsage(PosixModule.pathString(a.get(0))));
-        fn(m, "_path_splitroot", (a, k) -> WindowsNative.splitRoot(str(a.isEmpty() ? k.get("path") : a.get(0))));
+        fn(m, "pipe", (a, k) -> {
+            long[] ends = WindowsHandles.createPipe(0);
+            return tuple(IoFd.openHandle(ends[0]), IoFd.openHandle(ends[1]));
+        });
+        fn(m, "dup2", (a, k) -> IoFd.dup2(PosixFiles.fd(a.isEmpty() ? k.get("fd") : a.get(0)), PosixFiles.fd(a.size() < 2 ? k.get("fd2") : a.get(1))));
+        fn(m, "putenv", (a, k) -> { WindowsHandles.setEnvironment(envName(a.get(0)), envText(a.get(1))); return null; });
+        fn(m, "unsetenv", (a, k) -> { WindowsHandles.setEnvironment(envName(a.get(0)), null); return null; });
+        fn(m, "_path_splitroot",(a, k) -> WindowsNative.splitRoot(str(a.isEmpty() ? k.get("path") : a.get(0))));
         return m;
+    }
+
+    private static String envText(Object o) {
+        o = NativeSubclass.unwrap(o);
+        if (!(o instanceof String s)) throw new PyException("TypeError", "putenv() argument must be str, not " + PyRuntime.typeName(o));
+        if (s.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
+        return s;
+    }
+
+    private static String envName(Object o) {
+        String s = envText(o);
+        if (s.isEmpty() || s.indexOf('=') >= 0) throw new PyException("ValueError", "illegal environment variable name");
+        return s;
     }
 
     /** nt.environ: str keys and values as the process received them (entries for per-drive directories, "=C:", excluded). */
@@ -224,8 +246,10 @@ final class WindowsNtModule {
     }
 
     /** os.fstat of a standard stream: a disk file is described in full, a console or pipe by its type alone. */
-    static Object fstatStd(int fd) {
-        long h = WindowsNative.stdHandle(fd);
+    static Object fstatStd(int fd) { return fstatHandle(WindowsNative.stdHandle(fd)); }
+
+    /** fstat for a descriptor that is just a handle: disk files report their identity, pipes and devices their kind. */
+    static Object fstatHandle(long h) {
         int type = WindowsNative.fileType(h);
         if (type == WindowsNative.FILE_TYPE_DISK) {
             WindowsNative.FileInfo fi = WindowsNative.handleInfo(h);
