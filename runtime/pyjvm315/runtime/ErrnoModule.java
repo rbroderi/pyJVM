@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-pyJVM-Linking-Exception
 package pyjvm315.runtime;
 
-/** {@code errno}: the Linux x86-64 error numbers and {@code errorcode}. */
+/** {@code errno}: the Linux x86-64 error numbers, or on Windows the MSVC/Winsock ones CPython exposes there, and {@code errorcode}. */
 public final class ErrnoModule {
     private ErrnoModule() {}
 
@@ -31,17 +31,47 @@ public final class ErrnoModule {
         "ERFKILL", 132
     };
 
+    /** CPython's errno on Windows (identical in 3.13 and 3.15); a value with several names maps to the last one listed. */
+    private static final Object[] WINDOWS_TABLE = {
+        "EPERM", 1, "ENOENT", 2, "ESRCH", 3, "EINTR", 4, "EIO", 5, "ENXIO", 6,
+        "E2BIG", 7, "ENOEXEC", 8, "EBADF", 9, "ECHILD", 10, "EAGAIN", 11, "ENOMEM", 12,
+        "EACCES", 13, "EFAULT", 14, "EBUSY", 16, "EEXIST", 17, "EXDEV", 18, "ENODEV", 19,
+        "ENOTDIR", 20, "EISDIR", 21, "EINVAL", 22, "ENFILE", 23, "EMFILE", 24, "ENOTTY", 25,
+        "EFBIG", 27, "ENOSPC", 28, "ESPIPE", 29, "EROFS", 30, "EMLINK", 31, "EPIPE", 32,
+        "EDOM", 33, "ERANGE", 34, "EDEADLK", 36, "EDEADLOCK", 36, "ENAMETOOLONG", 38, "ENOLCK", 39,
+        "ENOSYS", 40, "ENOTEMPTY", 41, "EILSEQ", 42, "EBADMSG", 104, "ECANCELED", 105, "EIDRM", 111,
+        "ENODATA", 120, "ENOLINK", 121, "ENOMSG", 122, "ENOSR", 124, "ENOSTR", 125, "ENOTRECOVERABLE", 127,
+        "ENOTSUP", 129, "EOVERFLOW", 132, "EOWNERDEAD", 133, "EPROTO", 134, "ETIME", 137, "ETXTBSY", 139,
+        "WSABASEERR", 10000, "WSAEINTR", 10004, "WSAEBADF", 10009, "WSAEACCES", 10013, "WSAEFAULT", 10014, "WSAEINVAL", 10022,
+        "WSAEMFILE", 10024, "EWOULDBLOCK", 10035, "WSAEWOULDBLOCK", 10035, "EINPROGRESS", 10036, "WSAEINPROGRESS", 10036, "EALREADY", 10037,
+        "WSAEALREADY", 10037, "ENOTSOCK", 10038, "WSAENOTSOCK", 10038, "EDESTADDRREQ", 10039, "WSAEDESTADDRREQ", 10039, "EMSGSIZE", 10040,
+        "WSAEMSGSIZE", 10040, "EPROTOTYPE", 10041, "WSAEPROTOTYPE", 10041, "ENOPROTOOPT", 10042, "WSAENOPROTOOPT", 10042, "EPROTONOSUPPORT", 10043,
+        "WSAEPROTONOSUPPORT", 10043, "ESOCKTNOSUPPORT", 10044, "WSAESOCKTNOSUPPORT", 10044, "EOPNOTSUPP", 10045, "WSAEOPNOTSUPP", 10045, "EPFNOSUPPORT", 10046,
+        "WSAEPFNOSUPPORT", 10046, "EAFNOSUPPORT", 10047, "WSAEAFNOSUPPORT", 10047, "EADDRINUSE", 10048, "WSAEADDRINUSE", 10048, "EADDRNOTAVAIL", 10049,
+        "WSAEADDRNOTAVAIL", 10049, "ENETDOWN", 10050, "WSAENETDOWN", 10050, "ENETUNREACH", 10051, "WSAENETUNREACH", 10051, "ENETRESET", 10052,
+        "WSAENETRESET", 10052, "ECONNABORTED", 10053, "WSAECONNABORTED", 10053, "ECONNRESET", 10054, "WSAECONNRESET", 10054, "ENOBUFS", 10055,
+        "WSAENOBUFS", 10055, "EISCONN", 10056, "WSAEISCONN", 10056, "ENOTCONN", 10057, "WSAENOTCONN", 10057, "ESHUTDOWN", 10058,
+        "WSAESHUTDOWN", 10058, "ETOOMANYREFS", 10059, "WSAETOOMANYREFS", 10059, "ETIMEDOUT", 10060, "WSAETIMEDOUT", 10060, "ECONNREFUSED", 10061,
+        "WSAECONNREFUSED", 10061, "ELOOP", 10062, "WSAELOOP", 10062, "WSAENAMETOOLONG", 10063, "EHOSTDOWN", 10064, "WSAEHOSTDOWN", 10064,
+        "EHOSTUNREACH", 10065, "WSAEHOSTUNREACH", 10065, "WSAENOTEMPTY", 10066, "WSAEPROCLIM", 10067, "EUSERS", 10068, "WSAEUSERS", 10068,
+        "EDQUOT", 10069, "WSAEDQUOT", 10069, "ESTALE", 10070, "WSAESTALE", 10070, "EREMOTE", 10071, "WSAEREMOTE", 10071,
+        "WSASYSNOTREADY", 10091, "WSAVERNOTSUPPORTED", 10092, "WSANOTINITIALISED", 10093, "WSAEDISCON", 10101
+    };
+
     static PyModule create() {
         PyModule m = new PyModule("errno", "pyjvm315.runtime.ErrnoModule");
         PyDict codes = new PyDict();
-        for (int i = 0; i < TABLE.length; i += 2) {
-            String name = (String) TABLE[i];
-            Long value = ((Integer) TABLE[i + 1]).longValue();
+        Object[] table = ImportSupport.WINDOWS ? WINDOWS_TABLE : TABLE;
+        for (int i = 0; i < table.length; i += 2) {
+            String name = (String) table[i];
+            Long value = ((Integer) table[i + 1]).longValue();
             m.attrs.put(name, value);
-            if (!codes.containsKey(value)) codes.put(value, name);
+            if (ImportSupport.WINDOWS || !codes.containsKey(value)) codes.put(value, name);
         }
-        codes.put(35L, "EDEADLOCK");
-        codes.put(95L, "ENOTSUP");
+        if (!ImportSupport.WINDOWS) {
+            codes.put(35L, "EDEADLOCK");
+            codes.put(95L, "ENOTSUP");
+        }
         m.attrs.put("errorcode", codes);
         return m;
     }

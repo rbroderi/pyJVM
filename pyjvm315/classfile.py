@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from .stackmap import FrameError, analyze, encode_frames
 
-JAVA_TARGETS = (21,)
-DEFAULT_TARGET = 21
+JAVA_TARGETS = (25,)
+DEFAULT_TARGET = 25
 
 
 def be(value, size):

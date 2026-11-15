@@ -214,10 +214,11 @@ public final class BuiltinsExtra {
         return callFunction(sys.attrs.get("breakpointhook"), new ArrayList<Object>(args), new LinkedHashMap<Object,Object>(kwargs));
     }
 
-    /** PYTHONBREAKPOINT as the program sees it: os.environ when posix is loaded, else the process environment. */
+    /** PYTHONBREAKPOINT as the program sees it: os.environ when posix/nt is loaded, else the process environment. */
     private static String breakpointTarget() {
-        PyModule posix = ImportSupport.cachedModule("posix");
-        if (posix != null && posix.attrs.get("environ") instanceof PyDict env) {
+        PyModule os = ImportSupport.cachedModule(ImportSupport.OS_MODULE);
+        if (os != null && os.attrs.get("environ") instanceof PyDict env) {
+            if (ImportSupport.WINDOWS) return env.get("PYTHONBREAKPOINT") instanceof String s ? s : null;   // nt.environ is str -> str
             Object v = env.get(new PyBytes("PYTHONBREAKPOINT".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             return v instanceof PyBytes b ? new String(b.data, java.nio.charset.StandardCharsets.UTF_8) : null;
         }

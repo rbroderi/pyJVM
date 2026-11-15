@@ -498,7 +498,7 @@ class Kit:
         return env
 
     def run(self, module: str, jar: Path | None, timeout: float) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["java", "-Xss64m", "-Dstdout.encoding=UTF-8", "-cp", f"{self.prog}{os.pathsep}{self.stage1}", "ConformanceMain"],
+        return subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-cp", f"{self.prog}{os.pathsep}{self.stage1}", "ConformanceMain"],
                               capture_output=True, text=True, timeout=timeout, env=self.env(module, jar), cwd=self.ln.dir)
 
     def fingerprint(self) -> str:

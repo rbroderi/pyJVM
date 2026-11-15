@@ -1,7 +1,7 @@
 # Modern classfile backend
 
-Generated classes and the support runtime target **Java 21 / classfile major
-65 only**. The compiler writes classes and `StackMapTable` directly in Python;
+Generated classes and the support runtime target **Java 25 / classfile major
+69 only**. The compiler writes classes and `StackMapTable` directly in Python;
 it does not use a JVM postprocessor or javac to regenerate user code.
 
 ```bash
@@ -11,10 +11,10 @@ javap -v -cp build/jvm Hello
 python -m pyjvm315.conformance tests/conformance --python python3.15
 ```
 
-`compile_source`, `compile_file`, `Compiler` and `ClassFile` retain `target=21`
+`compile_source`, `compile_file`, `Compiler` and `ClassFile` retain `target=25`
 for explicit validation; all older targets are rejected. The target propagates
-to every imported module. Runtime compilation uses `javac --release 21`.
-These are non-preview classfiles (minor 0); Java 21 or newer is required.
+to every imported module. Runtime compilation uses `javac --release 25`.
+These are non-preview classfiles (minor 0); Java 25 or newer is required.
 Legacy verifier-inference serialization is removed, so every method goes through
 frame analysis, including straight-line methods with an empty frame table.
 
@@ -61,7 +61,7 @@ New opcodes must have transfer rules before modern emission can use them.
 ## Validation and next steps
 
 The conformance runner always executes Java with `-Xverify:all`. Compatibility
-CI runs the full focused corpus on target 21. Backend verification never
+CI runs the full focused corpus on target 25. Backend verification never
 changes Python semantic lowering, nested/local-class support, or runtime object
 representation. Tests also load classes with branches/joins, nulls, dead blocks,
 exception handlers, wide locals and newly initialized objects under strict
@@ -70,7 +70,7 @@ verification, and check target propagation to imported modules.
 The existing benchmark harness needs no special path: it compiles with the new
 default and compares against its base compiler using the same workloads. Build
 and verification cost remain outside kernel timing. Generated and runtime
-classfiles both use major 65, regardless of the host JDK version.
+classfiles both use major 69, regardless of the host JDK version.
 
 Next backend work should extend the typed instruction model before adding
 primitive locals/arithmetic, then support long/double constants, branch

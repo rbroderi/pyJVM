@@ -66,7 +66,7 @@ class Kit:
         full.pop("PYTHONDONTWRITEBYTECODE", None)
         full.update(self.env_for.get(program, {}))
         full.update(env or {})
-        return subprocess.run(["java", "-Xss64m", "-Dstdout.encoding=UTF-8", "-cp", f"{program}{os.pathsep}{self.selfhosted}", "ConformanceMain"],
+        return subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-cp", f"{program}{os.pathsep}{self.selfhosted}", "ConformanceMain"],
                               capture_output=True, text=True, cwd=cwd or self.base, env=full, timeout=900)
 
 
@@ -182,7 +182,7 @@ def _overlay(kit: Kit, prog: Path, name: str, *edits: tuple[str, str]) -> Path:
     java = out / "pyjvm315" / "runtime" / "ClassCache.java"
     java.write_text(src, encoding="utf-8")
     shutil.copytree(prog, work)
-    subprocess.run(["javac", "--release", "21", "-nowarn", "-cp", str(prog), "-d", str(work), str(java)], check=True, capture_output=True)
+    subprocess.run(["javac", "--release", "25", "-nowarn", "-cp", str(prog), "-d", str(work), str(java)], check=True, capture_output=True)
     kit.env_for[work] = dict(kit.env_for.get(prog, {}))
     return work
 

@@ -31,7 +31,7 @@ def run_jvm(runtime_dir: Path, source: str, *, backend: bool):
         env["JAVA_TOOL_OPTIONS"] = ""
         if backend:
             env.update(PYJVM_HOME=str(ROOT), PYJVM_PYTHON=sys.executable)
-        return subprocess.run(["java", "-cp", f"{out}{os.pathsep}{runtime_dir}", "Main"],
+        return subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-cp", f"{out}{os.pathsep}{runtime_dir}", "Main"],
                               text=True, capture_output=True, env=env)
 
 

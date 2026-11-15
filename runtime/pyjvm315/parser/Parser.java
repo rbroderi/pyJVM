@@ -37,6 +37,7 @@ public final class Parser {
     }
 
     private Parser(String src) {
+        src = translateNewlines(src);
         this.src = src;
         List<Token> all = Tokenizer.tokenize(src), kept = new ArrayList<>();
         for (Token t : all) {
@@ -59,6 +60,19 @@ public final class Parser {
         lines = ls.toArray(new String[0]);
         ascii = new boolean[lines.length];
         for (int k = 0; k < lines.length; k++) { boolean a = true; for (int j = 0; j < lines[k].length(); j++) if (lines[k].charAt(j) > 127) { a = false; break; } ascii[k] = a; }
+    }
+
+    /** CPython's translate_newlines for compile()/ast.parse input: "\r\n" and a lone "\r" become "\n" (literals included). */
+    static String translateNewlines(String s) {
+        if (s.indexOf('\r') < 0) return s;
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int k = 0; k < s.length(); k++) {
+            char c = s.charAt(k);
+            if (c != '\r') { sb.append(c); continue; }
+            sb.append('\n');
+            if (k + 1 < s.length() && s.charAt(k + 1) == '\n') k++;
+        }
+        return sb.toString();
     }
 
     private static boolean isAscii(String s) { for (int k = 0; k < s.length(); k++) if (s.charAt(k) > 127) return false; return true; }

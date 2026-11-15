@@ -31,7 +31,17 @@ public final class PosixModule {
     private static PyClass statResult;
 
     static synchronized PyModule create() {
-        PyModule m = new PyModule("posix", "pyjvm315.runtime.PosixModule");
+        PyModule m = build("posix", PosixModule.class.getName());
+        PyDict env = new PyDict();
+        for (Map.Entry<String,String> e : System.getenv().entrySet())
+            env.put(new PyBytes(e.getKey().getBytes(StandardCharsets.UTF_8)), new PyBytes(e.getValue().getBytes(StandardCharsets.UTF_8)));
+        m.attrs.put("environ", env);
+        return m;
+    }
+
+    /** What posix and nt share (java.nio); the caller adds {@code environ} and its own OS's differences. */
+    static synchronized PyModule build(String name, String className) {
+        PyModule m = new PyModule(name, className);
         statResult = define("os", "stat_result", null);
         method(statResult, PosixModule.class, "__getitem__", "srGetitem", "self,index");
         method(statResult, PosixModule.class, "__len__", "srLen", "self");
@@ -51,10 +61,6 @@ public final class PosixModule {
         fn(m, "getpid", (a, k) -> ProcessHandle.current().pid());
         fn(m, "kill", (a, k) -> { SignalModule.kill(IoUtil.asLong(a.get(0)), IoUtil.asLong(a.get(1))); return null; });
         fn(m, "strerror", (a, k) -> strerror(((Number) a.get(0)).intValue()));
-        PyDict env = new PyDict();
-        for (Map.Entry<String,String> e : System.getenv().entrySet())
-            env.put(new PyBytes(e.getKey().getBytes(StandardCharsets.UTF_8)), new PyBytes(e.getValue().getBytes(StandardCharsets.UTF_8)));
-        m.attrs.put("environ", env);
         PosixFiles.install(m);
         return m;
     }
@@ -159,6 +165,7 @@ public final class PosixModule {
     }
 
     static String strerror(int errno) {
+        if (ImportSupport.WINDOWS) return WindowsNtModule.strerror(errno);
         return switch (errno) {
             case 1 -> "Operation not permitted";
             case 2 -> "No such file or directory";
@@ -178,7 +185,7 @@ public final class PosixModule {
         else if (e instanceof FileAlreadyExistsException) { errno = 17; type = "FileExistsError"; }
         else if (e instanceof AccessDeniedException) { errno = 13; type = "PermissionError"; }
         else if (e instanceof NotDirectoryException) { errno = 20; type = "NotADirectoryError"; }
-        else if (e instanceof DirectoryNotEmptyException) { errno = 39; type = "OSError"; }
+        else if (e instanceof DirectoryNotEmptyException) { errno = ImportSupport.WINDOWS ? 41 : 39; type = "OSError"; }
         else { errno = 5; type = "OSError"; }
         return osError(type, errno, errno == 5 ? String.valueOf(e.getMessage()) : strerror(errno), path);
     }
@@ -202,6 +209,7 @@ public final class PosixModule {
 
     static Object stat(String path, boolean follow) {
         IoUtil.syncAll();
+        if (ImportSupport.WINDOWS) return WindowsNtModule.stat(path, follow);
         Path p = resolve(path);
         try {
             LinkOption[] opts = follow ? new LinkOption[0] : new LinkOption[]{LinkOption.NOFOLLOW_LINKS};
@@ -227,12 +235,7 @@ public final class PosixModule {
                 at[0] = ns(b.lastAccessTime()); at[1] = ns(b.lastModifiedTime()); at[2] = ns(b.creationTime());
                 put(r, "st_rdev", 0L);
             }
-            PyTuple items = tuple(mode, ino, dev, nlink, uid, gid, size, Math.floorDiv(at[0], 1_000_000_000L), Math.floorDiv(at[1], 1_000_000_000L), Math.floorDiv(at[2], 1_000_000_000L));
-            r.slotValues.put(STATE, items);
-            String[] names = {"st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size"};
-            for (int i = 0; i < names.length; i++) put(r, names[i], items.items.get(i));
-            String[] tn = {"st_atime", "st_mtime", "st_ctime"};
-            for (int i = 0; i < 3; i++) { put(r, tn[i], at[i] / 1e9); put(r, tn[i] + "_ns", at[i]); }
+            fill(r, mode, ino, dev, nlink, uid, gid, size, at);
             put(r, "st_blksize", 4096L); put(r, "st_blocks", (size + 511) / 512);
             return r;
         } catch (IOException e) {
@@ -240,9 +243,21 @@ public final class PosixModule {
         }
     }
 
+    static PyInstance newStatResult() { return new PyInstance(statResult); }
+
+    /** The ten sequence fields plus the float and _ns times; {@code at} holds access, modification, change times in ns. */
+    static void fill(PyInstance r, long mode, long ino, long dev, long nlink, long uid, long gid, long size, long[] at) {
+        PyTuple items = tuple(mode, ino, dev, nlink, uid, gid, size, Math.floorDiv(at[0], 1_000_000_000L), Math.floorDiv(at[1], 1_000_000_000L), Math.floorDiv(at[2], 1_000_000_000L));
+        r.slotValues.put(STATE, items);
+        String[] names = {"st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size"};
+        for (int i = 0; i < names.length; i++) put(r, names[i], items.items.get(i));
+        String[] tn = {"st_atime", "st_mtime", "st_ctime"};
+        for (int i = 0; i < 3; i++) { put(r, tn[i], at[i] / 1e9); put(r, tn[i] + "_ns", at[i]); }
+    }
+
     private static long ns(java.nio.file.attribute.FileTime t) { return t.to(java.util.concurrent.TimeUnit.NANOSECONDS); }
 
-    private static void put(PyInstance r, String name, Object value) { r.fields.put(name, value); }
+    static void put(PyInstance r, String name, Object value) { r.fields.put(name, value); }
 
     static Object listdir(Object p) {
         IoUtil.syncAll();

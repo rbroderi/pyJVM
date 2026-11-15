@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
       - name: Install test dependencies
         run: python -m pip install pytest
       - name: Smoke tests
@@ -42,11 +42,11 @@ jobs:
       - name: Differential conformance
         env:
           PYTHONPATH: .
-        run: python -m pyjvm315.conformance tests/conformance --python python --target 21
+        run: python -m pyjvm315.conformance tests/conformance --python python --target 25
       - name: Differential conformance, exec/eval/compile through the self-hosted compiler (no host Python)
         env:
           PYTHONPATH: .
-        run: python -m pyjvm315.conformance tests/conformance --python python --target 21 --selfhosted
+        run: python -m pyjvm315.conformance tests/conformance --python python --target 25 --selfhosted
 
 
   cpython-regression-probe:
@@ -105,13 +105,13 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
       - name: Execute CPython regression bodies
         env:
           PYTHONPATH: .
         run: >-
           python -m pyjvm315.cpython_execution --cpython-root cpython-src
-          --manifest tools/cpython_execution_manifest.txt --target 21 --selfhosted
+          --manifest tools/cpython_execution_manifest.txt --target 25 --selfhosted
           --output artifacts/cpython-execution.json
       - name: Thread stress programs
         env:

@@ -29,7 +29,7 @@ def build_runtime(output_dir: Path) -> None:
     javac = shutil.which("javac")
     if not javac:
         raise RuntimeError("javac is required once to build the pyjvm315 runtime support class")
-    subprocess.run([javac, "--release", "21", "-d", str(output_dir), *map(str, _runtime_sources())], check=True)
+    subprocess.run([javac, "--release", "25", "-d", str(output_dir), *map(str, _runtime_sources())], check=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--class-name", help="Generated JVM class name, e.g. demo.Main")
     parser.add_argument("--no-runtime", action="store_true", help="Do not build runtime support class")
     parser.add_argument("--target", type=int, choices=JAVA_TARGETS, default=DEFAULT_TARGET,
-                        help="Java classfile target (21 only; runtime requires Java 21+)")
+                        help="Java classfile target (25 only; runtime requires Java 25+)")
     parser.add_argument("--trace", action="store_true",
                         help="Instrumented mode: line/handler events for sys.settrace, setprofile and sys.monitoring "
                              "(also PYJVM_TRACE=1; modules mentioning settrace/setprofile/monitoring are instrumented automatically)")

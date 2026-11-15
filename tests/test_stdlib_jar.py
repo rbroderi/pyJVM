@@ -63,7 +63,7 @@ def _java(lane, module, jar, extra=None):
         env["PYJVM_STDLIB_JAR"] = str(jar)
     env.update(extra or {})
     kit = lane["kit"]
-    return subprocess.run(["java", "-Xss64m", "-cp", f"{kit['program']}{os.pathsep}{kit['compiler']}", "ConformanceMain"],
+    return subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-cp", f"{kit['program']}{os.pathsep}{kit['compiler']}", "ConformanceMain"],
                           capture_output=True, text=True, env=env, timeout=600)
 
 

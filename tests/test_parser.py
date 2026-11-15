@@ -24,7 +24,7 @@ STDLIB = Path(sysconfig.get_paths()["stdlib"])
 def classes():
     with tempfile.TemporaryDirectory() as td:
         sources = sorted((ROOT / "runtime/pyjvm315/parser").glob("*.java"))
-        subprocess.run(["javac", "--release", "21", "-d", td, *map(str, sources)], check=True,
+        subprocess.run(["javac", "--release", "25", "-d", td, *map(str, sources)], check=True,
                        capture_output=True, env={"PATH": __import__("os").environ["PATH"]})
         yield td
 

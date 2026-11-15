@@ -18,7 +18,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 CASES = ("arithmetic", "range_loop", "calls", "collections")
 MODES = ("java", "runtime", "generated")
-JVM_FLAGS = ["-Xms256m", "-Xmx256m", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=2"]
+JVM_FLAGS = ["--enable-native-access=ALL-UNNAMED", "-Xms256m", "-Xmx256m", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=2"]
 
 
 def run(command, **kwargs):

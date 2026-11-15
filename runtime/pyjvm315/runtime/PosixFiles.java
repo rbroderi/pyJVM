@@ -155,7 +155,7 @@ final class PosixFiles {
 
     private static Object fstat(long fd) {
         IoFd.Fd f = IoFd.get(fd);
-        if (f.std >= 0) return PosixModule.stat("/proc/self/fd/" + f.std, true);
+        if (f.std >= 0) return ImportSupport.WINDOWS ? WindowsNtModule.fstatStd(f.std) : PosixModule.stat("/proc/self/fd/" + f.std, true);
         Object st = PosixModule.stat(f.path, true);
         if (f.ch != null) PosixModule.setSize(st, IoFd.size(fd));
         return st;
@@ -242,11 +242,14 @@ final class PosixFiles {
         IoUtil.syncAll();
         String path = p == null ? "." : PosixModule.pathString(p);
         boolean bytes = p instanceof PyBytes;
+        // the entry's path joins the argument and the name as CPython does: '\' on Windows, none after a separator or drive colon
+        String sep = ImportSupport.WINDOWS ? "\\" : "/";
+        boolean joined = path.endsWith(sep) || ImportSupport.WINDOWS && (path.endsWith("/") || path.endsWith(":"));
         ArrayList<Object> entries = new ArrayList<>();
         try (Stream<Path> s = Files.list(PosixModule.resolve(path))) {
             s.forEach(e -> {
                 String name = e.getFileName().toString();
-                String full = path.equals(".") && p == null ? "./" + name : path.endsWith("/") ? path + name : path + "/" + name;
+                String full = path.equals(".") && p == null ? "." + sep + name : joined ? path + name : path + sep + name;
                 entries.add(newInstance(dirEntryClass, new String[]{name, full, bytes ? "b" : "s"}));
             });
         } catch (IOException e) {

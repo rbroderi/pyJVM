@@ -4,7 +4,7 @@ Nov 10, 2026 · @m
 
 ## Where pyJVM stands and what "done" means
 
-pyJVM compiles Python 3.15 AST directly to Java 21 bytecode with a small Java runtime; it compiles 2,247 of 3,000 pinned CPython test bodies (74.9%) but runs only 68 of them unchanged, and none of the stdlib yet. The gap to "fully compatible" is mostly runtime and stdlib, not syntax. Figures are from the [README](https://github.com/rbroderi/pyJVM) and [CPYTHON\_REGRESSION\_PROBE.md](https://github.com/rbroderi/pyJVM/blob/main/CPYTHON_REGRESSION_PROBE.md) as of today.
+pyJVM compiles Python 3.15 AST directly to Java 25 bytecode with a small Java runtime; it compiles 2,247 of 3,000 pinned CPython test bodies (74.9%) but runs only 68 of them unchanged, and none of the stdlib yet. The gap to "fully compatible" is mostly runtime and stdlib, not syntax. Figures are from the [README](https://github.com/rbroderi/pyJVM) and [CPYTHON\_REGRESSION\_PROBE.md](https://github.com/rbroderi/pyJVM/blob/main/CPYTHON_REGRESSION_PROBE.md) as of today.
 
 | Signal | Current value |
 | --- | --- |
@@ -132,7 +132,7 @@ Every CPython C module without a pure-Python fallback gets a Java implementation
 | A: no work | Use CPython's Python fallback (Phase 3) | `_pyio`, `_pydatetime`, `_pydecimal`, `_py_abc`, `pickle`, `json`, `heapq`, `bisect`, `operator`, `functools`, `stat`, `warnings`, `_strptime`, `xml.etree` |
 | B: JDK-backed Java | Thin Java module over JDK APIs, matching CPython behaviour exactly | `math`/`cmath` (StrictMath plus correctly rounded fixes), `time`, `zlib`/`binascii` (java.util.zip, CRC32), `_hashlib`/`_md5`/`_sha*`/`_blake2` (MessageDigest, Bouncy Castle for BLAKE2/SHA-3 if needed), `_socket` and `select` (java.nio channels, Selector), `_ssl` (SSLEngine), `_bz2`/`_lzma` (bundled pure-Java codecs), `_sqlite3` (sqlite-jdbc), `_csv`, `array`, `_struct`, `unicodedata` (generated tables, not ICU, for exact version match), `_locale` |
 | C: must write from scratch | No JDK equivalent with Python semantics | `_sre` (port CPython's regex engine; `java.util.regex` differs in backtracking, Unicode and flags), `itertools`, `_collections.deque`, `_random` (exact MT19937), `_codecs` and all encodings, `_string`, `_contextvars` (HAMT), `_tokenize`, `_opcode`/`dis` (map to pyJVM's own code objects), `_json` speedups later, `_asyncio` (pure-Python fallback first) |
-| D: OS via Panama FFM | Java 21 Foreign Function and Memory API for syscalls the JDK hides | `posix` (stat, open flags, fd ops, `os.pipe`, `os.dup2`, uid/gid, `os.environ` writes), `fcntl`, `termios`, `pwd`/`grp`, `resource`, `mmap`, `_posixsubprocess` (spawn via `posix_spawn`, not fork), `signal` (sun.misc.Signal plus FFM) |
+| D: OS via Panama FFM | Java 25 Foreign Function and Memory API for syscalls the JDK hides | `posix` (stat, open flags, fd ops, `os.pipe`, `os.dup2`, uid/gid, `os.environ` writes), `fcntl`, `termios`, `pwd`/`grp`, `resource`, `mmap`, `_posixsubprocess` (spawn via `posix_spawn`, not fork), `signal` (sun.misc.Signal plus FFM) |
 | E: explicitly unsupported | Document and skip-tag in libregrtest | `os.fork` and `os.forkpty` (unsafe on a multithreaded JVM), `_testcapi`/`_testinternalcapi`, `ctypes` (until FFM bridge exists), `tkinter`, `curses`, `readline` (JLine later) |
 
 **C extensions (later track).** Third-party wheels with C code need either the HPy ABI or a CPython C-API emulation layer over Panama FFM, as GraalPy does. Treat this as a separate project after Phase 5; it does not block stdlib compatibility.

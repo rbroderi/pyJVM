@@ -103,7 +103,7 @@ def compare_file(source: Path, python_exe: str, java_exe: str = "java", runtime_
             classpath += os.pathsep + str(selfhosted)
         else:
             backend_env.update(PYJVM_HOME=str(Path(__file__).resolve().parent.parent), PYJVM_PYTHON=python_exe)
-        jvm = _run([java_exe, "-Xverify:all", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", classpath, "ConformanceMain"],
+        jvm = _run([java_exe, "--enable-native-access=ALL-UNNAMED", "-Xverify:all", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", classpath, "ConformanceMain"],
                    cwd=source.parent, extra_env=backend_env)
 
     if _stdout(jvm) != _stdout(py):

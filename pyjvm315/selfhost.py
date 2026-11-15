@@ -83,7 +83,8 @@ def write_jobs(plan, out_dir: Path, jobs_file: Path, embed_root: Path | None = N
     from .driver import class_file_path, embedded_name
     for path, jvm_name, module_name, package_name in plan.jobs:
         lines.append(f"job {path} {class_file_path(out_dir, jvm_name)} {jvm_name} {module_name} {package_name} {embedded_name(path, embed_root)}")
-    jobs_file.write_text("\n".join(lines) + "\n")
+    # LF on every OS: the JVM side reads it with jvm_io.read_text, which does no newline translation
+    jobs_file.write_text("\n".join(lines) + "\n", newline="\n")
 
 
 def tree_bytes(root: Path) -> dict[str, bytes]:
@@ -120,7 +121,7 @@ def stage2(work: Path) -> int:
     out2.mkdir(parents=True)
     # the program itself (selfhost_main) and every module it imports
     write_jobs(plan, out2, work / "jobs.txt", embed_root=src)
-    proc = subprocess.run(["java", "-Xss128m", "-cp", f"{work / 'runtime'}:{work / 'stage1'}", "pyjvm315.runtime.Launcher",
+    proc = subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-Xss128m", "-cp", os.pathsep.join([str(work / 'runtime'), str(work / 'stage1')]), "pyjvm315.runtime.Launcher",
                            "SelfHost", str(work / "jobs.txt")], text=True, capture_output=True,
                           # the JVM-run compiler must make the same version-dependent choices (deferred annotations) as the host
                           env=dict(os.environ, PYJVM_LANG_VERSION="%d.%d" % sys.version_info[:2]))

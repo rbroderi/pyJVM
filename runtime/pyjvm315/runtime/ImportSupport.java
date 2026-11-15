@@ -28,10 +28,22 @@ public final class ImportSupport {
     private ImportSupport() {}
 
     static final PyDict MODULES = new PyDict();
+    static final boolean WINDOWS = System.getProperty("os.name", "").startsWith("Windows");
+    /** As in CPython, each OS has its own set: the POSIX modules do not exist on Windows, nor {@code nt}/{@code winreg} elsewhere. */
+    private static final Set<String> POSIX_ONLY = Set.of("posix", "_posixsubprocess", "fcntl", "pwd", "grp", "resource");
+    private static final Set<String> WINDOWS_ONLY = Set.of("nt", "winreg");
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
-    static final Set<String> NATIVE_NAMES = Set.of("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
-        "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_posixsubprocess", "fcntl", "pwd", "grp", "resource", "_socket", "_typing");
-    private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal"};
+    static final Set<String> NATIVE_NAMES = platformNames("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
+        "_weakref", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_socket", "_typing");
+    /** The OS module importlib and os.py are built on. */
+    static final String OS_MODULE = WINDOWS ? "nt" : "posix";
+    private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", OS_MODULE, "_io", "marshal"};
+
+    private static Set<String> platformNames(String... common) {
+        java.util.HashSet<String> s = new java.util.HashSet<>(List.of(common));
+        s.addAll(WINDOWS ? WINDOWS_ONLY : POSIX_ONLY);
+        return Set.copyOf(s);
+    }
 
     private static boolean bootstrapping, bootstrapped;
     private static PyModule bootstrapModule;
@@ -47,6 +59,7 @@ public final class ImportSupport {
     static void unregister(String name, PyModule module) { synchronized (MODULES) { if (MODULES.get(name) == module) MODULES.remove(name); } }
 
     static PyModule createNative(String name) {
+        if (!NATIVE_NAMES.contains(name) && (POSIX_ONLY.contains(name) || WINDOWS_ONLY.contains(name))) throw notFound(name);   // another OS's module
         return switch (name) {
             case "_imp" -> ImpModule.create();
             case "_thread" -> ThreadModule.create();
@@ -71,8 +84,14 @@ public final class ImportSupport {
             case "_sre" -> SreModule.create();
             case "_tokenize" -> TokenizeModule.create();
             case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> StubModules.socket(); case "_typing" -> typingModule();
-            default -> throw new PyException("ModuleNotFoundError", new PyExcArgs(tuple("No module named '" + name + "'"), null, attrs("name", name)));
+            case "nt" -> WindowsNtModule.create();
+            case "winreg" -> WindowsRegModule.create();
+            default -> throw notFound(name);
         };
+    }
+
+    private static PyException notFound(String name) {
+        return new PyException("ModuleNotFoundError", new PyExcArgs(tuple("No module named '" + name + "'"), null, attrs("name", name)));
     }
 
     private static Map<String,Object> attrs(String k, Object v) { LinkedHashMap<String,Object> m = new LinkedHashMap<>(); m.put(k, v); return m; }
@@ -182,6 +201,7 @@ public final class ImportSupport {
                 case "strerror": return items != null && items.size() >= 2 ? items.get(1) : null;
                 case "filename": return items != null && items.size() >= 3 ? items.get(2) : null;
                 case "filename2": return items != null && items.size() >= 5 ? items.get(4) : null;
+                case "winerror": if (WINDOWS) return items != null && items.size() >= 4 ? items.get(3) : null; break;
                 default: break;
             }
         }
@@ -417,7 +437,8 @@ public final class ImportSupport {
         sys.attrs.put("modules", MODULES);
         ArrayList<Object> path = new ArrayList<>();
         String script = NativeModules.argv.length > 0 ? NativeModules.argv[0] : "";
-        Path dir = script.contains("/") ? Path.of(script).toAbsolutePath().getParent() : Path.of("").toAbsolutePath();
+        boolean hasDir = script.contains("/") || WINDOWS && script.contains("\\");
+        Path dir = hasDir ? Path.of(script).toAbsolutePath().getParent() : Path.of("").toAbsolutePath();
         path.add(dir == null ? Path.of("").toAbsolutePath().toString() : dir.toString());
         String pp = System.getenv("PYTHONPATH");
         if (pp != null) for (String p : pp.split(java.io.File.pathSeparator)) if (!p.isEmpty()) path.add(p);
@@ -439,7 +460,7 @@ public final class ImportSupport {
         sys.attrs.put("executable", System.getProperty("pyjvm.executable", "pyjvm"));
         if (stdlib != null) sys.attrs.put("_stdlib_dir", stdlib);
         String os = System.getProperty("os.name", "").toLowerCase();
-        sys.attrs.put("platform", os.contains("win") ? "win32" : os.contains("mac") ? "darwin" : "linux");
+        sys.attrs.put("platform", WINDOWS ? "win32" : os.contains("mac") ? "darwin" : "linux");
         TreeSet<String> builtin = new TreeSet<>(NATIVE_NAMES);
         sys.attrs.put("builtin_module_names", tupleOf(new ArrayList<Object>(builtin)));
         LinkedHashMap<String,Object> flags = new LinkedHashMap<>();

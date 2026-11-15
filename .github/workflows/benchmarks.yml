@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
       - name: Measure base compiler with the current harness
         run: python head/benchmarks/run.py --compiler-root base --output artifacts/base
       - name: Measure head and check for large regressions

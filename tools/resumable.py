@@ -168,7 +168,9 @@ def run_unit(unit: Unit) -> int:
     unit.output.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, **unit.env}
     with open(unit.output, "w", encoding="utf-8") as out:
-        return subprocess.call(unit.command, cwd=unit.cwd, env=env, stdout=out, stderr=subprocess.STDOUT, preexec_fn=_reset_sigint)
+        # Windows has no preexec_fn (and no inherited SIG_IGN to undo)
+        reset = {"preexec_fn": _reset_sigint} if os.name == "posix" else {}
+        return subprocess.call(unit.command, cwd=unit.cwd, env=env, stdout=out, stderr=subprocess.STDOUT, **reset)
 
 
 def run_units(units: list[Unit], jobs: int, *, force: bool = False, dry_run: bool = False, label: str = "") -> list[Unit]:
@@ -326,7 +328,7 @@ def strict_units(ns: argparse.Namespace) -> list[Unit]:
         path, output = out / "pieces" / f"{name}.txt", out / f"{name}.out"
         sync_input(path, "\n".join(lines) + "\n", output)
         units.append(Unit(name, [ns.python, "-m", "pyjvm315.cpython_execution", "--cpython-root", str(ns.cpython_root),
-                                 "--manifest", str(path), "--target", "21", "--selfhosted"], output, PIECE_DONE, env=env))
+                                 "--manifest", str(path), "--target", "25", "--selfhosted"], output, PIECE_DONE, env=env))
     return units
 
 

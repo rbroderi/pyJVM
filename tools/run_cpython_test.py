@@ -51,7 +51,7 @@ def run_jvm(python, env, args, timeout):
         classpath = os.pathsep.join([str(out), str(runtime_dir), str(stage1)])
         jenv = dict(env, PYJVM_LANG_VERSION="%d.%d" % reference_version(python),
                     PYJVM_STDLIB=os.environ.get("PYJVM_STDLIB") or reference_stdlib(python))
-        return subprocess.run(["java", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", classpath,
+        return subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-cp", classpath,
                                "pyjvm315.runtime.Launcher", "RunTest", *args],
                               env=jenv, capture_output=True, text=True, timeout=timeout)
 

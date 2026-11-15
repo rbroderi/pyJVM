@@ -6,6 +6,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("resumable", ROOT / "tools" / "resumable.py")
 R = importlib.util.module_from_spec(_spec)
@@ -94,6 +96,7 @@ def test_run_units_is_resumable(tmp_path, capsys):
     assert "kept" not in ok.output.read_text()
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/self/status")
 def test_children_get_default_sigint(tmp_path):
     import signal
     prev = signal.signal(signal.SIGINT, signal.SIG_IGN)       # what a nohup'd parent hands down
@@ -121,7 +124,8 @@ def test_strict_units_pieces_and_resume(tmp_path):
     assert [u.name for u in R.strict_units(ns) if not u.done()] == ["q000", "q001", "q002", "q003"]
 
 
-def test_conformance_units_groups_of_four(tmp_path):
+def test_conformance_units_groups_of_four(tmp_path, monkeypatch):
+    monkeypatch.delenv("PYJVM_BUILD_CACHE", raising=False)      # a caller's own cache dir would be kept as is
     tests = tmp_path / "conf"
     tests.mkdir()
     for i in range(9):

@@ -56,9 +56,13 @@ final class IoFd {
         return n;
     }
 
+    /** Not a Linux O_* bit: nt's O_TEMPORARY (the file is deleted when its last descriptor closes). */
+    static final long DELETE_ON_CLOSE = 1L << 40;
+
     static long open(String path, long flags, long mode) {
         IoUtil.syncAll();
         Set<StandardOpenOption> opts = EnumSet.noneOf(StandardOpenOption.class);
+        if ((flags & DELETE_ON_CLOSE) != 0) opts.add(StandardOpenOption.DELETE_ON_CLOSE);
         long access = flags & 3;
         Fd f = new Fd();
         f.readable = access == 0 || access == 2;
