@@ -31,6 +31,13 @@ final class IoFd {
         FileChannel ch; boolean append; int refs = 1; String path; boolean dir; int std = -1; boolean readable, writable;
         /** BasicFileAttributes.fileKey() of the file when opened (dev+inode on POSIX; null where unsupported). */
         Object key;
+        /**
+         * Windows only. A Win32 HANDLE (0 when none). With {@code nativeIo} the descriptor is backed by the handle itself
+         * (pipe ends, msvcrt.open_osfhandle) and read/write go through ReadFile/WriteFile; otherwise it is a lazily
+         * created second handle on the file behind {@code ch}, made for msvcrt.get_osfhandle.
+         */
+        long handle; boolean nativeIo;
+        int crtMode = 0x8000;       // msvcrt.setmode: O_BINARY; text-mode translation is not implemented
     }
 
     private static final TreeMap<Integer,Fd> TABLE = new TreeMap<>();
@@ -135,7 +142,13 @@ final class IoFd {
             if (--f.refs > 0) { TABLE.remove((int) fd); return; }
             TABLE.remove((int) fd);
         }
+        release(f);
+    }
+
+    /** Closes what an entry holds once its last descriptor is gone. */
+    private static void release(Fd f) {
         if (f.ch != null) try { f.ch.close(); } catch (IOException e) { throw PosixModule.osError(e, null); }
+        if (f.handle != 0) WindowsHandles.closeFd(f.handle);
     }
 
     static long dup(long fd) {
@@ -144,10 +157,48 @@ final class IoFd {
         return register(f);
     }
 
+    /** os.dup2 (Windows): {@code fd2} becomes another descriptor for {@code fd}'s entry; whatever it held is closed. */
+    static long dup2(long fd, long fd2) {
+        Fd f = get(fd);
+        if (fd2 < 0 || fd2 > Integer.MAX_VALUE) throw badFd();
+        if (fd == fd2) return fd2;
+        Fd old;
+        synchronized (IoFd.class) {
+            f.refs++;
+            old = TABLE.put((int) fd2, f);
+            if (old != null && --old.refs > 0) old = null;
+        }
+        if (old != null) release(old);
+        return fd2;
+    }
+
+    /** A descriptor owning an existing Win32 handle (a pipe end, msvcrt.open_osfhandle); it is closed with the descriptor. */
+    static long openHandle(long handle) {
+        Fd f = new Fd();
+        f.handle = handle; f.nativeIo = true; f.readable = f.writable = true;
+        return register(f);
+    }
+
+    /** msvcrt.get_osfhandle. */
+    static long osHandle(long fd) {
+        Fd f = get(fd);
+        if (f.std >= 0) return WindowsHandles.stdHandle(-10 - f.std);
+        synchronized (f) {
+            if (f.handle == 0) {
+                if (f.ch == null || f.path == null) throw badFd();
+                long pos;
+                try { pos = f.ch.position(); } catch (IOException e) { throw PosixModule.osError(e, null); }
+                f.handle = WindowsHandles.shadowHandle(PosixModule.resolve(f.path).toAbsolutePath().toString(), f.readable, f.writable, f.append, pos);
+            }
+            return f.handle;
+        }
+    }
+
     /** Up to {@code n} bytes; an empty array at end of file. */
     static byte[] read(long fd, int n) {
         Fd f = get(fd);
         if (n <= 0) return new byte[0];
+        if (f.nativeIo) return WindowsHandles.read(f.handle, n);
         try {
             if (f.std == 0) {
                 byte[] b = new byte[n];
@@ -169,6 +220,7 @@ final class IoFd {
 
     static int write(long fd, byte[] b, int off, int len) {
         Fd f = get(fd);
+        if (f.nativeIo) return WindowsHandles.write(f.handle, b, off, len);
         try {
             if (f.std == 1 || f.std == 2) {
                 FileOutputStream o = f.std == 1 ? STDOUT : STDERR;
@@ -228,6 +280,7 @@ final class IoFd {
 
     static boolean isatty(long fd) {
         Fd f = get(fd);
+        if (f.nativeIo) return WindowsHandles.fileType(f.handle) == WindowsNative.FILE_TYPE_CHAR;
         String target = null;
         if (f.std >= 0) {
             try { target = Files.readSymbolicLink(Path.of("/proc/self/fd/" + f.std)).toString(); } catch (IOException | RuntimeException e) { return false; }

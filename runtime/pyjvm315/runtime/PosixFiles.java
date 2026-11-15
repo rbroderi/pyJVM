@@ -156,6 +156,7 @@ final class PosixFiles {
     private static Object fstat(long fd) {
         IoFd.Fd f = IoFd.get(fd);
         if (f.std >= 0) return ImportSupport.WINDOWS ? WindowsNtModule.fstatStd(f.std) : PosixModule.stat("/proc/self/fd/" + f.std, true);
+        if (f.nativeIo) return WindowsNtModule.fstatHandle(f.handle);
         Object st = PosixModule.stat(f.path, true);
         if (f.ch != null) PosixModule.setSize(st, IoFd.size(fd));
         return st;

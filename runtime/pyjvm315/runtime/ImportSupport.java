@@ -31,7 +31,7 @@ public final class ImportSupport {
     static final boolean WINDOWS = System.getProperty("os.name", "").startsWith("Windows");
     /** As in CPython, each OS has its own set: the POSIX modules do not exist on Windows, nor {@code nt}/{@code winreg} elsewhere. */
     private static final Set<String> POSIX_ONLY = Set.of("posix", "_posixsubprocess", "fcntl", "pwd", "grp", "resource");
-    private static final Set<String> WINDOWS_ONLY = Set.of("nt", "winreg");
+    private static final Set<String> WINDOWS_ONLY = Set.of("nt", "winreg", "_winapi", "msvcrt");
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
     static final Set<String> NATIVE_NAMES = platformNames("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
         "_weakref", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_socket", "_typing");
@@ -85,7 +85,7 @@ public final class ImportSupport {
             case "_tokenize" -> TokenizeModule.create();
             case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> StubModules.socket(); case "_typing" -> typingModule();
             case "nt" -> WindowsNtModule.create();
-            case "winreg" -> WindowsRegModule.create();
+            case "winreg" -> WindowsRegModule.create(); case "_winapi" -> WindowsWinApiModule.create(); case "msvcrt" -> WindowsMsvcrtModule.create();
             default -> throw notFound(name);
         };
     }
