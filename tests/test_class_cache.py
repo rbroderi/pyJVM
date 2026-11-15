@@ -103,7 +103,7 @@ MAIN = """
     import os, sys
     sys.path.insert(0, os.environ["ROOT"])
     import cmod
-    print(cmod.answer(), cmod.__file__.rsplit("/", 1)[-1])
+    print(cmod.answer(), os.path.basename(cmod.__file__))
 """
 
 

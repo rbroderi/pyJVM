@@ -353,11 +353,12 @@ class Lane:
 # ---- stage: compile ----------------------------------------------------------------------------------------------
 
 COMPILE_BOOT = r"""
-import sys, json, threading, time
+import os, sys, json, threading, time
 root, lib, rel, out = sys.argv[1:5]
 sys.path.insert(0, root)
 sys.setrecursionlimit(12000)
-threading.stack_size(512 * 1024 * 1024)
+# CPython on Windows needs thread stacks below 256 MiB (THREAD_MAX_STACKSIZE, exclusive).
+threading.stack_size((255 if os.name == "nt" else 512) * 1024 * 1024)
 result = {}
 def work():
     t0 = time.time()
@@ -639,15 +640,15 @@ def main(argv: list[str] | None = None) -> int:
         stage_status(ln)
         return 0
     stages = ["compile", "jar", "probe"] if a.stage == "all" else [a.stage]
+    explicit_timeout = a.timeout          # --timeout applies to every stage; otherwise each stage has its default
     for st in stages:
-        a.timeout = a.timeout or (300 if st == "compile" else 240)
+        a.timeout = explicit_timeout or (300 if st == "compile" else 240)
         if st == "compile":
             stage_compile(ln, a)
         elif st == "jar":
             stage_jar(ln, a)
         else:
             stage_probe(ln, a)
-        a.timeout = None
     return 0
 
 

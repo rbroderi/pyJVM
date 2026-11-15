@@ -43,7 +43,10 @@ def lane(request, tmp_path_factory, build_cache):
     env = {**os.environ, "PYJVM_BUILD_CACHE": build_cache}
     for key in ("PYJVM_CACHE", "PYJVM_STDLIB_JAR"):
         env.pop(key, None)
-    cmd = [py, str(TOOL), "all", "--lane", name, "--work", str(work), "--only", ",".join(MODULES), "-j", "2"]
+    cmd = [py, str(TOOL), "all", "--lane", name, "--work", str(work), "--only", ",".join(MODULES), "-j", "2",
+           # the first json probes compile re/enum/... into an empty JVM cache: ~235 s on 3.13 and ~470 s on 3.15
+           # with two probes running at once on Windows, past the 240 s default
+           "--timeout", "600"]
     lib = os.environ.get(f"PYJVM_STDLIB_{name.replace('.', '_')}")
     if lib:
         cmd += ["--lib", lib]
