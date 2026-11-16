@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import sys
 import zlib
 
 
@@ -19,9 +20,14 @@ def lcg(n, seed=12345):
 
 
 data = lcg(70000) + bytes(range(256)) * 50 + b'tail' * 1000
+# CPython 3.14+ on Windows links zlib-ng, whose compressed bytes differ from classic zlib (and from the JDK).
+ZLIB_NG = sys.platform == 'win32' and sys.version_info >= (3, 14)
 for level in (-1, 0, 1, 5, 9):
     z = zlib.compress(data, level)
-    print(level, len(z), zlib.crc32(z), zlib.decompress(z) == data)
+    if ZLIB_NG:
+        print(level, zlib.decompress(z) == data)
+    else:
+        print(level, len(z), zlib.crc32(z), zlib.decompress(z) == data)
 for wb in (15, -15, 31, 9, -9, 25):
     z = zlib.compress(data, 6, wb)
     print(wb, zlib.decompress(z, wb) == data, zlib.decompressobj(wb).decompress(z) == data)
@@ -56,7 +62,8 @@ pending = z + b'EXTRA'
 while pending and not d.eof:
     out += d.decompress(pending, 1000)
     pending = d.unconsumed_tail
-print(bytes(out) == data, d.eof, d.unused_data, d.unconsumed_tail)
+# whether the leftover also stays in unconsumed_tail depends on the zlib build (zlib-ng empties it)
+print(bytes(out) == data, d.eof, d.unused_data, d.unconsumed_tail if not ZLIB_NG else '-')
 d = zlib.decompressobj()
 first = d.decompress(z, 10)
 print(len(first), len(d.unconsumed_tail) > 0, d.eof)

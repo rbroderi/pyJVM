@@ -78,7 +78,12 @@ final class WindowsNative {
 
     /** CPython's winerror_to_errno (PC/errmap.h), generated from CPython 3.13/3.15: {@code OSError(None, '', None, w).errno}. */
     static int errnoOf(int winerror) {
-        if (winerror >= 10000 && winerror < 12000) return winerror;    // Winsock codes are errno values themselves
+        if (winerror >= 10000 && winerror < 12000) {                   // Winsock codes are errno values themselves
+            return switch (winerror) {
+                case 10004, 10009, 10013, 10014, 10022, 10024 -> winerror - 10000;   // WSAEINTR, WSAEBADF, WSAEACCES, WSAEFAULT, WSAEINVAL, WSAEMFILE
+                default -> winerror;
+            };
+        }
         return switch (winerror) {
             case 2, 3, 15, 18, 53, 67, 161, 206 -> 2;                                                       // ENOENT
             case 10 -> 7;                                                                                   // E2BIG
@@ -105,9 +110,12 @@ final class WindowsNative {
     static String errorType(int errno) { return ErrnoModule.osErrorType(errno); }
 
     /** {@code OSError} with errno, strerror, filename and winerror, typed by errno as CPython's OSError constructor does. */
-    static PyException winError(int code, String filename) {
+    static PyException winError(int code, String filename) { return winError(null, code, filename); }
+
+    /** As {@link #winError(int, String)} with the exception class forced ({@code forcedType}, null for the errno-derived one). */
+    static PyException winError(String forcedType, int code, String filename) {
         int errno = errnoOf(code);
-        String type = errorType(errno);
+        String type = forcedType != null ? forcedType : errorType(errno);
         String msg = message(code);
         LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
         attrs.put("errno", (long) errno); attrs.put("strerror", msg); attrs.put("filename", filename); attrs.put("winerror", (long) code);

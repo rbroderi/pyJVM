@@ -218,6 +218,27 @@ returned and which of them were the source of an inheritable duplicate; while su
 the state CPython is in at that point. Closing a handle by any route (`CloseHandle`, `_close` of an `open_osfhandle`
 descriptor, `DUPLICATE_CLOSE_SOURCE`) clears its entry, so spawns without pipes do not collect.
 
+## Windows overlapped I/O (`_overlapped`, `_socket`, asyncio's ProactorEventLoop)
+
+`WindowsIocp` (kernel32) and `WindowsSockets` (ws2_32) are Foreign Function and Memory API layers; every call captures
+`GetLastError`/`WSAGetLastError` per call. `_overlapped.Overlapped` objects own calloc'd memory for the OVERLAPPED and
+the I/O buffer, because the kernel keeps both until the operation ends and the JVM has no destructor point. A
+`Cleaner` frees them when the Python object is collected. CPython raises "still has pending operation at deallocation"
+there; pyJVM does not. A pending operation is instead cancelled and its state parked as an orphan, kept until the
+operation has ended and, for handles associated with a completion port, until its completion packet has been dequeued
+by `GetQueuedCompletionStatus` (the kernel writes the final status of such an operation only then, so `pending` stays
+true until a dequeue; this is Windows behaviour, CPython sees it too). Memory is never freed while the kernel owns it.
+`ReadFile`/`ReadFileInto`/`WSARecv`/`WSARecvInto` read into native memory; `ReadFileInto` and `WSARecvInto` copy it
+into the caller's buffer once, on the first successful `getresult`, so that data is not visible in the buffer earlier.
+
+`RegisterWaitWithQueue` uses `RegisterWaitForSingleObject` with one global upcall stub that only posts the completion
+packet. `GetQueuedCompletionStatus(INFINITE)` blocks in native code and cannot be interrupted; Ctrl-C reaches Python
+through `signal.set_wakeup_fd` (a socket, as on CPython): the delivered signal writes one byte to it, the
+`WSARecv` the loop keeps on its self-pipe completes, and `GetQueuedCompletionStatus` runs the pending Python signal
+handlers (a safe point) before returning. `select.select` on Windows runs in 50 ms slices for the same reason.
+`_socket` is a minimal stream-socket subset; host names in addresses go through the JVM resolver, and datagram,
+`AcceptEx`/`ConnectEx` and `getaddrinfo` are absent (asyncio TCP/UDP servers and clients do not work yet).
+
 ## unittest and CPython's test modules
 
 `import unittest` works under pyJVM and a `TestCase` suite runs end to end: `unittest.main()`, `python -m unittest`,

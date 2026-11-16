@@ -12,8 +12,10 @@ import java.util.Map;
  * {@code _winapi}: the Win32 process and handle calls Lib/subprocess.py uses (CreateProcess with STARTUPINFO and an
  * inherit list, CreatePipe, DuplicateHandle, the wait/exit-code/terminate calls, GetStdHandle, GetFileType), plus
  * OpenProcess, WaitForMultipleObjects, NeedCurrentDirectoryForExePath (shutil.which), GetVersion, GetACP, GetOEMCP and
- * GetTickCount64. Handles are ints, as in CPython (unsigned: -1 is 2**64-1). The overlapped-I/O, named-pipe, event,
- * mutex, file-mapping, CopyFile2 and LCMapStringEx parts of CPython's module are absent.
+ * GetTickCount64, plus CreateNamedPipe, CreateFile, ConnectNamedPipe (also overlapped=True, returning a
+ * {@code _winapi.Overlapped}), CreateEventW, SetEvent and ResetEvent. Handles are ints, as in CPython (unsigned: -1 is
+ * 2**64-1); security attributes must be 0. Absent: overlapped ReadFile/WriteFile, PeekNamedPipe, WaitNamedPipe,
+ * SetNamedPipeHandleState, BatchedWaitForMultipleObjects, mutex, file-mapping, CopyFile2 and LCMapStringEx.
  */
 final class WindowsWinApiModule {
     private WindowsWinApiModule() {}
@@ -30,7 +32,11 @@ final class WindowsWinApiModule {
         "STARTF_USESTDHANDLES", 256L, "STD_ERROR_HANDLE", 4294967284L, "STD_INPUT_HANDLE", 4294967286L, "STD_OUTPUT_HANDLE", 4294967285L,
         "STILL_ACTIVE", 259L, "SW_HIDE", 0L, "SYNCHRONIZE", 1048576L, "WAIT_ABANDONED_0", 128L, "WAIT_OBJECT_0", 0L, "WAIT_TIMEOUT", 258L,
         "PROCESS_ALL_ACCESS", 2097151L, "PROCESS_DUP_HANDLE", 64L, "GENERIC_READ", 2147483648L, "GENERIC_WRITE", 1073741824L,
-        "ERROR_ACCESS_DENIED", 5L, "ERROR_BROKEN_PIPE", 109L, "ERROR_MORE_DATA", 234L, "ERROR_NO_DATA", 232L, "ERROR_PRIVILEGE_NOT_HELD", 1314L};
+        "ERROR_ACCESS_DENIED", 5L, "ERROR_BROKEN_PIPE", 109L, "ERROR_MORE_DATA", 234L, "ERROR_NO_DATA", 232L, "ERROR_PRIVILEGE_NOT_HELD", 1314L,
+        "FILE_FLAG_OVERLAPPED", 1073741824L, "FILE_FLAG_FIRST_PIPE_INSTANCE", 524288L, "PIPE_ACCESS_DUPLEX", 3L, "PIPE_ACCESS_INBOUND", 1L,
+        "PIPE_READMODE_MESSAGE", 2L, "PIPE_TYPE_MESSAGE", 4L, "PIPE_WAIT", 0L, "PIPE_UNLIMITED_INSTANCES", 255L, "NMPWAIT_WAIT_FOREVER", 4294967295L,
+        "OPEN_EXISTING", 3L, "ERROR_PIPE_BUSY", 231L, "ERROR_IO_PENDING", 997L, "ERROR_OPERATION_ABORTED", 995L, "ERROR_NETNAME_DELETED", 64L,
+        "ERROR_SEM_TIMEOUT", 121L, "ERROR_PIPE_CONNECTED", 535L, "ERROR_ALREADY_EXISTS", 183L, "FILE_GENERIC_READ", 1179785L, "FILE_GENERIC_WRITE", 1179926L};
 
     static synchronized PyModule create() {
         PyModule m = new PyModule("_winapi", WindowsWinApiModule.class.getName());
@@ -56,10 +62,111 @@ final class WindowsWinApiModule {
         if (LangVersion.atLeast(3, 15)) fn(m, "GetOEMCP", (a, k) -> (long) WindowsHandles.oemcp());
         fn(m, "GetTickCount64", (a, k) -> unsigned(WindowsHandles.tickCount64()));
         fn(m, "CreateProcess", (a, k) -> createProcess(a));
+        fn(m, "CreateNamedPipe", (a, k) -> {
+            List<Object> p = exact("CreateNamedPipe", a, k, 8);
+            String name = wstr(p.get(0), "CreateNamedPipe", 1);
+            int[] v = new int[6];
+            for (int i = 0; i < 6; i++) v[i] = dw(p.get(i + 1), "CreateNamedPipe", i + 2);
+            securityNull(p.get(7), "CreateNamedPipe", 8);
+            return handleResult(WindowsIocp.createNamedPipe(name, v[0], v[1], v[2], v[3], v[4], v[5]));
+        });
+        fn(m, "CreateFile", (a, k) -> {
+            List<Object> p = exact("CreateFile", a, k, 7);
+            String name = wstr(p.get(0), "CreateFile", 1);
+            int access = dw(p.get(1), "CreateFile", 2), share = dw(p.get(2), "CreateFile", 3);
+            securityNull(p.get(3), "CreateFile", 4);
+            int disposition = dw(p.get(4), "CreateFile", 5), flags = dw(p.get(5), "CreateFile", 6);
+            long template = ptr(p.get(6), "CreateFile", 7);
+            return handleResult(WindowsIocp.createFile(name, access, share, disposition, flags, template, false));
+        });
+        fn(m, "ConnectNamedPipe", (a, k) -> {
+            Object[] p = keywords("ConnectNamedPipe", a, k, 1, "handle", "overlapped");
+            long h = WindowsOverlappedModule.pointer(p[0]);
+            if (p[1] != null && PyRuntime.truth(p[1])) return WindowsOverlappedModule.connectNamedPipeOverlapped(h);
+            WindowsIocp.connectNamedPipeBlocking(h);
+            return null;
+        });
+        fn(m, "CreateEventW", (a, k) -> {
+            Object[] p = keywords("CreateEventW", a, k, 4, "security_attributes", "manual_reset", "initial_state", "name");
+            securityNull(p[0], "CreateEventW", 1);
+            boolean manual = flag(p[1]), initial = flag(p[2]);
+            Object n = NativeSubclass.unwrap(p[3]);
+            if (n != null && !(n instanceof String)) throw new PyException("TypeError", "CreateEventW() argument 4 must be str or None, not " + PyRuntime.typeName(n));
+            if (n instanceof String s && s.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
+            return handleResult(WindowsIocp.createEvent(manual, initial, (String) n));
+        });
+        fn(m, "SetEvent", (a, k) -> { WindowsIocp.setEvent(WindowsOverlappedModule.pointer(keywords("SetEvent", a, k, 1, "event")[0])); return null; });
+        fn(m, "ResetEvent", (a, k) -> { WindowsIocp.resetEvent(WindowsOverlappedModule.pointer(keywords("ResetEvent", a, k, 1, "event")[0])); return null; });
+        m.attrs.put("Overlapped", WindowsOverlappedModule.winapiOverlapped());
         return m;
     }
 
-    private static Object unsigned(long v) { return v >= 0 ? (Object) v : new BigInteger(Long.toUnsignedString(v)); }
+    /** A HANDLE result: NULL is None. */
+    private static Object handleResult(long h) { return h == 0 ? null : unsigned(h); }
+
+    private static boolean flag(Object o) {
+        o = NativeSubclass.unwrap(o);
+        if (o instanceof Boolean b) return b;
+        if (o instanceof Long l) return l != 0;
+        if (o instanceof BigInteger b) return b.signum() != 0;
+        throw new PyException("TypeError", LangVersion.atLeast(3, 15) ? "'" + PyRuntime.typeName(o) + "' object cannot be interpreted as an integer" : "an integer is required");
+    }
+
+    /** All-positional-only arguments, as "f() takes exactly N arguments (M given)". */
+    private static List<Object> exact(String fn, List<Object> a, Map<Object, Object> k, int n) {
+        if (!k.isEmpty()) throw new PyException("TypeError", fn + "() takes no keyword arguments");
+        if (a.size() != n) throw new PyException("TypeError", fn + "() takes exactly " + n + " argument" + (n == 1 ? "" : "s") + " (" + a.size() + " given)");
+        return a;
+    }
+
+    /** Arguments that may be passed by keyword; the first {@code required} must be present, the others are null when absent. */
+    private static Object[] keywords(String fn, List<Object> a, Map<Object, Object> k, int required, String... names) {
+        if (a.size() > names.length) throw new PyException("TypeError", fn + "() takes " + (required == names.length ? "exactly " : "at most ") + names.length + " argument"
+            + (names.length == 1 ? "" : "s") + " (" + (a.size() + k.size()) + " given)");
+        Object[] out = new Object[names.length];
+        boolean[] set = new boolean[names.length];
+        for (int i = 0; i < a.size(); i++) { out[i] = a.get(i); set[i] = true; }
+        for (Map.Entry<Object, Object> e : k.entrySet()) {
+            int i = java.util.Arrays.asList(names).indexOf(e.getKey());
+            if (i < 0) throw new PyException("TypeError", fn + "() got an unexpected keyword argument '" + e.getKey() + "'");
+            if (set[i]) throw new PyException("TypeError", fn + "() argument for '" + names[i] + "' given by name and position");
+            out[i] = e.getValue(); set[i] = true;
+        }
+        for (int i = 0; i < required; i++)
+            if (!set[i]) throw new PyException("TypeError", fn + "() missing required argument '" + names[i] + "' (pos " + (i + 1) + ")");
+        return out;
+    }
+
+    private static String wstr(Object o, String fn, int pos) {
+        o = NativeSubclass.unwrap(o);
+        if (!(o instanceof String s)) throw new PyException("TypeError", "argument must be str, not " + PyRuntime.typeName(o));
+        if (s.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
+        return s;
+    }
+
+    /** An integer argument of the Argument Clinic 'k'/'K' kind: any int, taken modulo the C width; otherwise "must be int". */
+    private static Object intArg(Object o, String fn, int pos) {
+        Object v = NativeSubclass.unwrap(o);
+        if (v instanceof Long || v instanceof BigInteger || v instanceof Boolean) return v;
+        throw new PyException("TypeError", fn + "() argument " + pos + " must be int, not " + (v == null ? "None" : PyRuntime.typeName(v)));
+    }
+
+    private static int dw(Object o, String fn, int pos) {
+        Object v = intArg(o, fn, pos);
+        return v instanceof BigInteger b ? b.intValue() : v instanceof Boolean b ? (b ? 1 : 0) : (int) (long) (Long) v;
+    }
+
+    private static long ptr(Object o, String fn, int pos) {
+        Object v = intArg(o, fn, pos);
+        return v instanceof BigInteger b ? b.longValue() : v instanceof Boolean b ? (b ? 1 : 0) : (Long) v;
+    }
+
+    /** A LPSECURITY_ATTRIBUTES argument: an int, which must be 0 here (there is no way to build the structure). */
+    private static void securityNull(Object o, String fn, int pos) {
+        if (ptr(o, fn, pos) != 0) throw new PyException("ValueError", fn + ": security_attributes must be NULL");
+    }
+
+    static Object unsigned(long v) { return v >= 0 ? (Object) v : new BigInteger(Long.toUnsignedString(v)); }
 
     /** A handle argument: an int (unsigned or signed), None meaning NULL. */
     private static long handle(Object o) {

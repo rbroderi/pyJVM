@@ -42,6 +42,7 @@ final class TimeCalendar {
         PyRuntime.classAddAttr(structTime, "__match_args__", match);
         finish(structTime);
         m.attrs.put("struct_time", structTime);
+        m.attrs.put("_STRUCT_TM_ITEMS", 11L);   // fields of struct_time (_strptime slices a tuple with it)
         fn(m, "gmtime", (a, k) -> fromEpoch(a, ZoneOffset.UTC, true));
         fn(m, "localtime", (a, k) -> fromEpoch(a, ZoneId.systemDefault(), false));
         fn(m, "mktime", (a, k) -> mktime(a));

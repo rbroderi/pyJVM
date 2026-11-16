@@ -23,7 +23,9 @@ import java.util.concurrent.TimeUnit;
 final class SignalModule {
     private SignalModule() {}
 
-    static final int NSIG = 65;
+    /** Windows CPython: NSIG is 23 and only SIGINT, SIGILL, SIGFPE, SIGSEGV, SIGTERM, SIGBREAK and SIGABRT exist. */
+    private static final boolean WIN = ImportSupport.WINDOWS;
+    static final int NSIG = WIN ? 23 : 65;
     private static final long SIG_DFL = 0, SIG_IGN = 1;
     private static final String[] NAMES = new String[NSIG];
     private static final String[] TEXT = new String[NSIG];
@@ -48,6 +50,15 @@ final class SignalModule {
     }
 
     static {
+        if (WIN) {
+            int[] nums = {2, 4, 8, 11, 15, 21, 22};
+            String[] names = {"SIGINT", "SIGILL", "SIGFPE", "SIGSEGV", "SIGTERM", "SIGBREAK", "SIGABRT"};
+            String[] text = {"Interrupt", "Illegal instruction", "Floating-point exception", "Segmentation fault", "Terminated", null, "Aborted"};
+            for (int i = 0; i < nums.length; i++) { NAMES[nums[i]] = names[i]; TEXT[nums[i]] = text[i]; handlers[nums[i]] = SIG_DFL; }
+        } else initPosix();
+    }
+
+    private static void initPosix() {
         String[] n = {"HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE", "ALRM", "TERM",
             "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS"};
         String[] t = {"Hangup", "Interrupt", "Quit", "Illegal instruction", "Trace/breakpoint trap", "Aborted", "Bus error",
@@ -69,6 +80,21 @@ final class SignalModule {
         m.attrs.put("SIG_DFL", SIG_DFL);
         m.attrs.put("SIG_IGN", SIG_IGN);
         m.attrs.put("NSIG", (long) NSIG);
+        if (WIN) {
+            for (int i = 1; i < NSIG; i++) if (NAMES[i] != null) m.attrs.put(NAMES[i], (long) i);
+            m.attrs.put("CTRL_C_EVENT", 0L);
+            m.attrs.put("CTRL_BREAK_EVENT", 1L);
+            defaultInt = fn("default_int_handler", (a, k) -> { throw new PyException("KeyboardInterrupt", null); });
+            handlers[2] = defaultInt;
+            m.attrs.put("default_int_handler", defaultInt);
+            fn(m, "signal", (a, k) -> signal(a, k));
+            fn(m, "getsignal", (a, k) -> getsignal(NativeArgs.parse("getsignal", a, k, new String[]{"signalnum"}, 1, 1)[0]));
+            fn(m, "raise_signal", (a, k) -> { raiseSignalWin(a, k); return null; });
+            fn(m, "strsignal", (a, k) -> strsignal(sigArg("strsignal", a, k)));
+            fn(m, "valid_signals", (a, k) -> validSignals());
+            fn(m, "set_wakeup_fd", (a, k) -> setWakeupFd(a, k));
+            return m;
+        }
         for (int i = 1; i < 32; i++) m.attrs.put(NAMES[i], (long) i);
         m.attrs.put("SIGIOT", 6L);
         m.attrs.put("SIGCLD", 17L);
@@ -108,8 +134,23 @@ final class SignalModule {
 
     // ---------------------------------------------------------------- argument helpers
 
-    private static int signum(Object o) {
+    private static long cInt(Object o) {
         long s = IoUtil.asLong(o);
+        if (s < Integer.MIN_VALUE || s > Integer.MAX_VALUE) throw new PyException("OverflowError", "Python int too large to convert to C int");
+        return s;
+    }
+
+    private static boolean winValid(long s) { return s > 0 && s < NSIG && NAMES[(int) s] != null; }
+
+    private static void raiseSignalWin(List<Object> a, Map<Object, Object> k) {
+        long s = cInt(NativeArgs.parse("raise_signal", a, k, new String[]{"signalnum"}, 1, 1)[0]);
+        if (!winValid(s)) throw osErr("OSError", 22, "Invalid argument");
+        deliver((int) s);
+        dispatchPending();
+    }
+
+    private static int signum(Object o) {
+        long s = WIN ? cInt(o) : IoUtil.asLong(o);
         if (s < 1 || s >= NSIG) throw new PyException("ValueError", "signal number out of range");
         return (int) s;
     }
@@ -126,12 +167,13 @@ final class SignalModule {
 
     private static Object signal(List<Object> a, Map<Object, Object> k) {
         Object[] p = NativeArgs.parse("signal", a, k, new String[]{"signalnum", "handler"}, 2, 2);
+        if (WIN && !winValid(cInt(p[0]))) throw new PyException("ValueError", "invalid signal value");
         int s = signum(p[0]);
         Object h = p[1];
         boolean ok = h instanceof Long l && (l == SIG_DFL || l == SIG_IGN) || Boolean.TRUE.equals(PyRuntime.callable_(h));
         if (!ok) throw new PyException("TypeError", "signal handler must be signal.SIG_IGN, signal.SIG_DFL, or a callable object");
         if (!isMain()) throw new PyException("ValueError", "signal only works in main thread of the main interpreter");
-        if (s == 9 || s == 19) throw osErr("OSError", 22, "Invalid argument");
+        if (!WIN && (s == 9 || s == 19)) throw osErr("OSError", 22, "Invalid argument");
         Object old;
         synchronized (LOCK) { old = handlers[s]; handlers[s] = h; }
         hookOs(s, h);
@@ -144,11 +186,12 @@ final class SignalModule {
     /** Mirrors the handler choice onto a real OS signal where the JVM allows it. */
     private static void hookOs(int s, Object h) {
         if (NAMES[s] == null || s > 31) return;
+        if (WIN && s != 2 && s != 15 && s != 21) return;   // the JVM reserves ILL, FPE, SEGV and ABRT
         boolean dflt = h instanceof Long l && l == SIG_DFL;
         final int num = s;
         try {
             Class<?> sigClass = Class.forName("sun.misc.Signal"), handlerClass = Class.forName("sun.misc.SignalHandler");
-            Object sig = sigClass.getConstructor(String.class).newInstance(NAMES[s].substring(3));
+            Object sig = sigClass.getConstructor(String.class).newInstance(NAMES[s].substring(3));   // BREAK on Windows
             Object handler = dflt ? handlerClass.getField("SIG_DFL").get(null)
                 : java.lang.reflect.Proxy.newProxyInstance(handlerClass.getClassLoader(), new Class<?>[]{handlerClass},
                     (proxy, method, args) -> { if (method.getName().equals("handle")) deliver(num); return method.getReturnType() == int.class ? (Object) 0 : null; });
@@ -161,7 +204,7 @@ final class SignalModule {
 
     private static Object validSignals() {
         PySet set = new PySet();
-        for (int i = 1; i < NSIG; i++) if (i != 32 && i != 33) set.add((long) i);
+        for (int i = 1; i < NSIG; i++) if (WIN ? NAMES[i] != null : i != 32 && i != 33) set.add((long) i);
         return set;
     }
 
@@ -177,9 +220,11 @@ final class SignalModule {
             return;
         }
         synchronized (LOCK) { pending[sig] = true; anyPending = true; LOCK.notifyAll(); }
+        if (WIN) writeWakeup(sig);   // after the flags are set, as trip_signal does (bpo-30038)
     }
 
     private static void defaultAction(int sig) {
+        if (WIN) { System.out.flush(); System.err.flush(); Runtime.getRuntime().halt(3); }   // the CRT terminates with exit code 3
         switch (sig) {
             case 17, 18, 23, 28, 19, 20, 21, 22 -> { }
             default -> { System.out.flush(); System.err.flush(); Runtime.getRuntime().halt(128 + sig); }
@@ -303,10 +348,40 @@ final class SignalModule {
 
     private static Object setWakeupFd(List<Object> a, Map<Object, Object> k) {
         Object[] p = NativeArgs.parse("set_wakeup_fd", a, k, new String[]{"fd", "warn_on_full_buffer"}, 1, 1);
+        if (a.size() > 1) throw new PyException("TypeError", "set_wakeup_fd() takes exactly 1 positional argument (" + a.size() + " given)");
+        boolean warn = p[1] == NativeArgs.MISSING || PyRuntime.truth(p[1]);
         long fd = IoUtil.asLong(p[0]);
         if (!isMain()) throw new PyException("ValueError", "set_wakeup_fd only works in main thread of the main interpreter");
+        if (WIN) {
+            if (fd != -1) {
+                WindowsSockets.startup();                       // CPython imports _socket here, which runs WSAStartup
+                int[] err = new int[1];
+                if (WindowsSockets.getsockopt(fd, WindowsSockets.SOL_SOCKET, WindowsSockets.SO_ERROR, 4, err) == null) {
+                    if (err[0] != WindowsSockets.WSAENOTSOCK) throw WindowsNative.winError(err[0], null);
+                    throw WindowsNative.winError(6, null);      // not a socket: a CRT descriptor is not usable here (CPython's fstat of it fails)
+                }
+            }
+            long old;
+            synchronized (LOCK) { old = wakeupFd; wakeupFd = fd; wakeupWarn = warn; }
+            return old;
+        }
         if (fd != -1) throw new PyException("NotImplementedError", "set_wakeup_fd needs a pipe or socket descriptor, which this runtime does not provide");
         return -1L;
+    }
+
+    /** Windows: the socket that gets one byte (the signal number) when a signal is tripped, or -1. */
+    private static volatile long wakeupFd = -1;
+    private static volatile boolean wakeupWarn = true;
+
+    /** trip_signal's write to the wakeup socket (Windows only). */
+    private static void writeWakeup(int sig) {
+        long fd = wakeupFd;
+        if (fd == -1) return;
+        int[] err = new int[1];
+        if (WindowsSockets.send(fd, new byte[]{(byte) sig}, 0, 1, 0, err) < 0 && (wakeupWarn || err[0] != WindowsSockets.WSAEWOULDBLOCK)) {
+            System.err.print("Exception ignored when trying to send to the signal wakeup fd:\nOSError: [WinError " + err[0] + "] " + WindowsNative.message(err[0]) + "\n");
+            System.err.flush();
+        }
     }
 
     private static Object siginterrupt(List<Object> a, Map<Object, Object> k) {
@@ -387,6 +462,13 @@ final class SignalModule {
 
     /** {@code os.kill(pid, sig)}: this process is signalled in-process; other processes through the system {@code kill}. */
     static void kill(long pid, long sig) {
+        if (WIN && pid == ProcessHandle.current().pid()) {
+            // CTRL_C_EVENT / CTRL_BREAK_EVENT signal the console; any other value terminates the process with that exit code
+            if (sig == 0) { deliver(2); dispatchPending(); return; }
+            if (sig == 1) { deliver(21); dispatchPending(); return; }
+            System.out.flush(); System.err.flush();
+            Runtime.getRuntime().halt((int) sig);
+        }
         if (sig < 0 || sig >= NSIG) throw osErr("OSError", 22, "Invalid argument");
         if (pid == ProcessHandle.current().pid()) {
             if (sig != 0) { deliver((int) sig); dispatchPending(); }

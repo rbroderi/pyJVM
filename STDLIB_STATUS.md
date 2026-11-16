@@ -9,6 +9,10 @@ The manifest records, per module and per language lane, how far the CPython `Lib
 - **unsupported**: the compiler rejects it (reason given)
 - **excluded**: not part of the build (test suites, IDLE and the like)
 
+## Windows host
+
+The manifest below was measured on a POSIX host, where `_socket` is still an importable shell without sockets. On Windows the runtime has a real Winsock `_socket` (stream sockets, IPv4/IPv6; no datagram calls and no name resolution, so `getaddrinfo`-based calls such as `create_connection` and `asyncio.create_server` raise AttributeError), `_overlapped` (completion ports, events, waits, named pipes, `WSARecv`/`WSARecvInto`/`WSASend`; the `AcceptEx`/`ConnectEx`/`DisconnectEx`/`TransmitFile`/`WSAConnect`/`BindLocal`/`WSARecvFrom*`/`WSASendTo` names are absent), `select.select` on sockets and `signal.set_wakeup_fd` with a socket. With these `asyncio` imports and `asyncio.run` works on the ProactorEventLoop (timers, tasks, threads and executors, subprocess pipes, named-pipe servers and clients).
+
 ## Lanes
 
 | Lane | Reference interpreter | Library | Modules |

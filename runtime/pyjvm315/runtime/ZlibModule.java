@@ -136,7 +136,12 @@ final class ZlibModule {
         Object[] p = NativeArgs.parse(fname, args, kw, new String[]{"a", "b", "len"}, 3, 3);
         long a = u32(p[0]) & 0xffffffffL, b = u32(p[1]) & 0xffffffffL;
         BigInteger len = BuiltinsExtra.rangeIndex(p[2]);
-        long n = len.bitLength() > 62 ? (len.signum() < 0 ? -1 : Long.MAX_VALUE) : len.longValue();
+        // CPython converts len2 to Py_off_t (a C long on Windows, ssize_t elsewhere), then rejects negative values
+        int bits = ImportSupport.WINDOWS ? 31 : 63;
+        if (len.bitLength() > bits)
+            throw new PyException("OverflowError", "Python int too large to convert to C " + (ImportSupport.WINDOWS ? "long" : "ssize_t"));
+        long n = len.longValue();
+        if (n < 0) throw new PyException("ValueError", "len2 must be non-negative");
         return crc ? crcCombine(a, b, n) : adlerCombine(a, b, n);
     }
 

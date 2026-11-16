@@ -219,11 +219,11 @@ public final class BuiltinsExtra {
 
     /** PYTHONBREAKPOINT as the program sees it: os.environ when posix/nt is loaded, else the process environment. */
     private static String breakpointTarget() {
-        PyModule os = ImportSupport.cachedModule(ImportSupport.OS_MODULE);
-        if (os != null && os.attrs.get("environ") instanceof PyDict env) {
-            if (ImportSupport.WINDOWS) return env.get("PYTHONBREAKPOINT") instanceof String s ? s : null;   // nt.environ is str -> str
-            Object v = env.get(new PyBytes("PYTHONBREAKPOINT".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-            return v instanceof PyBytes b ? new String(b.data, java.nio.charset.StandardCharsets.UTF_8) : null;
+        PyModule os = ImportSupport.cachedModule("os");   // os.environ, the mapping programs assign to
+        if (os != null) {
+            Object env = PyRuntime.moduleGetattr(os, "environ");
+            Object v = callMethod(env, "get", new Object[]{"PYTHONBREAKPOINT"});
+            return NativeSubclass.unwrap(v) instanceof String s ? s : null;
         }
         return System.getenv("PYTHONBREAKPOINT");
     }
@@ -239,8 +239,11 @@ public final class BuiltinsExtra {
             from.items.add(attr);
             Object mod = ImportSupport.importBuiltin(new ArrayList<Object>(List.of(module, "", "", from, 0L)), new LinkedHashMap<Object,Object>());
             fn = getattr(mod, attr);
-        } catch (PyException e) {
-            throw new PyException("ImportError", "breakpoint() cannot import '" + module + "': no debugger or import system is available in this runtime");
+        } catch (PyException e) {   // sys.breakpointhook: an unimportable hook is warned about and ignored
+            String hookname = target == null || target.isEmpty() ? "pdb.set_trace" : target;
+            Object warnings = ImportSupport.importBuiltin(new ArrayList<Object>(List.of("warnings")), new LinkedHashMap<Object,Object>());
+            callMethod(warnings, "warn", new Object[]{"Ignoring unimportable $PYTHONBREAKPOINT: \"" + hookname + "\"", builtinType("RuntimeWarning"), 0L});
+            return null;
         }
         return callFunction(fn, new ArrayList<Object>(args), new LinkedHashMap<Object,Object>(kwargs));
     }

@@ -44,9 +44,13 @@ final class StubModules {
         return m;
     }
 
-    /** Enough of {@code _socket} for {@code socket}, {@code selectors} and {@code asyncio} to import; sockets cannot be created. */
+    /**
+     * Enough of {@code _socket} for {@code socket}, {@code selectors} and {@code asyncio} to import; sockets cannot be
+     * created. POSIX only: Windows has the real {@link WindowsSocketModule}.
+     */
     static PyModule socket() {
         PyModule m = module("_socket");
+        SelectModule.wsaStarted = true;   // importing _socket is what runs WSAStartup in CPython
         PyClass sock = NativeTypes.define("_socket", "socket", null);
         NativeTypes.method(sock, StubModules.class, "__init__", "sockInit", "self,family,type,proto,fileno", NativeTypes.defaults("family", -1L, "type", -1L, "proto", -1L, "fileno", null));
         NativeTypes.finish(sock);

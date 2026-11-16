@@ -23,12 +23,17 @@ final class ArrayData implements PyByteSequence {
         this.buf = new byte[0];
     }
 
+    /** Windows x64 (LLP64): C long is 4 bytes and wchar_t is 2 (UTF-16 code units). */
+    static final boolean WIN = ImportSupport.WINDOWS;
+
     static int sizeOf(char tc) {
         return switch (tc) {
             case 'b', 'B' -> 1;
             case 'h', 'H', 'e' -> 2;
-            case 'i', 'I', 'f', 'u', 'w' -> 4;
-            case 'l', 'L', 'q', 'Q', 'd', 'F' -> 8;
+            case 'u' -> WIN ? 2 : 4;
+            case 'i', 'I', 'f', 'w' -> 4;
+            case 'l', 'L' -> WIN ? 4 : 8;
+            case 'q', 'Q', 'd', 'F' -> 8;
             case 'D' -> 16;
             default -> 0;
         };
@@ -92,15 +97,20 @@ final class ArrayData implements PyByteSequence {
             case 'H': return raw(i, 2);
             case 'i': return (long) (int) raw(i, 4);
             case 'I': return raw(i, 4);
-            case 'l': case 'q': return raw(i, 8);
-            case 'L': case 'Q': {
+            case 'l': return isz == 4 ? (long) (int) raw(i, 4) : raw(i, 8);
+            case 'q': return raw(i, 8);
+            case 'L': if (isz == 4) return raw(i, 4);
+            // fall through
+            case 'Q': {
                 long v = raw(i, 8);
                 return v >= 0 ? (Object) v : PyRuntime.compact(new BigInteger(Long.toUnsignedString(v)));
             }
             case 'f': return (double) Float.intBitsToFloat((int) raw(i, 4));
             case 'd': return Double.longBitsToDouble(raw(i, 8));
             case 'e': return StructModule.halfValue((int) raw(i, 2));
-            case 'u': case 'w': return new String(new int[]{(int) raw(i, 4)}, 0, 1);
+            case 'u': if (isz == 2) return String.valueOf((char) raw(i, 2));
+            // fall through
+            case 'w': return new String(new int[]{(int) raw(i, 4)}, 0, 1);
             case 'F': {
                 int base = i * isz;
                 return new PyComplex((double) Float.intBitsToFloat((int) rawAt(base, 4)), (double) Float.intBitsToFloat((int) rawAt(base + 4, 4)));
@@ -125,7 +135,7 @@ final class ArrayData implements PyByteSequence {
             case 'f': putRaw(i, 0, 4, Float.floatToRawIntBits((float) toDouble(v))); return;
             case 'd': putRaw(i, 0, 8, Double.doubleToRawLongBits(toDouble(v))); return;
             case 'e': putRaw(i, 0, 2, StructModule.halfBits(toDouble(v))); return;
-            case 'u': case 'w': putRaw(i, 0, 4, codePoint(v)); return;
+            case 'u': case 'w': putRaw(i, 0, isz, codePoint(v)); return;
             case 'F': case 'D': {
                 double re, im;
                 if (v instanceof PyComplex c) { re = c.real; im = c.imag; }
@@ -147,11 +157,14 @@ final class ArrayData implements PyByteSequence {
     // ---- conversions -----------------------------------------------------------------------------------------
     private static final BigInteger LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE), LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE);
     private static final BigInteger U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    private static final BigInteger CLONG_MIN = WIN ? BigInteger.valueOf(Integer.MIN_VALUE) : LONG_MIN;
+    private static final BigInteger CLONG_MAX = WIN ? BigInteger.valueOf(Integer.MAX_VALUE) : LONG_MAX;
+    private static final BigInteger CULONG_MAX = WIN ? BigInteger.valueOf(0xffffffffL) : U64_MAX;
 
     private static PyException overflow(String msg) { return new PyException("OverflowError", msg); }
 
     private long asCLong(BigInteger b) {
-        if (b.compareTo(LONG_MIN) < 0 || b.compareTo(LONG_MAX) > 0) throw overflow("Python int too large to convert to C long");
+        if (b.compareTo(CLONG_MIN) < 0 || b.compareTo(CLONG_MAX) > 0) throw overflow("Python int too large to convert to C long");
         return b.longValue();
     }
 
@@ -218,7 +231,7 @@ final class ArrayData implements PyByteSequence {
 
     private static long asUnsigned(BigInteger b) {
         if (b.signum() < 0) throw overflow("can't convert negative value to unsigned int");
-        if (b.compareTo(U64_MAX) > 0) throw overflow("Python int too large to convert to C unsigned long");
+        if (b.compareTo(CULONG_MAX) > 0) throw overflow("Python int too large to convert to C unsigned long");
         return b.longValue();
     }
 
@@ -238,7 +251,14 @@ final class ArrayData implements PyByteSequence {
     private int codePoint(Object v) {
         if (v instanceof String s) {
             int len = s.codePointCount(0, s.length());
-            if (len == 1) return s.codePointAt(0);
+            if (len == 1) {
+                int cp = s.codePointAt(0);
+                if (isz == 2 && cp > 0xffff) {
+                    if (!LangVersion.atLeast(3, 14)) throw new PyException("TypeError", "array item must be unicode character");
+                    throw new PyException("TypeError", "string " + PyRuntime.ascii_(s) + " cannot be converted to a single wchar_t character");
+                }
+                return cp;
+            }
             if (!LangVersion.atLeast(3, 14)) throw new PyException("TypeError", "array item must be unicode character");
             throw new PyException("TypeError", "array item must be a unicode character, not a string of length " + len);
         }

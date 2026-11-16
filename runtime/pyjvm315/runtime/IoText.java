@@ -96,6 +96,12 @@ final class IoText {
         throw new PyException("TypeError", "TextIOWrapper() argument '" + what + "' must be str or None, not " + PyRuntime.typeName(o));
     }
 
+    /** What a written "\n" becomes: os.linesep for newline=None ("\r\n" on Windows), the newline itself otherwise; null means unchanged. */
+    private static String writeNewline(String newl) {
+        if (newl == null) return ImportSupport.WINDOWS ? "\r\n" : null;
+        return newl.isEmpty() || newl.equals("\n") ? null : newl;
+    }
+
     public static Object init(Object self, Object buffer, Object encoding, Object errors, Object newline, Object lineBuffering, Object writeThrough) {
         T t = st(self);
         Object nl = NativeSubclass.unwrap(newline);
@@ -106,7 +112,8 @@ final class IoText {
         String enc = optStr(encoding, "encoding"), err = optStr(errors, "errors");
         if (enc != null && enc.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
         if (err != null && err.indexOf('\0') >= 0) throw new PyException("ValueError", "embedded null character");
-        if (enc == null || enc.equals("locale")) enc = LangVersion.atLeast(3, 15) ? "utf-8" : "UTF-8";
+        if (enc == null) enc = LocaleModule.defaultTextEncoding();
+        else if (enc.equals("locale")) enc = LocaleModule.localeEncoding();
         if (err == null) err = "strict";
         if (Codecs.nativeName(enc) == null) IoCodec.textInfo(enc);
         t.buffer = buffer; t.encoding = enc; t.errors = err;
@@ -117,7 +124,7 @@ final class IoText {
         t.readTranslate = newl == null;
         t.readnl = newl;
         t.writeTranslate = newl == null || !newl.isEmpty();
-        t.writenl = newl == null || newl.isEmpty() || newl.equals("\n") ? null : newl;
+        t.writenl = writeNewline(newl);
         t.decoded = ""; t.used = 0; t.hasSnap = false; t.plen = 0;
         boolean canRead = PyRuntime.truth(PyRuntime.callMethod(buffer, "readable", new Object[0]));
         t.hasRead1 = PyRuntime.truth(PyRuntime.hasattr(buffer, "read1"));
@@ -505,7 +512,7 @@ final class IoText {
         boolean newEnc = enc != null || err != null || nl != PyRuntime.ELLIPSIS;
         if (newEnc && started && t.decoder != null) throw IoUtil.unsupported("It is not possible to set the encoding or newline of stream after the first read");
         String e2 = t.encoding, r2 = t.errors;
-        if (enc != null) { e2 = optStr(enc, "encoding"); }
+        if (enc != null) { e2 = optStr(enc, "encoding"); if (e2.equals("locale")) e2 = LocaleModule.localeEncoding(); }
         if (err != null) r2 = optStr(err, "errors");
         else if (enc != null) r2 = "strict";
         if (nl != PyRuntime.ELLIPSIS) {
@@ -515,7 +522,7 @@ final class IoText {
             String newl = (String) n;
             t.readUniversal = newl == null || newl.isEmpty(); t.readTranslate = newl == null; t.readnl = newl;
             t.writeTranslate = newl == null || !newl.isEmpty();
-            t.writenl = newl == null || newl.isEmpty() || newl.equals("\n") ? null : newl;
+            t.writenl = writeNewline(newl);
         }
         flush(self);
         if (lb != null) t.lineBuffering = PyRuntime.truth(lb);

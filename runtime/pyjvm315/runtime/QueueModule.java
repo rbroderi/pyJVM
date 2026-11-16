@@ -3,7 +3,7 @@ package pyjvm315.runtime;
 
 import static pyjvm315.runtime.NativeTypes.*;
 
-import java.util.ArrayDeque;
+import java.util.LinkedList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -20,7 +20,7 @@ public final class QueueModule {
     static final class Q {
         final ReentrantLock lock = new ReentrantLock();
         final Condition nonEmpty = lock.newCondition();
-        final ArrayDeque<Object> items = new ArrayDeque<>();
+        final LinkedList<Object> items = new LinkedList<>();   // None is null here, which ArrayDeque refuses
     }
 
     static synchronized PyModule create() {

@@ -33,6 +33,20 @@ public final class TimeModule {
         NativeTypes.fn(m, "process_time_ns", (a, k) -> cpuNanos());
         NativeTypes.fn(m, "thread_time", (a, k) -> cpuNanos() / 1e9);
         NativeTypes.fn(m, "thread_time_ns", (a, k) -> cpuNanos());
+        NativeTypes.fn(m, "get_clock_info", (a, k) -> {
+            if (a.size() != 1 || !k.isEmpty()) throw new PyException("TypeError", "get_clock_info() takes exactly one argument (" + a.size() + " given)");
+            if (!(a.get(0) instanceof String name)) throw new PyException("TypeError", "get_clock_info() argument 1 must be str, not " + PyRuntime.typeName(a.get(0)));
+            String impl; boolean mono, adjustable;
+            switch (name) {
+                case "time" -> { impl = "Instant.now()"; mono = false; adjustable = true; }
+                case "monotonic", "perf_counter" -> { impl = "System.nanoTime()"; mono = true; adjustable = false; }
+                case "process_time", "thread_time" -> { impl = "ThreadMXBean.getCurrentThreadCpuTime()"; mono = true; adjustable = false; }
+                default -> throw new PyException("ValueError", "unknown clock");
+            }
+            java.util.LinkedHashMap<String, Object> f = new java.util.LinkedHashMap<>();
+            f.put("implementation", impl); f.put("monotonic", mono); f.put("adjustable", adjustable); f.put("resolution", 1e-9);
+            return SysExtras.namespace(f);
+        });
         NativeTypes.fn(m, "sleep", (a, k) -> {
             if (a.size() != 1) throw new PyException("TypeError", "sleep() takes exactly one argument (" + a.size() + " given)");
             double s = seconds(a.get(0));

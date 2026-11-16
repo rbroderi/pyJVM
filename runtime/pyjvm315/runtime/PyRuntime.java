@@ -552,6 +552,10 @@ public final class PyRuntime {
         if (value instanceof PyInstance instance) {
             PyMethod m=instance.cls.lookupMethod("__str__");
             if(m!=null){Object out=invoke(instance,m,new Object[0]);if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
+            {   // __str__ set to a builtin slot (ReprEnum: int.__repr__)
+                Object out=classAttrDunder(instance,"__str__");
+                if(out!=MISSING){if(!(out instanceof String))throw new PyException("TypeError","__str__ returned non-string");return (String)out;}
+            }
             if(instance.payload!=null && (instance.cls.nativeKind.equals("str") || instance.cls.nativeKind.equals("bytes"))) return pyStr(instance.payload);
             if(ExceptionGroupSupport.isGroup(instance)) {
                 int n=ExceptionGroupSupport.groupExceptions(instance).items.size();
@@ -1114,7 +1118,10 @@ public final class PyRuntime {
         if(owner!=null){
             Object method=owner.lookupAttr("__format__");
             if(method!=MISSING){
-                Object result=callFunction(descriptorGet(method,value,owner),new ArrayList<>(List.of(spec)),new LinkedHashMap<>());
+                // a builtin type's own __format__ (IntEnum and friends install int.__format__) is unbound: pass the instance
+                boolean unboundBuiltin=method instanceof BuiltinBoundMethod bm && bm.self instanceof PyBuiltinType;
+                Object result=unboundBuiltin?callFunction(method,new ArrayList<>(List.of(value,spec)),new LinkedHashMap<>())
+                    :callFunction(descriptorGet(method,value,owner),new ArrayList<>(List.of(spec)),new LinkedHashMap<>());
                 if(!(result instanceof String))throw new PyException("TypeError",owner.qualname+".__format__() must return a str, not "+typeName(result));
                 return result;
             }
@@ -2699,6 +2706,9 @@ public final class PyRuntime {
         if (callable instanceof TypeParamsGeneric generic) return generic.call(args,kwargs);
         if (callable instanceof PyBuiltinFunction f) return callBuiltin(f.name,args,kwargs);
         if (callable instanceof BuiltinBoundMethod method) {
+            // object.__init__() and the like, reached through the type (or super(C, C)), are unbound descriptors
+            if(args.isEmpty() && method.self instanceof PyBuiltinType objType && objType.name.equals("object") && OBJECT_INSTANCE_METHODS.contains(method.name))
+                throw new PyException("TypeError","descriptor '"+method.name+"' of 'object' object needs an argument");
             if(!kwargs.isEmpty()) {
                 if(method.self instanceof PyBuiltinType nativeType && NativeSubclass.isKind(nativeType.name) && (method.name.equals("__init__") || method.name.equals("__new__")))
                     return NativeSubclassMethods.callInitNew(nativeType.name,method.name,args,kwargs);
@@ -3521,6 +3531,11 @@ public final class PyRuntime {
             default -> false;
         };
     }
+    /** The methods of {@code object} that take the instance as their first argument (not __new__, __init_subclass__, __subclasshook__). */
+    static final Set<String> OBJECT_INSTANCE_METHODS = Set.of("__init__", "__repr__", "__str__", "__hash__", "__reduce__", "__reduce_ex__",
+        "__sizeof__", "__dir__", "__getattribute__", "__setattr__", "__delattr__", "__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__",
+        "__format__", "__getstate__");
+
     static Object superAttribute(PySuper sup,String name) {
         if(sup.owner==null)return MISSING;
         List<Object> mro=typeMro(sup.owner);int start=mro.indexOf(sup.currentClass);
@@ -3722,6 +3737,9 @@ public final class PyRuntime {
             if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+(inst.cls.moduleName.equals("builtins")?"":inst.cls.moduleName+".")+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
             return pyRepr(args[0]);
         }
+        // int.__repr__(member of an int subclass) is the native repr of the value, not the subclass's own __repr__
+        if((name.equals("__repr__") || name.equals("__str__")) && args.length==1 && NativeSubclass.isKind(builtin.name) && args[0] instanceof PyInstance pi && pi.payload!=null)
+            return name.equals("__str__")?pyStr(pi.payload):pyRepr(pi.payload);
         if((name.equals("__repr__") || name.equals("__str__")) && !builtin.name.equals("object") && args.length==1 && !(args[0] instanceof PyInstance))return name.equals("__str__")?pyStr(args[0]):pyRepr(args[0]);
         if(builtin.name.equals("object") && name.equals("__init_subclass__")){requireArgs(name,args,0);return null;}
         if(builtin.name.equals("object") && name.equals("__new__")) {
@@ -3904,6 +3922,12 @@ public final class PyRuntime {
             (value instanceof PyInstance descriptor &&
             (descriptor.cls.lookupMethod("__set__") != null || descriptor.cls.lookupMethod("__delete__") != null));
     }
+    private static BuiltinBoundMethod objectStr;
+    private static synchronized BuiltinBoundMethod objectStrSlot(){
+        if(objectStr==null)objectStr=new BuiltinBoundMethod(builtinType("object"),"__str__");
+        return objectStr;
+    }
+    private static final Set<String> STR_FROM_OBJECT=Set.of("int","bool","float","complex","list","dict","tuple","set","frozenset");
     static Object descriptorGet(Object descriptor, Object instance, Object owner) {
         if(descriptor instanceof PySuper sup)return bindSuper(sup,instance);
         if(descriptor instanceof PyFunction)return instance==null?descriptor:new BoundCallable(descriptor,instance);
@@ -3927,6 +3951,9 @@ public final class PyRuntime {
         }
         if (descriptor instanceof BuiltinBoundMethod nativeMethod && instance != null && nativeMethod.self instanceof PyBuiltinType nativeType
             && NativeSubclass.isKind(nativeType.name) && NativeSubclassMethods.isInstanceMethod(nativeType.name, nativeMethod.name)) return new BoundCallable(descriptor, instance);
+        // object.__str__ and friends stored in a class (ReprEnum sets __str__ = int.__str__, which is object.__str__) bind like slot wrappers
+        if (descriptor instanceof BuiltinBoundMethod objMethod && instance != null && objMethod.self instanceof PyBuiltinType objType
+            && objType.name.equals("object") && OBJECT_INSTANCE_METHODS.contains(objMethod.name)) return new BoundCallable(descriptor, instance);
         if (!isDescriptor(descriptor)) return descriptor;
         return callMethod(descriptor, "__get__", new Object[]{instance, owner});
     }
@@ -4047,6 +4074,7 @@ public final class PyRuntime {
             if(Set.of("list","dict","set","bytearray").contains(type.name))return null;
             return new NativeFunction("__hash__",(a,k)->{if(a.size()!=1)throw new PyException("TypeError","expected 0 arguments, got "+Math.max(0,a.size()-1));return hash(a.get(0));});
         }
+        if(obj instanceof PyBuiltinType bt1 && name.equals("__str__") && (bt1.name.equals("object") || STR_FROM_OBJECT.contains(bt1.name)))return objectStrSlot();   // these types inherit object.__str__ (the same object, as enum tests with `is`)
         if(obj instanceof PyBuiltinType type && builtinHasMethod(type.name,name))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyBuiltinType && (name.equals("__repr__")||name.equals("__str__")))return new BuiltinBoundMethod(obj,name);
         if(obj instanceof PyComplex z){
@@ -4227,6 +4255,7 @@ public final class PyRuntime {
             throw new PyException("AttributeError", "'" + instance.cls.name + "' object has no attribute '" + name + "'");
         }
         {Object nativeValue=NativeSubclassMethods.plainAttribute(obj,name);if(nativeValue!=MISSING)return nativeValue;}
+        if(obj instanceof PyBuiltinType bt0 && name.equals("__str__") && (bt0.name.equals("object") || STR_FROM_OBJECT.contains(bt0.name)))return objectStrSlot();
         if(obj instanceof PyBuiltinType && (name.equals("__repr__") || name.equals("__str__")))return new BuiltinBoundMethod(obj,name);   // pprint keys its dispatch table on T.__repr__
         if(obj instanceof PyObject && Set.of("__str__","__repr__","__hash__","__eq__","__ne__","__format__","__reduce_ex__","__sizeof__").contains(name))return new BuiltinBoundMethod(obj,name);
         if(name.equals("__doc__") && !(obj instanceof PyModule)) return null;

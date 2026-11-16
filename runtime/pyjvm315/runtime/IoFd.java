@@ -85,6 +85,8 @@ final class IoFd {
         Path p = PosixModule.resolve(path);
         try {
             if (Files.isDirectory(p)) {
+                // the CRT's _wopen refuses a directory in every mode with EACCES (Windows has no directory descriptors)
+                if (ImportSupport.WINDOWS) throw PosixModule.osError("PermissionError", 13, "Permission denied", path);
                 if (f.writable) throw PosixModule.osError("IsADirectoryError", 21, "Is a directory", path);
                 f.dir = true;
             } else {

@@ -13,7 +13,7 @@ import java.util.NoSuchElementException;
 /**
  * {@code _struct}: format strings, {@code Struct}, and the module-level pack/unpack functions, for every format
  * character and the byte-order/alignment modes {@code @ = < > !}. Native mode follows the LP64 Linux layout
- * (long and size_t are 8 bytes). Error messages are CPython's.
+ * (long and size_t are 8 bytes; on Windows long is 4). Error messages are CPython's.
  */
 public final class StructModule {
     private StructModule() {}
@@ -82,7 +82,7 @@ public final class StructModule {
             case 'x': case 'c': case 'b': case 'B': case '?': case 's': case 'p': return 1;
             case 'h': case 'H': case 'e': return 2;
             case 'i': case 'I': case 'f': return 4;
-            case 'l': case 'L': return nat ? 8 : 4;
+            case 'l': case 'L': return nat && !ImportSupport.WINDOWS ? 8 : 4;
             case 'q': case 'Q': case 'd': return 8;
             case 'n': case 'N': case 'P': return nat ? 8 : -1;
             case 'F': return complexOk() ? 8 : -1;

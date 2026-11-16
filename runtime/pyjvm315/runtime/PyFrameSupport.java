@@ -132,6 +132,8 @@ final class PyFrameSupport {
             case "f_globals" -> globalsOf(frame);
             case "f_trace" -> frame.trace;
             case "f_lasti" -> 0L;
+            case "f_trace_lines" -> Boolean.TRUE;   // line events are always delivered
+            case "f_trace_opcodes" -> Boolean.FALSE;   // there are no CPython opcodes to trace
             default -> throw new PyException("AttributeError", "frame has no attribute '" + name + "'");
         };
     }
@@ -140,6 +142,14 @@ final class PyFrameSupport {
         if (name.equals("f_trace")) {
             frame.trace = value;
             if (frame.active != null) frame.active.localTrace = value;
+            return;
+        }
+        if (name.equals("f_trace_lines") || name.equals("f_trace_opcodes")) {
+            boolean wanted = PyRuntime.truth(value);
+            boolean lines = name.equals("f_trace_lines");
+            if (wanted != lines) throw new PyException("NotImplementedError", lines
+                ? "pyJVM always delivers line trace events: frame.f_trace_lines cannot be set to False"
+                : "pyJVM compiles Python to JVM bytecode and has no CPython opcodes: frame.f_trace_opcodes cannot be set to True");
             return;
         }
         throw new PyException("AttributeError", "readonly attribute");

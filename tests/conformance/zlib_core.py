@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import sys
 import zlib
 
 
@@ -56,7 +57,11 @@ t(zlib.crc32, b'a', b'b')
 t(zlib.crc32, bytearray(b'abc'))
 t(zlib.crc32, memoryview(b'abc'))
 t(zlib.crc32, 1.5)
-print(zlib.compress(b''), zlib.compress(b'a'*100, 1), zlib.compress(b'a'*100, 9), zlib.compress(b'abc', 0))
+# CPython 3.14+ on Windows links zlib-ng, whose level-1 output differs from classic zlib (and from the JDK).
+if sys.platform == 'win32' and sys.version_info >= (3, 14):
+    print(zlib.compress(b''), zlib.decompress(zlib.compress(b'a'*100, 1)) == b'a'*100, zlib.compress(b'a'*100, 9), zlib.compress(b'abc', 0))
+else:
+    print(zlib.compress(b''), zlib.compress(b'a'*100, 1), zlib.compress(b'a'*100, 9), zlib.compress(b'abc', 0))
 print(zlib.compress(b'hello', wbits=-15), zlib.compress(b'hello', wbits=31))
 print(zlib.decompress(zlib.compress(b'hello', wbits=31), 31), zlib.decompress(zlib.compress(b'hello', wbits=31), 47), zlib.decompress(zlib.compress(b'hello'), 47))
 print(zlib.decompress(zlib.compress(b'hello', wbits=-15), -15))

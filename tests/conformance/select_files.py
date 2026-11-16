@@ -12,6 +12,42 @@ def t(f, *a, **k):
         print(type(e).__name__, e)
 
 
+import sys
+
+if sys.platform == 'win32':
+    # Windows: select() takes sockets only (no poll/epoll/PIPE_BUF/POLL*); errors are WinErrors.
+    def w(f, *a, **k):
+        try:
+            print(repr(f(*a, **k)))
+        except BaseException as e:
+            print(type(e).__name__, e.args[0], getattr(e, 'winerror', None), e)
+
+    print(sorted(n for n in dir(select) if not n.startswith('__')))
+    print(select.error is OSError, hasattr(select, 'poll'), hasattr(select, 'epoll'), hasattr(select, 'PIPE_BUF'), hasattr(select, 'POLLIN'))
+    w(select.select, [], [], [], 0)     # WSAStartup has not run: no socket module imported yet
+    import socket
+    w(select.select, [], [], [], 0)
+    w(select.select, [], [], [], 0.05)
+    w(select.select, [], [], [], None)
+    w(select.select, [-1], [], [], 0)
+    w(select.select, [0], [], [], 0)
+    w(select.select, [], [1], [], 0)
+    w(select.select, [], [], [2], 0)
+    w(select.select, ['x'], [], [], 0)
+    w(select.select, 5, [], [], 0)
+    w(select.select, [], [], [], -1)
+    w(select.select, [], [], [], 'a')
+    w(select.select, [], [], [], 0, 1)
+    w(select.select, [])
+    w(select.select, [0] * 513, [], [], 0)
+
+    class Obj:
+        def fileno(self):
+            return 7
+
+    w(select.select, [Obj()], [], [], 0)
+    raise SystemExit(0)
+
 print(select.select([], [], [], 0))
 t(select.select, [-1], [], [], 0)
 t(select.select, ['x'], [], [], 0)

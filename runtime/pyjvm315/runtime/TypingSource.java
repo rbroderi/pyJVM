@@ -33,6 +33,10 @@ NoDefault = NoDefaultType()
 NoDefaultType.__module__ = 'typing'
 
 
+if sys.version_info >= (3, 14):
+    Union = type(int | str)
+
+
 def _caller_module():
     try:
         return sys._getframe(2).f_globals.get('__name__', '__main__')

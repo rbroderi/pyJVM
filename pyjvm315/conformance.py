@@ -32,7 +32,9 @@ def _run(cmd: list[str], *, cwd: Path | None = None, extra_env: dict[str, str] |
     env.update(extra_env or {})
     env.setdefault("PYTHONHASHSEED", "0")
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
+    # Both sides write UTF-8 (PYTHONIOENCODING, -Dstdout.encoding); decode it as such rather than with the host's locale
+    # codec, which is cp1252 on a Windows host below 3.15 (no UTF-8 mode by default).
+    return subprocess.run(cmd, cwd=cwd, encoding="utf-8", errors="replace", capture_output=True, env=env)
 
 
 def _stdout(proc: subprocess.CompletedProcess[str]) -> str:
@@ -184,6 +186,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--selfhosted", action="store_true",
                     help="run exec/eval/compile through the self-hosted compiler on the JVM (no host Python)")
     ns = ap.parse_args(argv)
+    # The program is compiled on this interpreter (its ast.parse grammar, its annotation semantics), so a lane is
+    # only tested faithfully when the reference is the same version: run each lane under its own CPython.
+    host, ref = tuple(sys.version_info[:2]), tuple(reference_version(ns.python))
+    if host != ref:
+        ap.error("--python is CPython %d.%d but this runner is %d.%d; run the conformance runner under the lane's "
+                 "own interpreter (e.g. python3.13 -m pyjvm315.conformance ... --python python3.13)" % (ref + host))
     results = run_suite(ns.path, ns.python, ns.java, target=ns.target, selfhosted=ns.selfhosted)
 
     passed = sum(r.status == "PASS" for r in results)

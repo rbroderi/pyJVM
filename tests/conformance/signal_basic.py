@@ -11,6 +11,68 @@ def t(f, *a, **k):
         print(type(e).__name__, e)
 
 
+import sys
+
+if sys.platform == 'win32':
+    # Windows: only SIGABRT, SIGBREAK, SIGFPE, SIGILL, SIGINT, SIGSEGV, SIGTERM, NSIG == 23, no alarm/itimer/masks/pause.
+    def w(label, f, *a, **k):
+        try:
+            print(label, repr(f(*a, **k)))
+        except BaseException as e:
+            print(label, type(e).__name__, e.args[:2], getattr(e, 'winerror', None))
+
+    print(sorted(n for n in dir(signal) if not n.startswith('_')))
+    print(signal.NSIG, int(signal.SIGINT), int(signal.SIGILL), int(signal.SIGFPE), int(signal.SIGSEGV), int(signal.SIGTERM),
+          int(signal.SIGBREAK), int(signal.SIGABRT), int(signal.CTRL_C_EVENT), int(signal.CTRL_BREAK_EVENT))
+    print([hasattr(signal, n) for n in ('SIGKILL', 'SIGALRM', 'SIGUSR1', 'SIGCHLD', 'SIGHUP', 'alarm', 'setitimer', 'getitimer',
+                                         'ITIMER_REAL', 'pthread_sigmask', 'pthread_kill', 'sigpending', 'sigwait', 'siginterrupt',
+                                         'pause', 'Sigmasks', 'ItimerError')])
+    print(list(signal.Signals), list(signal.Handlers))
+    print(repr(signal.Signals(15)), signal.Signals.SIGBREAK.name, repr(signal.SIG_IGN), int(signal.SIG_DFL))
+    print(sorted(signal.valid_signals()), len(signal.valid_signals()))
+    print(signal.getsignal(signal.SIGINT) is signal.default_int_handler, repr(signal.getsignal(signal.SIGTERM)),
+          repr(signal.getsignal(signal.SIGABRT)), repr(signal.getsignal(signal.SIGBREAK)), signal.getsignal(1), signal.getsignal(3))
+    for n in (0, 1, 2, 4, 8, 11, 15, 21, 22, 23, 64, -1):
+        w('strsignal %d' % n, signal.strsignal, n)
+    for n in (0, 1, 3, 9, 14, 23, 64, 65, -1):
+        w('signal %d' % n, signal.signal, n, signal.SIG_IGN)
+        w('getsignal %d' % n, signal.getsignal, n)
+        w('raise_signal %d' % n, signal.raise_signal, n)
+    w('signal huge', signal.signal, 2 ** 31, signal.SIG_IGN)
+    w('signal bad handler', signal.signal, signal.SIGINT, 'x')
+    w('signal int handler', signal.signal, signal.SIGINT, 5)
+    w('signal None handler', signal.signal, signal.SIGINT, None)
+    w('signal bad both', signal.signal, 3, 'x')
+
+    seen = []
+
+    def handler(num, frame):
+        seen.append(num)
+
+    old = signal.signal(signal.SIGINT, handler)
+    print(old is signal.default_int_handler, signal.getsignal(signal.SIGINT) is handler)
+    signal.raise_signal(signal.SIGINT)
+    print(seen)
+    print(int(signal.signal(signal.SIGTERM, handler)), signal.getsignal(signal.SIGTERM) is handler)
+    signal.raise_signal(signal.SIGTERM)
+    signal.raise_signal(signal.SIGINT)
+    print(seen)
+    signal.signal(signal.SIGBREAK, handler)
+    signal.raise_signal(signal.SIGBREAK)
+    print(seen[-1])
+    print(signal.signal(signal.SIGTERM, signal.SIG_IGN) is handler)
+    signal.raise_signal(signal.SIGTERM)
+    print(len(seen), repr(signal.getsignal(signal.SIGTERM)))
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    w('raise SIGINT', signal.raise_signal, signal.SIGINT)
+    w('default_int_handler', signal.default_int_handler, 2, None)
+    signal.signal(signal.SIGBREAK, lambda n, f: 1 / 0)
+    w('raise SIGBREAK', signal.raise_signal, signal.SIGBREAK)
+    w('set_wakeup_fd -1', signal.set_wakeup_fd, -1)
+    w('set_wakeup_fd 5', signal.set_wakeup_fd, 5)
+    w('Signals(3)', signal.Signals, 3)
+    raise SystemExit(0)
+
 print(*map(int, (signal.SIGINT, signal.SIGTERM, signal.SIGKILL, signal.SIGUSR1, signal.SIGALRM, signal.SIGCHLD, signal.SIGRTMIN, signal.SIGRTMAX)), signal.NSIG)
 print(repr(signal.SIGINT), signal.SIGINT.name, int(signal.SIGHUP), repr(signal.Signals(15)), signal.Signals.SIGPIPE.value)
 print(int(signal.SIG_DFL), int(signal.SIG_IGN), repr(signal.SIG_IGN), int(signal.Handlers.SIG_DFL), int(signal.Sigmasks.SIG_BLOCK), signal.ITIMER_REAL)

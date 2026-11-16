@@ -173,7 +173,7 @@ final class ArrayMethods {
 
     static void frombytes(ArrayData a, byte[] data) {
         if (data.length % a.isz != 0) throw new PyException("ValueError", "bytes length not a multiple of item size");
-        if (a.unicode()) validateCodePoints(a, data);
+        if (a.unicode() && a.isz == 4) validateCodePoints(a, data);
         int old = a.n;
         a.ensure(old + data.length / a.isz);
         System.arraycopy(data, 0, a.buf, old * a.isz, data.length);
@@ -206,12 +206,13 @@ final class ArrayMethods {
     }
 
     static void appendString(ArrayData a, String s) {
+        if (a.isz == 2) { for (int i = 0; i < s.length(); i++) a.append(String.valueOf(s.charAt(i))); return; }
         s.codePoints().forEach(cp -> a.append(new String(Character.toChars(cp))));
     }
 
     static Object tounicode(ArrayData a) {
         StringBuilder sb = new StringBuilder(a.n);
-        for (int i = 0; i < a.n; i++) sb.appendCodePoint((int) a.raw(i, 4));
+        for (int i = 0; i < a.n; i++) sb.appendCodePoint((int) a.raw(i, a.isz));
         return sb.toString();
     }
 
@@ -277,7 +278,8 @@ final class ArrayMethods {
     static int mformat(char tc) {
         return switch (tc) {
             case 'B' -> 0; case 'b' -> 1; case 'H' -> 2; case 'h' -> 4; case 'I' -> 6; case 'i' -> 8;
-            case 'L', 'Q' -> 10; case 'l', 'q' -> 12; case 'f' -> 14; case 'd' -> 16; case 'u', 'w' -> 20;
+            case 'L' -> ArrayData.WIN ? 6 : 10; case 'Q' -> 10; case 'l' -> ArrayData.WIN ? 8 : 12; case 'q' -> 12;
+            case 'f' -> 14; case 'd' -> 16; case 'u' -> ArrayData.WIN ? 18 : 20; case 'w' -> 20;
             case 'F' -> 22; case 'D' -> 24; case 'e' -> 26;
             default -> -1;
         };
@@ -310,7 +312,9 @@ final class ArrayMethods {
         Object it = NativeSubclass.unwrap(args.get(3));
         if (!(it instanceof PyBytes bytes)) throw new PyException("TypeError", "fourth argument should be bytes, not " + PyRuntime.typeName(it));
         char code = tc.equals("Zf") ? 'F' : tc.equals("Zd") ? 'D' : tc.charAt(0);
-        if (mf <= 13) code = integerCode((int) mf);
+        if (mf <= 13 && !(ArrayData.WIN && tc.length() == 1 && mformat(tc.charAt(0)) == mf)) code = integerCode((int) mf);
+        // CPython on Windows cannot decode UTF-32 data into a 2-byte wchar_t array.
+        if (ArrayData.WIN && code == 'u' && (mf == 20 || mf == 21)) throw new PyException("ValueError", "string length not a multiple of item size");
         ArrayData d = new ArrayData(code);
         PyInstance out = newInstance(pc, d);
         if (mf == mformat(code) && mf >= 0) { frombytes(d, bytes.data); return out; }
@@ -325,7 +329,7 @@ final class ArrayMethods {
         boolean signed = ((mf - 2) / 2) % 2 == 1;
         return switch (size) {
             case 2 -> signed ? 'h' : 'H';
-            case 4 -> signed ? 'i' : 'I';
+            case 4 -> ArrayData.WIN ? (signed ? 'l' : 'L') : (signed ? 'i' : 'I');
             default -> signed ? 'q' : 'Q';
         };
     }

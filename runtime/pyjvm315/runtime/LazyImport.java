@@ -168,9 +168,10 @@ public final class LazyImport {
         return sb.toString();
     }
 
+    /** Records the names still waiting to load; CPython leaves out a module that is already in sys.modules. */
     private static void track(Lazy z) {
-        LAZY_MODULES.add(z.name);
-        if (z.attr != null) LAZY_MODULES.add(z.name + "." + z.attr);
+        if (!isLoaded(z.name)) LAZY_MODULES.add(z.name);
+        if (z.attr != null && !isLoaded(z.name + "." + z.attr)) LAZY_MODULES.add(z.name + "." + z.attr);
     }
 
     // ------------------------------------------------------------------ resolution
@@ -219,14 +220,8 @@ public final class LazyImport {
         g.put("__package__", z.pkg);
         PyTuple fromlist = new PyTuple();
         if (z.attr != null) fromlist.items.add(z.attr);
-        Object imported;
-        try {
-            imported = ImportSupport.doImport(z.name, g, null, fromlist.items.isEmpty() ? null : fromlist, 0);
-        } catch (PyException e) {
-            // a missing submodule of an `as` import reads like a missing name of its package
-            if (z.attr != null || z.top || !e.typeName.equals("ModuleNotFoundError") || z.name.indexOf('.') < 0) throw e;
-            imported = ImportSupport.doImport(z.name.substring(0, z.name.indexOf('.')), g, null, null, 0);
-        }
+        // a missing submodule of an `as` import stays a ModuleNotFoundError naming the submodule, as in CPython 3.15.2
+        Object imported = ImportSupport.doImport(z.name, g, null, fromlist.items.isEmpty() ? null : fromlist, 0);
         if (z.attr != null) return ImportSupport.importFrom(imported, z.attr);
         if (z.top) return imported;
         String[] parts = z.name.split("\\.");   // `import a.b as c` is IMPORT_NAME a.b, then IMPORT_FROM b

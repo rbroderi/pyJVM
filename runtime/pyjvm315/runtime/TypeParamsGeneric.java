@@ -64,6 +64,11 @@ final class TypeParamsGeneric extends TypeParamsObject {
 
     /** list[int] and friends. */
     static Object subscriptBuiltin(PyBuiltinType type, Object key) {
+        if (type.name.equals("Union") && LangVersion.atLeast(3, 14)) {   // typing.Union[X, Y] is types.UnionType's __class_getitem__
+            List<Object> items = key instanceof PyTuple t ? t.items : List.of(key);
+            if (items.isEmpty()) throw new PyException("TypeError", "Cannot take a Union of no types.");
+            return TypeParamsUnion.of(items);
+        }
         if (!SUBSCRIPTABLE.contains(type.name)) throw new PyException("TypeError", "type '" + type.name + "' is not subscriptable");
         return new TypeParamsGeneric(type, keyArgs(key), true);
     }

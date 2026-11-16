@@ -66,7 +66,7 @@ public final class IoModule {
         fn(m, "text_encoding", (a, k) -> {
             Object enc = a.isEmpty() ? k.get("encoding") : a.get(0);
             if (enc != null) return enc;
-            return LangVersion.atLeast(3, 15) ? "utf-8" : "locale";
+            return LocaleModule.utf8Mode() ? "utf-8" : "locale";
         });
         module = m;
         return m;

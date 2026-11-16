@@ -87,7 +87,8 @@ final class SysExtras {
             String f = names.get(i);
             values[i] = switch (f) {
                 case "dont_write_bytecode" -> noWrite ? 1L : 0L;
-                case "hash_randomization", "utf8_mode", "gil" -> 1L;
+                case "hash_randomization", "gil" -> 1L;
+                case "utf8_mode" -> LocaleModule.utf8Mode() ? 1L : 0L;
                 case "int_max_str_digits" -> 4300L;
                 case "dev_mode", "safe_path" -> (Object) false;
                 default -> 0L;
@@ -246,8 +247,9 @@ final class SysExtras {
         if (prefix == null && stdlibDir instanceof String s && java.nio.file.Path.of(s).getParent() != null) prefix = java.nio.file.Path.of(s).getParent().toString();
         if (prefix == null) prefix = "/usr";
         for (String n : new String[]{"prefix", "exec_prefix", "base_prefix", "base_exec_prefix"}) m.attrs.put(n, prefix);
-        m.attrs.put("platlibdir", "lib");
-        m.attrs.put("abiflags", "");
+        // CPython on Windows: platlibdir is "DLLs" and there is no abiflags
+        m.attrs.put("platlibdir", ImportSupport.WINDOWS ? "DLLs" : "lib");
+        if (!ImportSupport.WINDOWS) m.attrs.put("abiflags", "");
         m.attrs.put("float_repr_style", "short");
         m.attrs.put("api_version", 1013L);
         m.attrs.put("hexversion", hexversion());

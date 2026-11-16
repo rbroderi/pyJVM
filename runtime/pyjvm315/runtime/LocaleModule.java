@@ -7,6 +7,26 @@ import static pyjvm315.runtime.NativeTypes.*;
 final class LocaleModule {
     private LocaleModule() {}
 
+    private static volatile String localeEncoding;
+
+    /** {@code _locale.getencoding()}: "cp" + the ANSI code page on Windows, nl_langinfo(CODESET) ("UTF-8") elsewhere. */
+    static String localeEncoding() {
+        String e = localeEncoding;
+        if (e == null) localeEncoding = e = ImportSupport.WINDOWS ? "cp" + WindowsHandles.acp() : "UTF-8";
+        return e;
+    }
+
+    /** {@code sys.flags.utf8_mode}: PYTHONUTF8=0/1 decides; otherwise on by default from 3.15 (PEP 686), off before. */
+    static boolean utf8Mode() {
+        String v = System.getenv("PYTHONUTF8");
+        if ("1".equals(v)) return true;
+        if ("0".equals(v)) return false;
+        return LangVersion.atLeast(3, 15);
+    }
+
+    /** The encoding of a text stream opened with encoding=None. */
+    static String defaultTextEncoding() { return utf8Mode() ? "utf-8" : localeEncoding(); }
+
     static PyModule create() {
         PyModule m = new PyModule("_locale", "pyjvm315.runtime.LocaleModule");
         PyClass error = (PyClass) PyRuntime.classCreate("Error", "_locale");
@@ -17,7 +37,7 @@ final class LocaleModule {
         for (int i = 0; i < cats.length; i++) m.attrs.put(cats[i], (long) i);
         m.attrs.put("CHAR_MAX", 127L);
         m.attrs.put("CODESET", 14L);
-        fn(m, "getencoding", (a, k) -> LangVersion.atLeast(3, 15) ? "utf-8" : "UTF-8");
+        fn(m, "getencoding", (a, k) -> localeEncoding());
         fn(m, "setlocale", (a, k) -> {
             Object loc = a.size() > 1 ? a.get(1) : k.get("locale");
             if (loc == null || "".equals(loc) || "C".equals(loc) || "POSIX".equals(loc) || "C.UTF-8".equals(loc)) return "C";

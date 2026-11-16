@@ -12,7 +12,8 @@ import java.util.Map;
  * A minimal {@code select} module: {@code select()} and {@code poll()} over the descriptors this runtime has (regular
  * files and directories, which POSIX always reports ready, and the standard streams, where stdin is readable when the
  * JVM reports buffered input). There are no pipes or sockets here, so there is no {@code epoll}/{@code kqueue}. A wait
- * with nothing ready runs signal handlers as signals arrive.
+ * with nothing ready runs signal handlers as signals arrive. On Windows only {@code select()} exists, over real Winsock
+ * sockets ({@link WindowsSockets#select}); anything that is not a socket fails with the system's error, as in CPython.
  */
 final class SelectModule {
     private SelectModule() {}
@@ -20,9 +21,17 @@ final class SelectModule {
     private static final String ME = SelectModule.class.getName();
     private static final int POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32;
     static PyClass pollClass;
+    /** Windows: whether WSAStartup has run, which in CPython means {@code _socket} was imported. */
+    static volatile boolean wsaStarted;
 
     static synchronized PyModule create() {
         PyModule m = new PyModule("select", ME);
+        if (ImportSupport.WINDOWS) {
+            // CPython on Windows: only select() (sockets only) and its error alias; no poll, epoll, PIPE_BUF or POLL* constants
+            m.attrs.put("error", PyRuntime.builtinType("OSError"));
+            fn(m, "select", (a, k) -> select(a, k));
+            return m;
+        }
         String[] names = {"POLLIN", "POLLPRI", "POLLOUT", "POLLERR", "POLLHUP", "POLLNVAL", "POLLRDNORM", "POLLRDBAND", "POLLWRNORM",
             "POLLWRBAND", "POLLMSG", "POLLRDHUP", "PIPE_BUF"};
         long[] vals = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 8192, 4096};
@@ -106,11 +115,51 @@ final class SelectModule {
             timeout = t instanceof Double d ? d : IoUtil.asLong(t);
             if (timeout < 0) throw new PyException("ValueError", "timeout must be non-negative");
         }
+        if (ImportSupport.WINDOWS) {
+            // Winsock select() takes sockets only; anything else (and three empty sets) is the system's error, as in CPython
+            long[][] fds = new long[3][];
+            List<List<Object>> lists = List.of(rl, wl, xl);
+            for (int i = 0; i < 3; i++) {
+                fds[i] = new long[lists.get(i).size()];
+                for (int j = 0; j < fds[i].length; j++) fds[i][j] = fdOf(lists.get(i).get(j));
+            }
+            if (rl.size() > WindowsSockets.FD_SETSIZE || wl.size() > WindowsSockets.FD_SETSIZE || xl.size() > WindowsSockets.FD_SETSIZE)
+                throw new PyException("ValueError", "too many file descriptors in select()");
+            if (!wsaStarted) throw WindowsNative.winError(10093, null);
+            return selectSockets(lists, fds, timeout);
+        }
         long[] rf = fds(rl), wf = fds(wl);
         fds(xl);
         List<Object> ro = new ArrayList<>(), wo = new ArrayList<>();
         waitUntil(() -> collect(rl, rf, wl, wf, ro, wo), timeout);
         return tuple(ro, wo, new ArrayList<Object>());
+    }
+
+    /**
+     * Windows: Winsock select(). A long wait runs in slices so that Python signal handlers get their turn (a Winsock
+     * select cannot be interrupted); {@code timeout} is in seconds, negative for none.
+     */
+    private static Object selectSockets(List<List<Object>> lists, long[][] fds, double timeout) {
+        long end = timeout < 0 ? Long.MAX_VALUE : System.nanoTime() + (long) (timeout * 1e9);
+        int[] err = new int[1];
+        while (true) {
+            long micros = 50_000;
+            if (end != Long.MAX_VALUE) micros = Math.max(0, Math.min(micros, (end - System.nanoTime()) / 1000));
+            long[][] ready = WindowsSockets.select(fds[0], fds[1], fds[2], micros, err);
+            if (ready == null) throw WindowsNative.winError(err[0], null);
+            boolean any = ready[0].length + ready[1].length + ready[2].length > 0;
+            if (any || (end != Long.MAX_VALUE && System.nanoTime() >= end)) {
+                List<Object> out0 = new ArrayList<>(), out1 = new ArrayList<>(), out2 = new ArrayList<>();
+                List<List<Object>> outs = List.of(out0, out1, out2);
+                for (int i = 0; i < 3; i++) {
+                    java.util.Set<Long> hit = new java.util.HashSet<>();
+                    for (long s : ready[i]) hit.add(s);
+                    for (int j = 0; j < fds[i].length; j++) if (hit.contains(fds[i][j])) outs.get(i).add(lists.get(i).get(j));
+                }
+                return tuple(out0, out1, out2);
+            }
+            if (SignalModule.active) SignalModule.dispatchPending();
+        }
     }
 
     private static long[] fds(List<Object> items) {

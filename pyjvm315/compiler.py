@@ -143,6 +143,9 @@ class Scope:
                  local_names: set[str] | None = None, free_names: set[str] | None = None,
                  nonlocal_names: set[str] | None = None) -> None:
         self.checked_names: set[str] = set()
+        # In the resume method of a generator or coroutine: emits a `return` (value in the given slot) as generatorFinish, so
+        # statements compiled as ordinary code (a try without a yield inside) finish the generator instead of yielding the value.
+        self.gen_return = None
         self.namespace_slot: int | None = None
         self.slots: dict[str, int] = {}
         self.next_slot = start_slot
@@ -198,6 +201,7 @@ class Compiler:
         # dynamic: exec()/eval() compilation. Module-level names live in caller-supplied
         # namespace mappings (static fields __py_globals/__py_locals) instead of static fields.
         self.dynamic = dynamic
+        self.run_time_star = False   # the module has a star import whose names are bound only when it runs
         self.mode = mode
         self.optimize = optimize                 # 0 keeps asserts, docstrings and __debug__; 1 drops asserts; 2 also docstrings
         self.preparsed_tree = tree               # compile(<ast.AST>): skip parsing
@@ -340,6 +344,7 @@ class Compiler:
                         exports=self.import_exports.get(resolved or "")
                         if exports is None:
                             if self.dynamic or self.import_map.get(resolved or "") is None:
+                                self.run_time_star = True   # its names (an exception class like socket.error) are known only at run time
                                 continue   # resolved when the statement runs (a static module reports this later)
                             raise CompileError(f"star import from {resolved!r} requires a statically analyzable __all__ or module exports")
                         names.update(exports)
@@ -1470,6 +1475,8 @@ class Compiler:
             b.aload(gen_slot); b.aload(ret_slot)
             b.invokestatic(RUNTIME,"generatorFinish",f"({OBJ}{OBJ}){OBJ}"); b.areturn()
 
+        scope.gen_return=_route_return
+
         def emit_with_exit(payload):
             # The exit call runs outside its own with block's exception range, so a
             # failing __exit__ is not offered to the same manager a second time.
@@ -2456,13 +2463,20 @@ class Compiler:
             v.visit(stmt)
         return v.found
 
-    def _forward_return_after_cleanup(self, ctx: FinallyContext, b: CodeBuilder) -> None:
+    def _emit_return(self, b: CodeBuilder, scope: Scope) -> None:
+        """Return the value on the stack: from a plain method, or by finishing the generator the code belongs to."""
+        if scope.gen_return is None:
+            b.areturn(); return
+        ret = scope.temp(); b.astore(ret)
+        scope.gen_return(ret)
+
+    def _forward_return_after_cleanup(self, ctx: FinallyContext, b: CodeBuilder, scope: Scope) -> None:
         b.aload(ctx.return_slot)
         if self.finally_stack:
             outer = self.finally_stack[-1]
             b.astore(outer.return_slot); b.goto(outer.return_entry)
         else:
-            b.areturn()
+            self._emit_return(b, scope)
 
     def _branch_cleanup_entry(self, ctx: FinallyContext, target: object, b: CodeBuilder) -> object:
         # A loop nested inside this context does not leave it on break/continue.
@@ -2521,7 +2535,7 @@ class Compiler:
         # Return completion. The body stored the return value before jumping here.
         b.mark(return_entry)
         self._emit_context_cleanup(ctx, b, scope, in_function)
-        self._forward_return_after_cleanup(ctx, b)
+        self._forward_return_after_cleanup(ctx, b, scope)
 
         # break/continue completions. Each distinct JVM destination gets a cleanup copy.
         for target, entry in list(ctx.branch_entries.items()):
@@ -2561,7 +2575,7 @@ class Compiler:
         # any outer with/finally context.
         b.mark(return_entry)
         self._emit_context_cleanup(ctx, b, scope, in_function)
-        self._forward_return_after_cleanup(ctx, b)
+        self._forward_return_after_cleanup(ctx, b, scope)
         for target, entry in list(ctx.branch_entries.items()):
             b.mark(entry)
             self._emit_context_cleanup(ctx, b, scope, in_function)
@@ -2896,7 +2910,7 @@ class Compiler:
                     if self.finally_stack:
                         ctx = self.finally_stack[-1]; b.astore(ctx.return_slot); b.goto(ctx.return_entry)
                     else:
-                        b.areturn()
+                        self._emit_return(b, scope)
                     return True
                 case ast.If(test=test, body=body, orelse=orelse):
                     else_label, end_label = b.label(), b.label()
@@ -3530,6 +3544,8 @@ class Compiler:
             return False
         if name in {"object", "int", "bool", "float", "complex", "str", "bytes", "bytearray", "list", "tuple", "dict", "set", "frozenset", "range", "type", "property"}:
             return True
+        if self.run_time_star and name not in {"EnvironmentError", "IOError", "WindowsError", "PythonFinalizationError"}:
+            return True   # may be bound by the star import (`except (error, ...)` in socket.py), so it is evaluated, not matched by name
         return name in self.global_names or scope.has(name) or name in scope.local_names or name in scope.free_names
 
     def _emit_except_match(self, type_node: ast.expr, exc_slot: int, next_handler, b: CodeBuilder, scope: Scope) -> None:

@@ -74,7 +74,8 @@ final class ZlibStreams {
             if (headerDone || mode != 2) return;
             headerDone = true;
             int xfl = level == 9 ? 2 : (strategy >= 2 || (level >= 0 && level < 2)) ? 4 : 0;
-            out.write(new byte[]{0x1f, (byte) 0x8b, 8, 0, 0, 0, 0, 0, (byte) xfl, 3}, 0, 10);
+            // OS byte: zlib's OS_CODE is 10 when built for Windows, 3 (Unix) elsewhere
+            out.write(new byte[]{0x1f, (byte) 0x8b, 8, 0, 0, 0, 0, 0, (byte) xfl, (byte) (ImportSupport.WINDOWS ? 10 : 3)}, 0, 10);
         }
 
         private void pump(ByteArrayOutputStream out, int flush) {
