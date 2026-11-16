@@ -23,6 +23,7 @@ are runtime functions (AnnotationSupport.java).
 from __future__ import annotations
 
 import ast
+import sys
 
 FORMAT = "__pyjvm_fmt__"
 CLASSDICT = "__pyjvm_cd__"
@@ -534,7 +535,9 @@ class _Lowering(ast.NodeTransformer):
         a = node.args
         owner = self.state.class_name if self.state.kind == "class" else None
         found: list[tuple[str, ast.arg | None]] = []
-        for arg in a.posonlyargs + a.args:
+        # CPython up to 3.14 emits the annotations of the positional-or-keyword parameters before those of the
+        # positional-only ones (codegen_argannotations order); 3.15 uses declaration order.
+        for arg in (a.posonlyargs + a.args if sys.version_info[:2] >= (3, 15) else a.args + a.posonlyargs):
             found.append((arg.arg, arg))
         if a.vararg is not None:
             found.append((a.vararg.arg, a.vararg))

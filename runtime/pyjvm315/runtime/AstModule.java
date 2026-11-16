@@ -552,8 +552,8 @@ public final class AstModule {
                     Object value = n.fields.get(name);
                     if (value == null && n.cls.lookupAttr(name) == null) { keywords = true; continue; }
                     boolean special = n.cls.name.equals("Constant") || n.cls.name.equals("MatchSingleton");
-                    // 3.14+: a default ctx=Load() is not shown
-                    if (!showEmpty && LangVersion.atLeast(3, 14) && name.equals("ctx") && value instanceof PyInstance cv && cv.cls.name.equals("Load")) continue;
+                    // 3.15+: a default ctx=Load() is not shown
+                    if (!showEmpty && LangVersion.atLeast(3, 15) && name.equals("ctx") && value instanceof PyInstance cv && cv.cls.name.equals("Load")) continue;
                     if (!showEmpty && (value == null || (value instanceof List<?> l && l.isEmpty())) && !special) { buffer.add(pyRepr(value)); continue; }
                     else if (!keywords) { args.addAll(buffer); buffer.clear(); }
                     Result r = format(value, level);

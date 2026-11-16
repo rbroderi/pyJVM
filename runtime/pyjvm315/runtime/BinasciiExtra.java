@@ -19,7 +19,7 @@ final class BinasciiExtra {
     static final byte[] STD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
     static void install(PyModule m) {
-        if (!LangVersion.atLeast(3, 14)) return;
+        if (!LangVersion.atLeast(3, 15)) return;
         String[][] consts = {
             {"BASE64_ALPHABET", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"},
             {"URLSAFE_BASE64_ALPHABET", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"},
@@ -51,8 +51,10 @@ final class BinasciiExtra {
     // ---- b2a_base64 --------------------------------------------------------------------------------------
 
     static Object b2aBase64(List<Object> a, Map<Object, Object> k) {
+        boolean modern = LangVersion.atLeast(3, 15);
+        // before 3.15 Argument Clinic checks the total count first (data plus the one keyword, newline)
+        if (!modern && a.size() + k.size() > 2) throw new PyException("TypeError", "b2a_base64() takes at most 2 arguments (" + (a.size() + k.size()) + " given)");
         if (a.size() != 1) throw new PyException("TypeError", "b2a_base64() takes exactly 1 positional argument (" + a.size() + " given)");
-        boolean modern = LangVersion.atLeast(3, 14);
         String[] names = modern ? new String[]{"data", "padded", "wrapcol", "newline", "alphabet"} : new String[]{"data", "newline"};
         Object[] p = NativeArgs.parse("b2a_base64", List.of(a.get(0)), k, names, 1, 1);
         byte[] in = bytesArg(a.get(0));
@@ -87,7 +89,7 @@ final class BinasciiExtra {
 
     static Object a2bBase64(List<Object> a, Map<Object, Object> k) {
         if (a.size() != 1) throw new PyException("TypeError", "a2b_base64() takes exactly 1 positional argument (" + a.size() + " given)");
-        boolean modern = LangVersion.atLeast(3, 14);
+        boolean modern = LangVersion.atLeast(3, 15);
         String[] names = modern ? new String[]{"data", "strict_mode", "padded", "alphabet", "ignorechars", "canonical"} : new String[]{"data", "strict_mode"};
         Object[] p = NativeArgs.parse("a2b_base64", List.of(a.get(0)), k, names, 1, 1);
         byte[] in = asciiArg(a.get(0));

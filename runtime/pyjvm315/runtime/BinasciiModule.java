@@ -122,7 +122,7 @@ public final class BinasciiModule {
     }
 
     static Object a2bHex(String fname, List<Object> a, Map<Object, Object> k) {
-        boolean modern = LangVersion.atLeast(3, 14);
+        boolean modern = LangVersion.atLeast(3, 15);
         Object arg;
         boolean[] ignore = null;
         if (modern) {

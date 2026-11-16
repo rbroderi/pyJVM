@@ -113,7 +113,9 @@ public final class ArrayModule {
                 : "array() argument 1 must be a unicode character, not " + PyRuntime.typeName(tcObj));
         }
         if (!LangVersion.atLeast(3, 15) && tc.codePointCount(0, tc.length()) != 1)
-            throw new PyException("TypeError", "array() argument 1 must be a unicode character, not str");
+            throw new PyException("TypeError", LangVersion.atLeast(3, 14)
+                ? "array() argument 1 must be a unicode character, not a string of length " + tc.codePointCount(0, tc.length())
+                : "array() argument 1 must be a unicode character, not str");
         if (!validCode(tc)) {
             throw new PyException("ValueError", LangVersion.atLeast(3, 15)
                 ? "bad typecode (must be b, B, u, w, h, H, i, I, l, L, q, Q, e, f, d, Zf or Zd)"

@@ -413,6 +413,14 @@ final class SysExtras {
             fn(m, "is_remote_debug_enabled", (a, k) -> false);
             fn(m, "remote_exec", (a, k) -> { throw new PyException("RuntimeError", "Remote debugging is not supported by pyJVM"); });
             fn(m, "_is_immortal", (a, k) -> a.get(0) == null || a.get(0) instanceof Boolean);
+            if (!LangVersion.atLeast(3, 15))   // 3.14 only: dataclasses(slots=True) drops the old class's __dict__/__weakref__ descriptors
+                fn(m, "_clear_type_descriptors", (a, k) -> {
+                    if (a.size() != 1 || !k.isEmpty()) throw new PyException("TypeError", "_clear_type_descriptors() takes exactly one argument (" + (a.size() + k.size()) + " given)");
+                    Object t = a.get(0);
+                    if (t instanceof PyClass cls) { cls.attrs.remove("__dict__"); cls.attrs.remove("__weakref__"); return null; }
+                    if (t instanceof PyBuiltinType) throw new PyException("TypeError", "argument is immutable");
+                    throw new PyException("TypeError", "_clear_type_descriptors() argument must be type, not " + PyRuntime.typeName(t));
+                });
             PyModule jit = new PyModule("sys._jit", "pyjvm315.runtime.SysExtras");
             fn(jit, "is_available", (a, k) -> false);
             fn(jit, "is_enabled", (a, k) -> false);

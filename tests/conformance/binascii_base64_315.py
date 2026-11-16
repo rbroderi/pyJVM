@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# pyjvm: requires-python >= 3.14
+# pyjvm: requires-python >= 3.15
 import binascii as b
 
 

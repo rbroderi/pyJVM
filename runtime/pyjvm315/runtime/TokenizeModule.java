@@ -181,8 +181,10 @@ public final class TokenizeModule {
             case Token.NL: s.pendingComment = null; return null;
             case Token.NEWLINE: {
                 Token c = s.pendingComment; s.pendingComment = null;
-                if (c != null) return info(Token.NEWLINE, c.string, c.startLine, c.startCol, c.endLine, c.endCol, lines(s, c.startLine, c.endLine));
-                return info(Token.NEWLINE, "", t.startLine, t.startCol, t.startLine, t.startCol, lines(s, t.startLine, t.startLine));
+                // the C tokenizer keeps the '\r' of a CRLF line ending in the parser's NEWLINE (one column wide)
+                String cr = t.string.equals("\r\n") ? "\r" : "";
+                if (c != null) return info(Token.NEWLINE, c.string + cr, c.startLine, c.startCol, c.endLine, c.endCol + cr.length(), lines(s, c.startLine, c.endLine));
+                return info(Token.NEWLINE, cr, t.startLine, t.startCol, t.startLine, t.startCol + cr.length(), lines(s, t.startLine, t.startLine));
             }
             case Token.INDENT: case Token.DEDENT: case Token.ENDMARKER: {
                 int line = t.startLine;

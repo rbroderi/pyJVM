@@ -73,7 +73,7 @@ final class Timsort {
     static int computeMinrun(int n) {
         int r = 0;
         while (n >= 64) { r |= n & 1; n >>= 1; }
-        return LangVersion.atLeast(3, 14) ? n : n + r;
+        return LangVersion.atLeast(3, 15) ? n : n + r;
     }
 
     private int runEnd(int lo, int minrun) {
@@ -91,7 +91,7 @@ final class Timsort {
         do {
             int n = countRun(lo, nremaining);
             if (n < minrun) {
-                int force = Math.min(nremaining, LangVersion.atLeast(3, 14) ? runEnd(lo, minrun) - lo : minrun);
+                int force = Math.min(nremaining, LangVersion.atLeast(3, 15) ? runEnd(lo, minrun) - lo : minrun);
                 binarysort(lo, lo + force, lo + n);
                 n = force;
             }

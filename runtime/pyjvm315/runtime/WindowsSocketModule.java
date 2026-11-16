@@ -189,7 +189,7 @@ final class WindowsSocketModule {
             Object v = o instanceof Boolean b ? (Object) (b ? 1L : 0L) : o;
             d = v instanceof BigInteger b ? b.doubleValue() : (Long) v;
         } else if (LangVersion.atLeast(3, 15)) throw new PyException("TypeError", "must be real number, not " + PyRuntime.typeName(o));
-        else throw new PyException("TypeError", "'" + PyRuntime.typeName(o) + "' object cannot be interpreted as an integer");   // 3.13 falls back to __index__
+        else throw new PyException("TypeError", "'" + PyRuntime.typeName(o) + "' object cannot be interpreted as an integer" + (LangVersion.atLeast(3, 14) ? " or float" : ""));   // 3.13 falls back to __index__
         if (Double.isNaN(d)) throw new PyException("ValueError", "Invalid value NaN (not a number)");
         if (d < 0) throw new PyException("ValueError", "Timeout value out of range");
         double ns = Math.ceil(d * 1e9);

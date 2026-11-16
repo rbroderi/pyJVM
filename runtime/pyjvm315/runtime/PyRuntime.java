@@ -3732,7 +3732,7 @@ public final class PyRuntime {
         if(builtin.name.equals("object") && (name.equals("__repr__") || name.equals("__str__") || name.equals("__hash__"))){
             if(name.equals("__reduce_ex__") || name.equals("__reduce__")) throw new PyException("NotImplementedError","object."+name+" is not implemented");
             requireArgs(name,args,1);
-            if(name.equals("__hash__")) return (long)System.identityHashCode(args[0]);
+            if(name.equals("__hash__")) return id(args[0]);   // the identity hash hash() gives an instance without __hash__
             if(name.equals("__str__")) return pyRepr(args[0]);
             if(args[0] instanceof PyInstance inst && inst.payload==null) return "<"+(inst.cls.moduleName.equals("builtins")?"":inst.cls.moduleName+".")+inst.cls.qualname+" object at 0x"+Long.toHexString((Long)id(args[0]))+">";
             return pyRepr(args[0]);
@@ -4223,7 +4223,7 @@ public final class PyRuntime {
             if(name.equals("__subclasses__"))return new NativeFunction("__subclasses__",(a,k)->PyClass.directSubclasses(cls));
             if(name.equals("mro"))return new NativeFunction("mro",(a,k)->new ArrayList<Object>(((PyTuple)getattr(cls,"__mro__")).items));
             if(name.equals("__new__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
-            if(name.equals("__eq__") || name.equals("__ne__"))return new BuiltinBoundMethod(builtinType("object"),name);
+            if(name.equals("__eq__") || name.equals("__ne__") || name.equals("__hash__"))return new BuiltinBoundMethod(builtinType("object"),name);   // inherited object slots (dataclasses reads C.__hash__)
             if(name.equals("__doc__"))return null;
             if(name.equals("__init__") && cls.exceptionBase==null)return new BuiltinBoundMethod(builtinType("object"),name);
             throw new PyException("AttributeError", "type object '"+cls.name+"' has no attribute '"+name+"'");

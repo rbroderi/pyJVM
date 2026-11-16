@@ -117,7 +117,7 @@ public final class StructModule {
         for (int i = 0; i < key.length(); i++) {
             char ch = key.charAt(i);
             if (ch >= 128 && formatObj instanceof String) {
-                if (LangVersion.atLeast(3, 14)) throw new PyException("ValueError", "non-ASCII character in struct format");
+                if (LangVersion.atLeast(3, 15)) throw new PyException("ValueError", "non-ASCII character in struct format");
                 PyRuntime.callMethod(key, "encode", new Object[]{"ascii"});
             }
         }
@@ -431,7 +431,7 @@ public final class StructModule {
 
     private static long ssize(Object o, boolean indexError) {
         BigInteger b = BuiltinsExtra.rangeIndex(o);
-        if (b.bitLength() > 63) throw indexError && !LangVersion.atLeast(3, 14) ? new PyException("IndexError", "cannot fit 'int' into an index-sized integer")
+        if (b.bitLength() > 63) throw indexError && !LangVersion.atLeast(3, 15) ? new PyException("IndexError", "cannot fit 'int' into an index-sized integer")
             : new PyException("OverflowError", "Python int too large to convert to C ssize_t");
         return b.longValue();
     }
@@ -443,7 +443,7 @@ public final class StructModule {
         Object wb = ArrayModule.writableBuffer(u);
         if (wb != null) return new Object[]{wb, ((PyByteSequence) wb).byteSize()};
         String got = PyRuntime.typeName(buffer);
-        throw new PyException("TypeError", LangVersion.atLeast(3, 14)
+        throw new PyException("TypeError", LangVersion.atLeast(3, 15)
             ? fname + "() argument " + argPos + " must be read-write bytes-like object, not " + got
             : "argument must be read-write bytes-like object, not " + got);
     }
@@ -528,7 +528,7 @@ public final class StructModule {
         Fmt f = st(self);
         if (!kw(kwargs).isEmpty()) throw new PyException("TypeError", "Struct.pack_into() takes no keyword arguments");
         List<Object> a = items(args);
-        if (a.size() < 2) throw LangVersion.atLeast(3, 14) ? new PyException("TypeError", "pack_into expected at least 2 arguments, got " + a.size())
+        if (a.size() < 2) throw LangVersion.atLeast(3, 15) ? new PyException("TypeError", "pack_into expected at least 2 arguments, got " + a.size())
             : err(a.isEmpty() ? "pack_into expected buffer argument" : "pack_into expected offset argument");
         return doPackInto(f, a, 0);
     }
@@ -581,7 +581,7 @@ public final class StructModule {
 
     private static Object pack(List<Object> a, Map<Object, Object> k) {
         if (!k.isEmpty()) throw new PyException("TypeError", "_struct.pack() takes no keyword arguments");
-        if (a.isEmpty()) throw new PyException("TypeError", LangVersion.atLeast(3, 14) ? "pack expected at least 1 argument, got 0" : "missing format argument");
+        if (a.isEmpty()) throw new PyException("TypeError", LangVersion.atLeast(3, 15) ? "pack expected at least 1 argument, got 0" : "missing format argument");
         return doPack(compile(a.get(0)), a, 1);
     }
 
@@ -605,7 +605,7 @@ public final class StructModule {
     private static Object packInto(List<Object> a, Map<Object, Object> k) {
         if (!k.isEmpty()) throw new PyException("TypeError", "_struct.pack_into() takes no keyword arguments");
         if (a.size() < 3) {
-            if (LangVersion.atLeast(3, 14)) throw new PyException("TypeError", "pack_into expected at least 3 arguments, got " + a.size());
+            if (LangVersion.atLeast(3, 15)) throw new PyException("TypeError", "pack_into expected at least 3 arguments, got " + a.size());
             if (a.isEmpty()) throw new PyException("TypeError", "missing format argument");
             throw err(a.size() < 2 ? "pack_into expected buffer argument" : "pack_into expected offset argument");
         }

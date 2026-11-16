@@ -166,7 +166,7 @@ final class IoStringIO {
     public static Object truncate(Object self, Object pos) {
         St s = open(self);
         long n = pos == null ? s.pos : IoUtil.asLong(pos);
-        if (n < 0) throw new PyException("ValueError", "negative pos value " + n);
+        if (n < 0) throw new PyException("ValueError", LangVersion.atLeast(3, 15) ? "negative pos value " + n : "Negative size value " + n);
         if (n < s.len) s.len = (int) n;
         return n;
     }

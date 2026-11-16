@@ -184,15 +184,15 @@ final class WindowsOverlappedModule {
         o = NativeSubclass.unwrap(o);
         if (o instanceof Boolean b) return b ? 1L : 0L;
         if (o instanceof Long || o instanceof BigInteger) return o;
-        throw new PyException("TypeError", LangVersion.atLeast(3, 15) ? modernMessage.replace("%s", PyRuntime.typeName(o)) : "an integer is required");
+        throw new PyException("TypeError", LangVersion.atLeast(3, 14) ? modernMessage.replace("%s", PyRuntime.typeName(o)) : "an integer is required");
     }
 
     /** A DWORD ('k'): 0 .. 2**32-1. */
     static int dword(Object o) {
         Object v = integer(o, "'%s' object cannot be interpreted as an integer");
         BigInteger b = v instanceof BigInteger x ? x : BigInteger.valueOf((Long) v);
-        if (b.signum() < 0) throw new PyException("ValueError", LangVersion.atLeast(3, 15) ? "Cannot convert negative int" : "value must be positive");
-        if (b.bitLength() > 32) throw new PyException("OverflowError", LangVersion.atLeast(3, 15) ? "Python int too large for C unsigned long"
+        if (b.signum() < 0) throw new PyException("ValueError", LangVersion.atLeast(3, 14) ? "Cannot convert negative int" : "value must be positive");
+        if (b.bitLength() > 32) throw new PyException("OverflowError", LangVersion.atLeast(3, 14) ? "Python int too large for C unsigned long"
             : "Python int too large to convert to C unsigned long");
         return b.intValue();
     }

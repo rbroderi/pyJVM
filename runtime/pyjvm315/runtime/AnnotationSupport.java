@@ -75,7 +75,9 @@ final class AnnotationSupport {
         arguments.add(PyRuntime.pyInt("1"));
         Object result = PyRuntime.callFunction(annotate, arguments, PyRuntime.dict0());
         if (!(result instanceof Map<?, ?>))
-            throw new PyException("TypeError", "__annotate__() must return a dict, not " + PyRuntime.typeName(result));
+            throw new PyException("TypeError", LangVersion.atLeast(3, 15)
+                ? "__annotate__() must return a dict, not " + PyRuntime.typeName(result)
+                : "__annotate__ returned non-dict of type '" + PyRuntime.typeName(result) + "'");
         return result;
     }
 
