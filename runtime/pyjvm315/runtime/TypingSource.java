@@ -8,6 +8,9 @@ final class TypingSource {
     static final String TEXT = """
 import sys
 
+_PY314 = sys.version_info >= (3, 14)
+_PY315 = sys.version_info >= (3, 15)
+
 
 def _idfunc(_, x):
     return x
@@ -15,12 +18,11 @@ def _idfunc(_, x):
 
 class NoDefaultType:
     __slots__ = ()
-    _instance = None
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = object.__new__(cls)
-        return cls._instance
+    def __new__(cls, *args, **kwargs):
+        if args or kwargs:
+            raise TypeError('NoDefaultType takes no arguments')
+        return NoDefault
 
     def __repr__(self):
         return 'typing.NoDefault'
@@ -29,11 +31,11 @@ class NoDefaultType:
         return 'NoDefault'
 
 
-NoDefault = NoDefaultType()
+NoDefault = object.__new__(NoDefaultType)
 NoDefaultType.__module__ = 'typing'
 
 
-if sys.version_info >= (3, 14):
+if _PY314:
     Union = type(int | str)
 
 
@@ -49,7 +51,70 @@ def _union(a, b):
     return typing.Union[a, b]
 
 
+def _check_kw(fn, kwargs, allowed):
+    for k in kwargs:
+        if k != 'name' and k not in allowed:
+            raise TypeError("%s() got an unexpected keyword argument '%s'" % (fn, k))
+
+
+def _name_arg(fn, args, kwargs):
+    if args:
+        if 'name' in kwargs:
+            raise TypeError("argument for %s() given by name ('name') and position (1)" % fn)
+        name = args[0]
+    elif 'name' in kwargs:
+        name = kwargs['name']
+    else:
+        raise TypeError("%s() missing required argument 'name' (pos 1)" % fn)
+    if not isinstance(name, str):
+        raise TypeError("%s() argument 'name' must be str, not %s" % (fn, type(name).__name__))
+    return name
+
+
+_READONLY = frozenset(('__bound__', '__constraints__', '__covariant__', '__contravariant__',
+                       '__infer_variance__', '__default__', '__value__', '__type_params__', '__parameters__'))
+
+
+def _var_setattr(self, name, value):
+    if name == '__name__':
+        raise AttributeError('readonly attribute')
+    if name in _READONLY:
+        raise AttributeError("attribute '%s' of 'typing.%s' objects is not writable" % (name, type(self).__name__))
+    object.__setattr__(self, name, value)
+
+
+def _init_variance(self, kwargs):
+    covariant = kwargs.get('covariant', False)
+    contravariant = kwargs.get('contravariant', False)
+    infer = kwargs.get('infer_variance', False)
+    if covariant and contravariant:
+        raise ValueError('Bivariant types are not supported.')
+    if infer and (covariant or contravariant):
+        raise ValueError('Variance cannot be specified with infer_variance.')
+    bound = kwargs.get('bound')
+    object.__setattr__(self, '__bound__', _type_check_arg(bound, 'Bound must be a type.') if bound is not None else None)
+    object.__setattr__(self, '__covariant__', bool(covariant))
+    object.__setattr__(self, '__contravariant__', bool(contravariant))
+    object.__setattr__(self, '__infer_variance__', bool(infer))
+    object.__setattr__(self, '__default__', kwargs.get('default', NoDefault))
+
+
+def _variance_repr(self):
+    if self.__infer_variance__:
+        prefix = ''
+    elif self.__covariant__:
+        prefix = '+'
+    elif self.__contravariant__:
+        prefix = '-'
+    else:
+        prefix = '~'
+    return prefix + self.__name__
+
+
 class _TypeVarLike:
+    def __setattr__(self, name, value):
+        _var_setattr(self, name, value)
+
     def __or__(self, right):
         return _union(self, right)
 
@@ -67,37 +132,21 @@ class _TypeVarLike:
 
 
 class TypeVar(_TypeVarLike):
-    def __init__(self, name, *constraints, bound=None, covariant=False, contravariant=False,
-                 infer_variance=False, default=NoDefault):
-        if not isinstance(name, str):
-            raise TypeError('TypeVar() argument 1 must be str, not ' + type(name).__name__)
-        if covariant and contravariant:
-            raise ValueError('Bivariant type variables are not supported.')
-        if infer_variance and (covariant or contravariant):
-            raise ValueError('Variance cannot be specified with infer_variance.')
-        if constraints and bound is not None:
+    def __init__(self, *args, **kwargs):
+        _check_kw('typevar', kwargs, ('bound', 'covariant', 'contravariant', 'infer_variance', 'default'))
+        name = _name_arg('typevar', args, kwargs)
+        constraints = args[1:]
+        if constraints and kwargs.get('bound') is not None:
             raise TypeError('Constraints cannot be combined with bound=...')
         if len(constraints) == 1:
             raise TypeError('A single constraint is not allowed')
-        self.__name__ = name
-        self.__bound__ = _type_check_arg(bound, 'Bound must be a type.') if bound is not None else None
-        self.__constraints__ = tuple(_type_check_arg(c, 'TypeVar(name, constraint, ...): constraints must be types.') for c in constraints)
-        self.__covariant__ = bool(covariant)
-        self.__contravariant__ = bool(contravariant)
-        self.__infer_variance__ = bool(infer_variance)
-        self.__default__ = default
-        self.__module__ = _caller_module()
+        _init_variance(self, kwargs)
+        object.__setattr__(self, '__name__', name)
+        object.__setattr__(self, '__constraints__', tuple(constraints))
+        object.__setattr__(self, '__module__', _caller_module())
 
     def __repr__(self):
-        if self.__infer_variance__:
-            prefix = ''
-        elif self.__covariant__:
-            prefix = '+'
-        elif self.__contravariant__:
-            prefix = '-'
-        else:
-            prefix = '~'
-        return prefix + self.__name__
+        return _variance_repr(self)
 
     def __typing_subst__(self, arg):
         import typing
@@ -109,9 +158,16 @@ def _type_check_arg(arg, msg):
     return typing._type_check(arg, msg)
 
 
+def _no_attrs(self, name, value):
+    raise AttributeError("'typing.%s' object has no attribute '%s' and no __dict__ for setting new attributes" % (type(self).__name__, name))
+
+
 class ParamSpecArgs:
+    def __setattr__(self, name, value):
+        _no_attrs(self, name, value)
+
     def __init__(self, origin):
-        self.__origin__ = origin
+        object.__setattr__(self, '__origin__', origin)
 
     def __repr__(self):
         return self.__origin__.__name__ + '.args'
@@ -129,8 +185,11 @@ class ParamSpecArgs:
 
 
 class ParamSpecKwargs:
+    def __setattr__(self, name, value):
+        _no_attrs(self, name, value)
+
     def __init__(self, origin):
-        self.__origin__ = origin
+        object.__setattr__(self, '__origin__', origin)
 
     def __repr__(self):
         return self.__origin__.__name__ + '.kwargs'
@@ -148,17 +207,14 @@ class ParamSpecKwargs:
 
 
 class ParamSpec(_TypeVarLike):
-    def __init__(self, name, *, bound=None, covariant=False, contravariant=False,
-                 infer_variance=False, default=NoDefault):
-        if covariant and contravariant:
-            raise ValueError('Bivariant type variables are not supported.')
-        self.__name__ = name
-        self.__bound__ = _type_check_arg(bound, 'Bound must be a type.') if bound is not None else None
-        self.__covariant__ = bool(covariant)
-        self.__contravariant__ = bool(contravariant)
-        self.__infer_variance__ = bool(infer_variance)
-        self.__default__ = default
-        self.__module__ = _caller_module()
+    def __init__(self, *args, **kwargs):
+        _check_kw('paramspec', kwargs, ('bound', 'covariant', 'contravariant', 'infer_variance', 'default'))
+        if len(args) > 1:
+            raise TypeError('paramspec() takes exactly 1 positional argument (%d given)' % len(args))
+        name = _name_arg('paramspec', args, kwargs)
+        _init_variance(self, kwargs)
+        object.__setattr__(self, '__name__', name)
+        object.__setattr__(self, '__module__', _caller_module())
 
     @property
     def args(self):
@@ -169,15 +225,7 @@ class ParamSpec(_TypeVarLike):
         return ParamSpecKwargs(self)
 
     def __repr__(self):
-        if self.__infer_variance__:
-            prefix = ''
-        elif self.__covariant__:
-            prefix = '+'
-        elif self.__contravariant__:
-            prefix = '-'
-        else:
-            prefix = '~'
-        return prefix + self.__name__
+        return _variance_repr(self)
 
     def __typing_subst__(self, arg):
         import typing
@@ -189,16 +237,28 @@ class ParamSpec(_TypeVarLike):
 
 
 class TypeVarTuple(_TypeVarLike):
-    def __init__(self, name, *, default=NoDefault):
-        self.__name__ = name
-        self.__default__ = default
-        self.__module__ = _caller_module()
+    def __init__(self, *args, **kwargs):
+        if _PY315:
+            _check_kw('typevartuple', kwargs, ('bound', 'covariant', 'contravariant', 'infer_variance', 'default'))
+        else:
+            _check_kw('typevartuple', kwargs, ('default',))
+        if len(args) > 1:
+            raise TypeError('typevartuple() takes exactly 1 positional argument (%d given)' % len(args))
+        name = _name_arg('typevartuple', args, kwargs)
+        if _PY315:
+            _init_variance(self, kwargs)
+        else:
+            object.__setattr__(self, '__default__', kwargs.get('default', NoDefault))
+        object.__setattr__(self, '__name__', name)
+        object.__setattr__(self, '__module__', _caller_module())
 
     def __iter__(self):
         import typing
         yield typing.Unpack[self]
 
     def __repr__(self):
+        if _PY315:
+            return _variance_repr(self)
         return self.__name__
 
     def __typing_subst__(self, arg):
@@ -209,21 +269,60 @@ class TypeVarTuple(_TypeVarLike):
         return typing._typevartuple_prepare_subst(self, alias, args)
 
 
+def _alias_setattr(self, name, value):
+    if name == '__module__':
+        object.__setattr__(self, name, value)
+        return
+    if name == '__name__':
+        raise AttributeError('readonly attribute')
+    if name in _READONLY:
+        raise AttributeError("attribute '%s' of 'typing.TypeAliasType' objects is not writable" % name)
+    _no_attrs(self, name, value)
+
+
 class TypeAliasType:
-    def __init__(self, name, value, *, type_params=()):
+    def __setattr__(self, name, value):
+        _alias_setattr(self, name, value)
+
+    def __init__(self, *args, **kwargs):
+        for k in kwargs:
+            if k not in ('name', 'value', 'type_params'):
+                raise TypeError("typealias() got an unexpected keyword argument '%s'" % k)
+        if len(args) > 2:
+            raise TypeError('typealias() takes exactly 2 positional arguments (%d given)' % len(args))
+        vals = []
+        for i, fname in enumerate(('name', 'value')):
+            if i < len(args):
+                if fname in kwargs:
+                    raise TypeError("argument for typealias() given by name ('%s') and position (%d)" % (fname, i + 1))
+                vals.append(args[i])
+            elif fname in kwargs:
+                vals.append(kwargs[fname])
+            else:
+                raise TypeError("typealias() missing required argument '%s' (pos %d)" % (fname, i + 1))
+        name, value = vals
         if not isinstance(name, str):
-            raise TypeError('TypeAliasType() argument 1 must be str, not ' + type(name).__name__)
-        self.__name__ = name
-        self.__value__ = value
-        self.__type_params__ = tuple(type_params)
-        self.__parameters__ = tuple(type_params)
-        self.__module__ = _caller_module()
+            raise TypeError("typealias() argument 'name' must be str, not %s" % type(name).__name__)
+        type_params = kwargs.get('type_params', ())
+        if not isinstance(type_params, tuple):
+            raise TypeError('type_params must be a tuple')
+        if _PY314:
+            for p in type_params:
+                if type(p).__name__ not in ('TypeVar', 'ParamSpec', 'TypeVarTuple'):
+                    raise TypeError('Expected a type param, got %r' % (p,))
+        object.__setattr__(self, '__name__', name)
+        object.__setattr__(self, '__value__', value)
+        object.__setattr__(self, '__type_params__', type_params)
+        object.__setattr__(self, '__parameters__', type_params)
+        object.__setattr__(self, '__module__', _caller_module())
 
     def __repr__(self):
         return self.__name__
 
     def __getitem__(self, parameters):
         import types
+        if not self.__type_params__:
+            raise TypeError('Only generic type aliases are subscriptable')
         if not isinstance(parameters, tuple):
             parameters = (parameters,)
         return types.GenericAlias(self, parameters)

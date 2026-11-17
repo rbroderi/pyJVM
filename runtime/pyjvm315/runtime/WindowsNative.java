@@ -119,7 +119,10 @@ final class WindowsNative {
         String msg = message(code);
         LinkedHashMap<String,Object> attrs = new LinkedHashMap<>();
         attrs.put("errno", (long) errno); attrs.put("strerror", msg); attrs.put("filename", filename); attrs.put("winerror", (long) code);
-        return new PyException(type, new PyExcArgs(NativeTypes.tuple((long) errno, msg, filename, (long) code), null, attrs));
+        attrs.put("filename2", null);
+        // CPython's PyErr_SetExcFromWindowsErrWithFilenameObjects: five arguments, which the constructor trims to two when a filename is given
+        PyTuple args = filename != null ? NativeTypes.tuple((long) errno, msg) : NativeTypes.tuple((long) errno, msg, null, (long) code, null);
+        return new PyException(type, new PyExcArgs(args, null, attrs));
     }
 
     static RuntimeException rethrow(Throwable t) {

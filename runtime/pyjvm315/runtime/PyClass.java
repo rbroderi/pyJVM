@@ -23,6 +23,8 @@ import java.util.Set;
 
 final class PyClass {
     final String moduleName;
+    /** The module shown in error messages: a declared __module__ wins over the defining module (as in toString). */
+    String displayModule() { return attrs.get("__module__") instanceof String declared ? declared : moduleName; }
     final String name;
     String qualname;
     final ArrayList<PyClass> bases = new ArrayList<>();
@@ -46,6 +48,8 @@ final class PyClass {
     boolean slotsDeclared = false;
     boolean instanceDictAllowed = true;
     boolean finalized = false;
+    /** CPython static-type flags for native types (see NativeTypes.seal): immutable (no class attribute set/delete), not subclassable, instances have no __dict__. */
+    boolean sealed = false;
     /** 0 unknown, 1 no, 2 yes: instances keep a separate __dict__ per thread (derives from _thread._local). */
     private byte localKind;
     boolean threadLocalKind() {

@@ -52,9 +52,13 @@ EXCEPTION_TYPES = {
     "FileNotFoundError", "PermissionError", "TimeoutError", "ConnectionError", "BlockingIOError",
     "ChildProcessError", "InterruptedError", "IsADirectoryError", "NotADirectoryError", "ProcessLookupError",
     "FileExistsError", "BrokenPipeError", "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError",
+    "PythonFinalizationError", "_IncompleteInputError",
 }
+if __import__("sys").version_info[:2] >= (3, 15):
+    EXCEPTION_TYPES.add("ImportCycleError")   # builtin from 3.15 on (an ImportError subclass)
+EXCEPTION_ALIASES = {"IOError": "OSError", "EnvironmentError": "OSError"}   # WindowsError is OSError on Windows only, so it is resolved at run time
 # Modules implemented in Java (runtime/pyjvm315/runtime): imported by name, not compiled from source.
-NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_string", "_queue", "_codecs", "_locale", "gc", "atexit", "_sre", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize"}
+NATIVE_MODULES = {"ast", "_ast", "sys", "jvm_io", "builtins", "_imp", "_thread", "_warnings", "_weakref", "posix", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_string", "_queue", "_codecs", "_locale", "gc", "atexit", "_sre", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "_sha3", "_blake2", "_operator", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_cjkcore", "_multibytecodec", "_codecs_cn", "_codecs_hk", "_codecs_iso2022", "_codecs_jp", "_codecs_kr", "_codecs_tw"}
 BUILTIN_FUNCTIONS = {
     "ord", "chr", "repr", "print", "hash", "id", "len", "iter", "next",
     "min", "max", "sorted", "hex", "oct", "bin", "format", "dir", "vars", "round",
@@ -532,6 +536,8 @@ class Compiler:
             self._boxed_bool(True, b); return
         if name in BUILTIN_FUNCTIONS:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinFunction", f"({OBJ}){OBJ}"); return
+        if name in EXCEPTION_ALIASES or name == "WindowsError":
+            b.ldc_string(EXCEPTION_ALIASES.get(name, name)); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return   # WindowsError: the runtime decides per OS
         if name in BUILTIN_TYPES or name in EXCEPTION_TYPES:
             b.ldc_string(name); b.invokestatic(RUNTIME, "builtinType", f"({OBJ}){OBJ}"); return
         if self.has_implicit_exec:
@@ -3540,23 +3546,29 @@ class Compiler:
                 return
 
     def _except_name_is_variable(self, name: str, scope: Scope) -> bool:
+        if name in EXCEPTION_ALIASES:
+            if name in self.classes or name in self.functions:
+                return False
+            return not self.run_time_star and (name in self.global_names or scope.has(name) or name in scope.local_names or name in scope.free_names)
+        if name == "WindowsError":
+            return True   # evaluated at run time: OSError on Windows, NameError elsewhere
         if name in EXCEPTION_TYPES or name in self.classes or name in self.functions:
             return False
         if name in {"object", "int", "bool", "float", "complex", "str", "bytes", "bytearray", "list", "tuple", "dict", "set", "frozenset", "range", "type", "property"}:
             return True
-        if self.run_time_star and name not in {"EnvironmentError", "IOError", "WindowsError", "PythonFinalizationError"}:
+        if self.run_time_star and name != "PythonFinalizationError":
             return True   # may be bound by the star import (`except (error, ...)` in socket.py), so it is evaluated, not matched by name
         return name in self.global_names or scope.has(name) or name in scope.local_names or name in scope.free_names
 
     def _emit_except_match(self, type_node: ast.expr, exc_slot: int, next_handler, b: CodeBuilder, scope: Scope) -> None:
         """Jump to next_handler unless the exception in exc_slot matches the handler's type expression."""
         if isinstance(type_node, ast.Name) and not self._except_name_is_variable(type_node.id, scope):
-            b.aload(exc_slot); b.ldc_string(type_node.id)
+            b.aload(exc_slot); b.ldc_string(EXCEPTION_ALIASES.get(type_node.id, type_node.id))
             b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifeq(next_handler)
         elif isinstance(type_node, ast.Tuple) and all(isinstance(x, ast.Name) and not self._except_name_is_variable(x.id, scope) for x in type_node.elts):
             matched = b.label()
             for typ in type_node.elts:
-                b.aload(exc_slot); b.ldc_string(typ.id)
+                b.aload(exc_slot); b.ldc_string(EXCEPTION_ALIASES.get(typ.id, typ.id))
                 b.invokestatic(RUNTIME, "exceptionMatches", f"({OBJ}{OBJ})Z"); b.ifne(matched)
             b.goto(next_handler); b.mark(matched)
         else:

@@ -20,7 +20,7 @@ Known structural gaps the plan must close, beyond the probe list:
 - No runtime compiler, so `exec`/`eval`/`compile` and the `ast` module cannot work on the JVM.
 - Deferred annotations (PEP 649/749) raise `NotImplementedError`.
 - No stdlib import path: `copy`, `weakref`, `binascii`, `re`, `os` and friends are external.
-- Native-extension strategy is undefined.
+- Third-party native extensions (C, Cython, Rust/PyO3) do not load yet. The strategy is decided in [NATIVE_EXTENSIONS_PLAN.md](NATIVE_EXTENSIONS_PLAN.md) and tracked below as the "Third-party native extensions" track.
 
 **Definition of done.** Three gates, measured on CPython's own suite rather than fixtures:
 
@@ -130,12 +130,29 @@ Every CPython C module without a pure-Python fallback gets a Java implementation
 | Tier | Strategy | Modules |
 | --- | --- | --- |
 | A: no work | Use CPython's Python fallback (Phase 3) | `_pyio`, `_pydatetime`, `_pydecimal`, `_py_abc`, `pickle`, `json`, `heapq`, `bisect`, `operator`, `functools`, `stat`, `warnings`, `_strptime`, `xml.etree` |
-| B: JDK-backed Java | Thin Java module over JDK APIs, matching CPython behaviour exactly | `math`/`cmath` (StrictMath plus correctly rounded fixes), `time`, `zlib`/`binascii` (java.util.zip, CRC32), `_hashlib`/`_md5`/`_sha*`/`_blake2` (MessageDigest, Bouncy Castle for BLAKE2/SHA-3 if needed), `_socket` and `select` (java.nio channels, Selector), `_ssl` (SSLEngine), `_bz2`/`_lzma` (bundled pure-Java codecs), `_sqlite3` (sqlite-jdbc), `_csv`, `array`, `_struct`, `unicodedata` (generated tables, not ICU, for exact version match), `_locale` |
+| B: JDK-backed Java | Thin Java module over JDK APIs, matching CPython behaviour exactly | `math`/`cmath` (StrictMath plus correctly rounded fixes), `time`, `zlib`/`binascii` (java.util.zip, CRC32), `_hashlib`/`_md5`/`_sha*` (MessageDigest), `_blake2`/`_sha3` (small in-house pure-Java Keccak and BLAKE2; the JDK has no SHAKE or BLAKE2), `_socket` and `select` (java.nio channels, Selector), `_ssl` (SSLEngine), `_bz2`/`_lzma` (bundled pure-Java codecs), `_csv`, `array`, `_struct`, `unicodedata` (generated tables, not ICU, for exact version match), `_locale` |
 | C: must write from scratch | No JDK equivalent with Python semantics | `_sre` (port CPython's regex engine; `java.util.regex` differs in backtracking, Unicode and flags), `itertools`, `_collections.deque`, `_random` (exact MT19937), `_codecs` and all encodings, `_string`, `_contextvars` (HAMT), `_tokenize`, `_opcode`/`dis` (map to pyJVM's own code objects), `_json` speedups later, `_asyncio` (pure-Python fallback first) |
-| D: OS via Panama FFM | Java 25 Foreign Function and Memory API for syscalls the JDK hides | `posix` (stat, open flags, fd ops, `os.pipe`, `os.dup2`, uid/gid, `os.environ` writes), `fcntl`, `termios`, `pwd`/`grp`, `resource`, `mmap`, `_posixsubprocess` (spawn via `posix_spawn`, not fork), `signal` (sun.misc.Signal plus FFM) |
-| E: explicitly unsupported | Document and skip-tag in libregrtest | `os.fork` and `os.forkpty` (unsafe on a multithreaded JVM), `_testcapi`/`_testinternalcapi`, `ctypes` (until FFM bridge exists), `tkinter`, `curses`, `readline` (JLine later) |
+| D: OS via Panama FFM | Java 25 Foreign Function and Memory API for syscalls the JDK hides | `posix` (stat, open flags, fd ops, `os.pipe`, `os.dup2`, uid/gid, `os.environ` writes), `fcntl`, `termios`, `pwd`/`grp`, `resource`, `mmap`, `_posixsubprocess` (spawn via `posix_spawn`, not fork), `signal` (sun.misc.Signal plus FFM), `_curses`/`_curses_panel` (system ncurses, Linux only), `_sqlite3` (vendored SQLite amalgamation, one pinned version, built with the project's C compiler), `_ctypes` (PyPy's `_ctypes` package adapted per lane, over vendored libffi behind a small Rust helper; waits for R2-01) |
+| E: explicitly unsupported | Document and skip-tag in libregrtest | `os.fork` and `os.forkpty` (unsafe on a multithreaded JVM), `_testinternalcapi`, `tkinter`, `readline` (JLine later). `_testcapi` is covered by the C-API shim (track C of the native-extensions plan) |
 
-**C extensions (later track).** Third-party wheels with C code need either the HPy ABI or a CPython C-API emulation layer over Panama FFM, as GraalPy does. Treat this as a separate project after Phase 5; it does not block stdlib compatibility.
+Build-versus-vendor rule: small, contained pieces are written in-house; large or security-sensitive pieces (crypto beyond simple digests, TLS, big engines or parsers) vendor a vetted library, only the parts needed, shaded and listed in `THIRD_PARTY_LICENSES`.
+
+**Third-party native extensions (parallel track).** Loading packages with C, Cython or Rust extensions is planned in [NATIVE_EXTENSIONS_PLAN.md](NATIVE_EXTENSIONS_PLAN.md), which supersedes the earlier "C extensions later" note. It runs alongside Phases 2–5 in its own `rust/` directory and does not block stdlib compatibility. Two routes share one handle-based ABI over FFM:
+
+- **Rust (`pyjvm` crate with PyO3's macro names):** new extensions and PyO3 ports, the fast path.
+- **CPython C-API shim:** existing extensions. L1 loads unmodified stable-ABI (`abi3`) binaries; L2 runs C and Cython extensions rebuilt against pyJVM's `Python.h`; L3 (code that reads CPython's object layout, NumPy class) is a feasibility spike only.
+
+| Milestone | Exit criterion | Waits on |
+| --- | --- | --- |
+| M0: Java 25 | Every gate green on JDK 25 | none |
+| M1: first Rust module | `fastmath`, built with `pyjvm-ext build`, passes its twin cases | R1-01, R1-02, R2-01..R2-04, R3-01 |
+| M2: PyO3 parity | A published PyO3 crate ports with only dependency, `use` and attribute-name changes | M1 |
+| M3: first C extension | The plan's C sample passes against pyJVM's headers | R2-02, R2-07 |
+| M4: unmodified `abi3` wheels | One PyO3 and one C `abi3` wheel pass their own tests after `pyjvm-ext repack` | M3, P2-03, P2-04, P2-06, P2-09, P2-10 |
+| M5: C and Cython from source | A Cython project builds with `pyjvm-ext wheel` and passes its tests | M4 |
+| M6: integrated | Extensions load through `importlib`, bind statically where types are proven, build in the Gradle sample | M5, P3-01, I-02, I-04 |
+
+Not covered: version-specific CPython binaries (`cpXY-cpXY` wheels, most of PyPI's C wheels) loaded unchanged; they must be rebuilt from source (M5), as on PyPy and GraalPy. Loading them unchanged would need exact per-version CPython object layouts, two-way sync and CPython's private symbols (roughly another shim-sized track per lane); it is not planned. The working approach is rebuild-from-sdist (M5) plus the growing set of `abi3` wheels, and spike C-11 measures the cost before any unchanged-loading milestone is added. `pip install` of extension wheels waits on Phase 3's packaging decision.
 
 Exit gate: every Tier A–D module imports and its own test file meets the pass-rate floor; Tier E modules raise `ImportError` with a clear message and are skip-tagged.
 

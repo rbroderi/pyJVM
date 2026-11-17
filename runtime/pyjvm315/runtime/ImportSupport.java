@@ -34,7 +34,7 @@ public final class ImportSupport {
     private static final Set<String> WINDOWS_ONLY = Set.of("nt", "winreg", "_winapi", "msvcrt", "_overlapped");
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
     static final Set<String> NATIVE_NAMES = platformNames("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
-        "_weakref", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_socket", "_typing");
+        "_weakref", "_io", "marshal", "itertools", "_collections", "errno", "math", "time", "_contextvars", "_codecs", "_locale", "gc", "atexit", "_sre", "_queue", "_struct", "binascii", "_random", "_md5", "_sha1", "_sha2", "_sha3", "_blake2", "_operator", "array", "zlib", "_signal", "select", "_opcode", "_tokenize", "_socket", "_typing", "_cjkcore", "_multibytecodec", "_codecs_cn", "_codecs_hk", "_codecs_iso2022", "_codecs_jp", "_codecs_kr", "_codecs_tw");
     /** The OS module importlib and os.py are built on. */
     static final String OS_MODULE = WINDOWS ? "nt" : "posix";
     private static final String[] BOOT_ORDER = {"sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", OS_MODULE, "_io", "marshal"};
@@ -80,10 +80,10 @@ public final class ImportSupport {
             case "_codecs" -> CodecsModule.create();
             case "_locale" -> LocaleModule.create();
             case "_struct" -> StructModule.create();
-            case "binascii" -> BinasciiModule.create(); case "_random" -> RandomModule.create(); case "array" -> ArrayModule.create(); case "zlib" -> ZlibModule.create(); case "_signal" -> SignalModule.create(); case "select" -> SelectModule.create(); case "_opcode" -> OpcodeModule.create(); case "_md5" -> HashModule.create("_md5", "md5"); case "_sha1" -> HashModule.create("_sha1", "sha1"); case "_sha2" -> HashModule.create("_sha2", "sha224", "sha256", "sha384", "sha512");
+            case "binascii" -> BinasciiModule.create(); case "_random" -> RandomModule.create(); case "array" -> ArrayModule.create(); case "zlib" -> ZlibModule.create(); case "_signal" -> SignalModule.create(); case "select" -> SelectModule.create(); case "_opcode" -> OpcodeModule.create(); case "_md5" -> HashModule.create("_md5", "md5"); case "_sha1" -> HashModule.create("_sha1", "sha1"); case "_sha3" -> Hash3Module.createSha3(); case "_blake2" -> Hash3Module.createBlake2(); case "_operator" -> OperatorModule.create(); case "_sha2" -> HashModule.create("_sha2", "sha224", "sha256", "sha384", "sha512");
             case "_sre" -> SreModule.create();
             case "_tokenize" -> TokenizeModule.create();
-            case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> WINDOWS ? WindowsSocketModule.create() : StubModules.socket(); case "_typing" -> typingModule();
+            case "_posixsubprocess" -> StubModules.posixsubprocess(); case "fcntl" -> StubModules.fcntl(); case "pwd" -> StubModules.pwd(); case "grp" -> StubModules.grp(); case "resource" -> StubModules.resource(); case "_socket" -> WINDOWS ? WindowsSocketModule.create() : StubModules.socket(); case "_typing" -> typingModule(); case "_cjkcore" -> CjkModule.create(); case "_multibytecodec", "_codecs_cn", "_codecs_hk", "_codecs_iso2022", "_codecs_jp", "_codecs_kr", "_codecs_tw" -> CjkSource.module(name);
             case "nt" -> WindowsNtModule.create();
             case "winreg" -> WindowsRegModule.create(); case "_winapi" -> WindowsWinApiModule.create(); case "msvcrt" -> WindowsMsvcrtModule.create(); case "_overlapped" -> WindowsOverlappedModule.create();
             default -> throw notFound(name);
@@ -195,6 +195,8 @@ public final class ImportSupport {
             }
         }
         if (OS_ERRORS.contains(exc.typeName)) {
+            if (name.equals("characters_written")) throw new PyException("AttributeError", name);
+            if (payload != null && payload.attrs != null && BuiltinsExtra.isOsSlot(exc, name)) return null;   // slot was deleted
             List<Object> items = payload != null && payload.args.items.size() <= 5 ? payload.args.items : null;
             switch (name) {
                 case "errno": return items != null && items.size() >= 2 ? items.get(0) : null;
@@ -426,10 +428,17 @@ public final class ImportSupport {
 
     /** {@code _typing}: Python source plus the runtime's own {@code Generic}, the implicit base of PEP 695 classes. */
     private static PyModule typingModule() {
-        PyModule m = execText("_typing", TypingSource.TEXT, "<_typing>");
+        PyModule impl = execText("_typing", TypingSource.TEXT, "<_typing>");   // helpers stay in impl's private namespace
+        for (String sealedName : new String[]{"TypeVar", "ParamSpec", "TypeVarTuple", "TypeAliasType", "ParamSpecArgs", "ParamSpecKwargs", "NoDefaultType"})
+            ((PyClass) impl.dict.get(sealedName)).sealed = true;   // immutable, not subclassable, like CPython's static types
+        PyModule m = (PyModule) moduleCall(new ArrayList<Object>(List.of("_typing")), new LinkedHashMap<Object,Object>());
+        for (String n : new String[]{"NoDefault", "ParamSpec", "ParamSpecArgs", "ParamSpecKwargs", "TypeAliasType", "TypeVar", "TypeVarTuple", "Union", "_idfunc"})
+            if (impl.dict.containsKey(n)) m.dict.put(n, impl.dict.get(n));
+        m.dict.put("__doc__", "Primitives and accelerators for the typing module.\n");
+        register("_typing", m);
         PyClass generic = TypeParamsGeneric.GENERIC;
         for (String[] hook : new String[][]{{"__class_getitem__", "_generic_class_getitem_hook"}, {"__init_subclass__", "_generic_init_subclass_hook"}}) {
-            Object fn = m.dict.get(hook[1]);
+            Object fn = impl.dict.get(hook[1]);
             Object classmethod = PyRuntime.callFunction(PyRuntime.builtinType("classmethod"), new ArrayList<Object>(List.of(fn)), new LinkedHashMap<Object,Object>());
             PyRuntime.classAddAttr(generic, hook[0], classmethod);
         }

@@ -57,5 +57,4 @@ else:
     attempt("bytes", os.putenv, b"PYJVM_PUTENV_BY", b"v")
     attempt("bytes unset", os.unsetenv, b"PYJVM_PUTENV_BY")
 
-# TODO: check that child processes see putenv/unsetenv once subprocess works in this runtime on both OSes
-# (needs os.pipe and process creation: _winapi on nt, a real _posixsubprocess on posix).
+# Child processes seeing putenv/unsetenv is checked in os_putenv_child.py (nt now; posix once _posixsubprocess is real).

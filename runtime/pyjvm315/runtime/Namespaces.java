@@ -98,6 +98,9 @@ public final class Namespaces {
             List<String> names = new ArrayList<>(PyRuntime.EXCEPTION_PARENTS.keySet());
             java.util.Collections.sort(names);
             for (String name : names) BUILTINS.put(name, PyRuntime.builtinType(name));
+            BUILTINS.put("IOError", PyRuntime.builtinType("OSError"));
+            BUILTINS.put("EnvironmentError", PyRuntime.builtinType("OSError"));
+            if (ImportSupport.WINDOWS) BUILTINS.put("WindowsError", PyRuntime.builtinType("OSError"));
             BUILTINS.put("NotImplemented", PyRuntime.notImplemented());
             BUILTINS.put("Ellipsis", PyRuntime.ellipsis());
             BUILTINS.put("None", null);

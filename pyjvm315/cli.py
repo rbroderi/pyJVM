@@ -30,6 +30,13 @@ def build_runtime(output_dir: Path) -> None:
     if not javac:
         raise RuntimeError("javac is required once to build the pyjvm315 runtime support class")
     subprocess.run([javac, "--release", "25", "-d", str(output_dir), *map(str, _runtime_sources())], check=True)
+    # Non-Java runtime resources (CJK codec tables and module sources) sit beside the classes that load them.
+    rt_root = _runtime_class_source().parent.parent.parent
+    for res in rt_root.rglob("*"):
+        if res.is_file() and res.suffix in (".bin", ".py"):
+            dest = output_dir / res.relative_to(rt_root)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(res, dest)
 
 
 def main(argv: list[str] | None = None) -> int:

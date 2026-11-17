@@ -259,6 +259,9 @@ public final class BuiltinsExtra {
             {"ConnectionRefusedError", "ConnectionError"}, {"ConnectionResetError", "ConnectionError"},
         };
         for (String[] pair : extra) parents.putIfAbsent(pair[0], pair[1]);
+        parents.putIfAbsent("PythonFinalizationError", "RuntimeError");   // 3.13+
+        parents.putIfAbsent("_IncompleteInputError", "SyntaxError");      // 3.13+
+        if (LangVersion.atLeast(3, 15)) parents.putIfAbsent("ImportCycleError", "ImportError");
     }
 
     static boolean isGroupType(String type) { return type.equals("ExceptionGroup") || type.equals("BaseExceptionGroup"); }
@@ -272,10 +275,11 @@ public final class BuiltinsExtra {
     public static Object exceptionN(Object type, Object args) { return newException((String) type, (List<Object>) args); }
 
     static Object newExceptionCall(String type, List<Object> args, Map<Object,Object> kwargs) {
+        type = PyRuntime.canonicalBuiltinType(type);
         if (!kwargs.isEmpty()) {
             if (isGroupType(type) && args.size() != 2) return newGroup(type, args);
             if (ImportSupport.isImportErrorType(type)) return ImportSupport.newImportError(type, args, kwargs);
-            if (Set.of("SyntaxError", "IndentationError", "TabError", "OSError", "StopIteration").contains(type))
+            if (Set.of("SyntaxError", "IndentationError", "TabError", "StopIteration").contains(type))
                 throw new PyException("TypeError", type + "() keyword arguments are not supported by this runtime");
             throw new PyException("TypeError", type + "() takes no keyword arguments");
         }
@@ -283,6 +287,7 @@ public final class BuiltinsExtra {
     }
 
     static Object newException(String type, List<Object> args) {
+        type = PyRuntime.canonicalBuiltinType(type);
         if (isGroupType(type)) return newGroup(type, args);
         if (type.startsWith("Unicode")) { PyExceptionValue u = CodecErrors.fromArgs(type, args); if (u != null) return u; }
         if (args.size() >= 2 && args.size() <= 5 && ImportSupport.OS_ERRORS.contains(type)) return newOSError(type, args);
@@ -290,6 +295,11 @@ public final class BuiltinsExtra {
         if (args.size() == 1 && args.get(0) != null) return new PyExceptionValue(type, args.get(0));
         PyTuple all = new PyTuple(); all.items.addAll(args);
         return new PyExceptionValue(type, new PyExcArgs(all, null));
+    }
+
+    private static int winerrorToInt(long w) {
+        if (w < Integer.MIN_VALUE || w > Integer.MAX_VALUE) throw new PyException("OverflowError", "Python int too large to convert to C long");
+        return (int) w;
     }
 
     /** Python int value of an errno argument (bool included, as PyLong_Check), or null when it is not an int. */
@@ -312,7 +322,7 @@ public final class BuiltinsExtra {
         if (ImportSupport.WINDOWS) {
             Object winerror = args.size() >= 4 ? args.get(3) : null;
             Long w = errnoValue(winerror);
-            if (w != null && w >= Integer.MIN_VALUE && w <= Integer.MAX_VALUE) { errno = (long) WindowsNative.errnoOf(w.intValue()); args.set(0, errno); }
+            if (w != null) { errno = (long) WindowsNative.errnoOf(winerrorToInt(w)); args.set(0, errno); }
             if (args.size() >= 4) attrs.put("winerror", winerror);
         }
         if (type.equals("OSError")) {
@@ -320,12 +330,17 @@ public final class BuiltinsExtra {
             if (code != null) type = ErrnoModule.osErrorType(code);
         }
         Object filename = args.size() >= 3 ? args.get(2) : null;
+        boolean trim = filename != null;
+        if (trim && type.equals("BlockingIOError") && errnoValue(filename) != null) {   // the 3rd argument is characters_written
+            attrs.put("characters_written", errnoValue(filename));
+            filename = null; trim = false;
+        }
         attrs.put("errno", errno);
         attrs.put("strerror", args.get(1));
         attrs.put("filename", filename);
-        attrs.put("filename2", args.size() >= 5 ? args.get(4) : null);
+        attrs.put("filename2", args.size() >= 5 && filename != null ? args.get(4) : null);   // CPython keeps filename2 only together with a filename
         PyTuple all = new PyTuple();
-        all.items.addAll(filename != null ? args.subList(0, 2) : args);
+        all.items.addAll(trim ? args.subList(0, 2) : args);
         return new PyExceptionValue(type, new PyExcArgs(all, null, attrs));
     }
 
@@ -335,19 +350,18 @@ public final class BuiltinsExtra {
      */
     static void initOSErrorFields(PyInstance exc, Object[] args) {
         if (args.length < 2 || args.length > 5 || !exceptionIsSubclass(exc.cls.exceptionBase, "OSError")) return;
-        if (exc.cls.lookupMethod("__init__") != null || exc.cls.lookupMethod("__new__") != null) return;
         Object errno = args[0];
         boolean mapped = false;
         if (ImportSupport.WINDOWS) {
             Object winerror = args.length >= 4 ? args[3] : null;
             Long w = errnoValue(winerror);
-            if (w != null && w >= Integer.MIN_VALUE && w <= Integer.MAX_VALUE) { errno = (long) WindowsNative.errnoOf(w.intValue()); mapped = true; }
-            exc.fields.put("winerror", winerror);
+            if (w != null) { errno = (long) WindowsNative.errnoOf(winerrorToInt(w)); mapped = true; }
+            if (args.length >= 4) exc.fields.put("winerror", winerror);
         }
         exc.fields.put("errno", errno);
         exc.fields.put("strerror", args[1]);
         exc.fields.put("filename", args.length >= 3 ? args[2] : null);
-        exc.fields.put("filename2", args.length >= 5 ? args[4] : null);
+        exc.fields.put("filename2", args.length >= 5 && args[2] != null ? args[4] : null);
         if (mapped || args.length >= 3 && args[2] != null) {
             PyTuple t = new PyTuple();
             t.items.add(errno); t.items.add(args[1]);
@@ -358,13 +372,58 @@ public final class BuiltinsExtra {
 
     /** str() of an OSError-derived instance that carries errno/strerror fields, or null. */
     static String osErrorStr(PyInstance exc) {
-        if (!exc.fields.containsKey("strerror") || !exc.fields.containsKey("errno") || !exceptionIsSubclass(exc.cls.exceptionBase, "OSError")) return null;
-        Object filename = exc.fields.get("filename"), filename2 = exc.fields.get("filename2");
-        boolean win = exc.fields.get("winerror") != null;
-        String head = win ? "[WinError " + pyStr(exc.fields.get("winerror")) : "[Errno " + pyStr(exc.fields.get("errno"));
-        head += "] " + pyStr(exc.fields.get("strerror"));
+        if (!exceptionIsSubclass(exc.cls.exceptionBase, "OSError")) return null;
+        return osErrorStrFrom(exc.fields);
+    }
+
+    /** CPython's OSError.__str__ over the slot map (a missing key is an unset slot); null means "use BaseException.__str__". */
+    static String osErrorStrFrom(Map<String,Object> m) {
+        Object filename = m.get("filename"), filename2 = m.get("filename2");
+        boolean win = ImportSupport.WINDOWS && m.containsKey("winerror");
+        boolean hasStr = m.containsKey("strerror"), hasErrno = m.containsKey("errno");
+        String head;
+        if (win && (filename != null || hasStr)) head = "[WinError " + pyStr(m.get("winerror")) + "] " + pyStr(m.get("strerror"));
+        else if (filename != null || hasErrno && hasStr) head = "[Errno " + pyStr(m.get("errno")) + "] " + pyStr(m.get("strerror"));
+        else return null;
         if (filename == null) return head;
         return head + ": " + pyRepr(filename) + (filename2 == null ? "" : " -> " + pyRepr(filename2));
+    }
+
+    static boolean isOsSlot(PyExceptionValue v, String name) {
+        if (!ImportSupport.OS_ERRORS.contains(v.typeName)) return false;
+        switch (name) {
+            case "errno": case "strerror": case "filename": case "filename2": case "characters_written": return true;
+            case "winerror": return ImportSupport.WINDOWS;
+            default: return false;
+        }
+    }
+
+    /** The slot map of a builtin OSError value, created (from the slots implied by args) on first use. */
+    static Map<String,Object> osAttrs(PyExceptionValue v) {
+        if (v.value instanceof PyExcArgs p && p.attrs != null) return p.attrs;
+        PyTuple args = (PyTuple) exceptionArgs(v.value);
+        LinkedHashMap<String,Object> m = new LinkedHashMap<>();
+        List<Object> items = args.items;
+        if (items.size() >= 2 && items.size() <= 5) {
+            m.put("errno", items.get(0)); m.put("strerror", items.get(1));
+            if (items.size() >= 3) m.put("filename", items.get(2));
+            if (items.size() >= 5) m.put("filename2", items.get(4));
+            if (ImportSupport.WINDOWS && items.size() >= 4) m.put("winerror", items.get(3));
+        }
+        v.value = new PyExcArgs(args, v.value instanceof PyExcArgs p ? p.group : null, m);
+        return m;
+    }
+
+    static void setOsSlot(PyExceptionValue v, String name, Object value) {
+        if (name.equals("characters_written") && errnoValue(value) == null)
+            throw new PyException("TypeError", "'" + typeName(value) + "' object cannot be interpreted as an integer");
+        osAttrs(v).put(name, name.equals("characters_written") ? errnoValue(value) : value);
+    }
+
+    static void delOsSlot(PyExceptionValue v, String name) {
+        Map<String,Object> m = osAttrs(v);
+        if (name.equals("characters_written") && !m.containsKey(name)) throw new PyException("AttributeError", name);
+        m.remove(name);
     }
 
     static boolean isExceptionObject(Object value) {

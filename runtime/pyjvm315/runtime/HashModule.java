@@ -10,7 +10,7 @@ import java.util.Map;
 
 /**
  * The builtin digest modules {@code _md5}, {@code _sha1} and {@code _sha2} (hashlib's fallbacks when OpenSSL's
- * {@code _hashlib} is absent), backed by {@link MessageDigest}.
+ * {@code _hashlib} is absent), backed by {@link MessageDigest}. {@code _sha3} and {@code _blake2} are in {@link Hash3Module}.
  */
 final class HashModule {
     private HashModule() {}
@@ -51,26 +51,20 @@ final class HashModule {
             PyRuntime.classAddProperty(cls, "name", ME, "nameOf", null);
             PyRuntime.classAddProperty(cls, "digest_size", ME, "digestSizeOf", null);
             PyRuntime.classAddProperty(cls, "block_size", ME, "blockSizeOf", null);
+            noPickle(cls, false);
             finish(cls);
+            seal(cls);
             m.attrs.put(typeName, cls);
             fn(m, n, (args, kw) -> construct(a, n, args, kw));
         }
+        HashArgs.gilMinsize(m);
         return m;
     }
 
     private static Object construct(Algo a, String fname, List<Object> args, Map<Object, Object> kw) {
-        Object data = NativeArgs.MISSING;
         Map<Object, Object> rest = new java.util.LinkedHashMap<>(kw);
-        Object sfk = rest.remove("usedforsecurity");
-        if (args.size() > 1) throw new PyException("TypeError", fname + "() takes at most 1 positional argument (" + args.size() + " given)");
-        if (!args.isEmpty()) data = args.get(0);
-        for (String key : new String[]{"data", "string"}) {
-            if (rest.containsKey(key)) {
-                if (data != NativeArgs.MISSING) throw new PyException("TypeError", "argument for " + fname + "() given by name ('" + key + "') and position (1)");
-                data = rest.remove(key);
-            }
-        }
-        if (!rest.isEmpty()) throw new PyException("TypeError", fname + "() got an unexpected keyword argument '" + rest.keySet().iterator().next() + "'");
+        Object data = HashArgs.dataArg(fname, args, rest);
+        HashArgs.noUnknown(fname, rest);
         PyInstance inst = newInstance(a.cls, new St(a, digest(a)));
         if (data != NativeArgs.MISSING) update(inst, data);
         return inst;
@@ -88,11 +82,7 @@ final class HashModule {
 
     public static Object update(Object self, Object obj) {
         St s = st(self);
-        if (obj instanceof String) throw new PyException("TypeError", "Strings must be encoded before hashing");
-        byte[] b;
-        try { b = IoUtil.bytesLike(obj); }
-        catch (PyException e) { throw new PyException("TypeError", "object supporting the buffer API required"); }
-        s.md.update(b);
+        s.md.update(HashArgs.bytes(obj));
         return null;
     }
 

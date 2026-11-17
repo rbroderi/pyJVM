@@ -98,6 +98,12 @@ final class TypeParamsGeneric extends TypeParamsObject {
             return out.append("]").toString();
         }
         if (item instanceof PyBuiltinFunction f) return f.name;   // builtins: shown by qualname alone
+        if (item instanceof PyInstance pi) {   // an instance does not see its class's __qualname__; only 3.15's TypeAliasType has its own
+            if (pi.cls.name.equals("TypeAliasType") && LangVersion.atLeast(3, 15) && PyRuntime.getattrDefault(item, "__module__", null) instanceof String m)
+                return m + "." + PyRuntime.pyStr(PyRuntime.getattrDefault(item, "__name__", ""));
+            return PyRuntime.pyRepr(item);
+        }
+        if (item instanceof TypeParamsAlias && !LangVersion.atLeast(3, 15)) return PyRuntime.pyRepr(item);   // only 3.15's alias has __qualname__
         if (!(item instanceof TypeParamsGeneric)) {   // ga_repr_item: anything with __qualname__ and __module__ is shown module-qualified
             Object qualname = PyRuntime.getattrDefault(item, "__qualname__", null), module = PyRuntime.getattrDefault(item, "__module__", null);
             if (qualname instanceof String q && module instanceof String m && PyRuntime.getattrDefault(item, "__origin__", null) == null) return m.equals("builtins") ? q : m + "." + q;
@@ -106,7 +112,7 @@ final class TypeParamsGeneric extends TypeParamsObject {
     }
 
     private String originRepr() {
-        if (origin instanceof TypeParamsAlias alias && LangVersion.atLeast(3, 14)) return PyRuntime.pyStr(alias.getattr("__module__")) + "." + alias.name;
+        if (origin instanceof TypeParamsAlias alias && LangVersion.atLeast(3, 15)) return PyRuntime.pyStr(alias.getattr("__module__")) + "." + alias.name;
         return reprItem(origin);
     }
 

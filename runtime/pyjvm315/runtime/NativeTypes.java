@@ -68,6 +68,40 @@ final class NativeTypes {
 
     static void finish(PyClass cls) { PyRuntime.classFinalizeWithKeywords(cls, new PyDict()); }
 
+    /**
+     * Makes {@code cls} behave like a CPython static type (no Py_TPFLAGS_HEAPTYPE, no BASETYPE): class attributes cannot be
+     * set or deleted ("immutable type"), it cannot be subclassed, and instances have no __dict__. Call after {@link #finish}.
+     */
+    static void seal(PyClass cls) {
+        cls.sealed = true;
+        cls.instanceDictAllowed = false;
+    }
+
+    /** {@code module.Name} as CPython's tp_name prints it in these messages. */
+    static String qualName(PyClass cls) { return cls.moduleName + "." + cls.name; }
+
+    /**
+     * Makes instances unpicklable like CPython objects without a reduce support: {@code __reduce_ex__(protocol >= 2)} raises
+     * {@code cannot pickle 'mod.Name' object} (so pickle and copy fail). With {@code shortLegacy} protocols 0/1 and
+     * {@code __reduce__()} raise the short {@code cannot pickle 'Name' object} (objects whose type has no copyreg fallback).
+     */
+    static void noPickle(PyClass cls, boolean shortLegacy) {
+        method(cls, NativeTypes.class, "__reduce_ex__", shortLegacy ? "reduceExShort" : "reduceExLong", "self,protocol");
+        method(cls, NativeTypes.class, "__reduce__", shortLegacy ? "reduceShort" : "reduceLong", "self");
+    }
+
+    private static PyException cannotPickle(Object self, boolean qualified) {
+        PyClass c = ((PyInstance) self).cls;
+        return new PyException("TypeError", "cannot pickle '" + (qualified ? qualName(c) : c.name) + "' object");
+    }
+
+    private static boolean modern(Object protocol) { return !(protocol instanceof Long p) || p >= 2; }
+
+    public static Object reduceExLong(Object self, Object protocol) { throw cannotPickle(self, true); }
+    public static Object reduceExShort(Object self, Object protocol) { throw cannotPickle(self, modern(protocol)); }
+    public static Object reduceLong(Object self) { throw cannotPickle(self, true); }
+    public static Object reduceShort(Object self) { throw cannotPickle(self, false); }
+
     static PyInstance newInstance(PyClass cls, Object state) {
         PyInstance i = new PyInstance(cls);
         i.slotValues.put(STATE, state);

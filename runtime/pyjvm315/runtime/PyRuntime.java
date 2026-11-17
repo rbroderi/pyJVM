@@ -137,6 +137,7 @@ public final class PyRuntime {
     public static Object importNative(Object nameObj) {
         String name=(String)nameObj;
         PyModule cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
+        if (CjkSource.handles(name)) return CjkSource.load(name);   // Python-source modules compile on another thread: not under NATIVE_LOCK
         synchronized (NATIVE_LOCK) {
         cached=ImportSupport.cachedModule(name); if(cached!=null) return cached;
         PyModule module = switch(name){
@@ -397,7 +398,16 @@ public final class PyRuntime {
         return new String(Character.toChars(code.intValue()));
     }
     static final java.util.concurrent.ConcurrentHashMap<String,PyBuiltinType> BUILTIN_TYPES = new java.util.concurrent.ConcurrentHashMap<>();
-    public static Object builtinType(Object nameObj){return BUILTIN_TYPES.computeIfAbsent((String)nameObj,PyBuiltinType::new);}
+    /** IOError and EnvironmentError (and WindowsError on Windows) are OSError itself; WindowsError is a NameError elsewhere. */
+    static String canonicalBuiltinType(String name){
+        if(name.equals("IOError")||name.equals("EnvironmentError"))return "OSError";
+        if(name.equals("WindowsError")){
+            if(ImportSupport.WINDOWS)return "OSError";
+            throw new PyException("NameError","name 'WindowsError' is not defined");
+        }
+        return name;
+    }
+    public static Object builtinType(Object nameObj){return BUILTIN_TYPES.computeIfAbsent(canonicalBuiltinType((String)nameObj),PyBuiltinType::new);}
     public static Object typeOf(Object value){
         if(value instanceof PySuper sup && sup.cls==SUPER_CLASS)return builtinType("super");
         if(value instanceof PyInstance i) return i.cls;
@@ -3001,7 +3011,7 @@ public final class PyRuntime {
 
     public static boolean exceptionMatches(Object throwableObj, Object typeObj) {
         Throwable t = (Throwable)throwableObj;
-        String requested = typeObj instanceof PyBuiltinType bt ? bt.name : (String)typeObj;
+        String requested = canonicalBuiltinType(typeObj instanceof PyBuiltinType bt ? bt.name : (String)typeObj);
         if(t instanceof PyException p && p.instance instanceof PyInstance inst && inst.cls.exceptionBase!=null && !(typeObj instanceof PyClass) && BUILTIN_EXCEPTION_NAMES.contains(requested))return classExcIs(inst.cls,requested);
         String actual = pythonExceptionType(t);
         return exceptionIsSubclass(actual, requested);
@@ -3091,6 +3101,7 @@ public final class PyRuntime {
         PyClass target=(PyClass)cls;
         if(base instanceof PyClass pyBase){
             if(pyBase.name.equals("lock") && "_thread".equals(pyBase.moduleName)) throw new PyException("TypeError","type '_thread.lock' is not an acceptable base type");
+            if(pyBase.sealed) throw new PyException("TypeError","type '"+pyBase.displayModule()+"."+pyBase.name+"' is not an acceptable base type");
             target.bases.add(pyBase);
             if(target.origBases!=null) target.origBases.items.add(pyBase);
             if(pyBase.exceptionBase!=null && target.exceptionBase==null){ target.exceptionBase=pyBase.exceptionBase; EXCEPTION_PARENTS.put(target.name,pyBase.name); }
@@ -3583,10 +3594,10 @@ public final class PyRuntime {
         } else {
             created=cls.nativeKind!=null?NativeSubclass.allocate(cls,cls.nativeKind,args,kwargs):typeMro(cls).contains(builtinType("super"))?new PySuper(cls):PyInstance.create(cls);
             if(created instanceof PyInstance li && li.fields instanceof ThreadModule.LocalFields lf) lf.recordInit(args,kwargs);
-            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); BuiltinsExtra.initOSErrorFields(exc,args); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
+            if(cls.exceptionBase!=null && created instanceof PyInstance exc) { boolean osInit=cls.lookupMethod("__init__")!=null && exceptionIsSubclass(cls.exceptionBase,"OSError"); PyTuple t=new PyTuple(); if(!osInit)t.items.addAll(Arrays.asList(args)); exc.fields.put("args",t); if(!osInit)BuiltinsExtra.initOSErrorFields(exc,args); if(BuiltinsExtra.isGroupType(cls.exceptionBase)) BuiltinsExtra.initGroupInstance(exc,args); }
         }
 
-        if(newMethod!=null && cls.exceptionBase!=null && created instanceof PyInstance made && made.cls.exceptionBase!=null && cls.lookupMethod("__init__")==null) ExceptionGroupSupport.setArgsField(made,args);
+        if(newMethod!=null && cls.exceptionBase!=null && created instanceof PyInstance made && made.cls.exceptionBase!=null && cls.lookupMethod("__init__")==null && !exceptionIsSubclass(made.cls.exceptionBase,"OSError")) ExceptionGroupSupport.setArgsField(made,args);
         // __init__ is called only when __new__ produced an instance of cls or a
         // subclass, matching Python's constructor protocol.
         if(created instanceof PyInstance instance && instance.cls.mro.contains(cls)) {
@@ -3726,7 +3737,7 @@ public final class PyRuntime {
         }
         if(builtin.name.equals("code") && name.equals("__init__")) throw new PyException("ValueError","no signature found for builtin type <class 'code'>");
         if(builtin.name.equals("object") && name.equals("__init__")){return null;}
-        if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattr(args[0],args[1],args[2]);return null;}
+        if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__setattr__")){requireArgs(name,args,3);setattrRaw(args[0],args[1],args[2]);return null;}
         if((builtin.name.equals("object") || builtin.name.equals("type")) && name.equals("__delattr__")){requireArgs(name,args,2);delattr(args[0],args[1]);return null;}
         if(name.equals("__reduce_ex__") || name.equals("__reduce__")) throw new PyException("NotImplementedError",builtin.name+"."+name+" is not implemented");
         if(builtin.name.equals("object") && (name.equals("__repr__") || name.equals("__str__") || name.equals("__hash__"))){
@@ -3766,7 +3777,10 @@ public final class PyRuntime {
         if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__new__")) return ExceptionGroupSupport.exceptionNew(builtin,args);
         if(exceptionIsSubclass(builtin.name,"BaseException") && name.equals("__init__")) {   // BaseException.__init__(self, *args)
             if(args.length<1 || !(args[0] instanceof PyInstance self)) throw new PyException("TypeError","descriptor '__init__' requires an exception instance");
+            boolean osNew=exceptionIsSubclass(builtin.name,"OSError") && exceptionIsSubclass(self.cls.exceptionBase,"OSError") && self.cls.lookupMethod("__new__")!=null;
+            if(osNew)return null;   // OSError.__init__ does nothing when __new__ already parsed the arguments
             PyTuple t=new PyTuple(); t.items.addAll(Arrays.asList(args).subList(1,args.length)); self.fields.put("args",t);
+            if(exceptionIsSubclass(builtin.name,"OSError"))BuiltinsExtra.initOSErrorFields(self,Arrays.copyOfRange(args,1,args.length));
             return null;
         }
         if((builtin.name.equals("dict")||builtin.name.equals("frozendict")) && name.equals("fromkeys")) {
@@ -4270,6 +4284,13 @@ public final class PyRuntime {
     }
 
     public static void setattr(Object obj, Object nameObj, Object value) {
+        // sealed native-style classes (the _typing types) may define __setattr__ in Python; object.__setattr__ is the raw path
+        if(obj instanceof PyInstance sealedInst && sealedInst.cls.sealed && sealedInst.cls.lookupAttr("__setattr__") instanceof PyFunction hook){
+            callFunction(hook,new ArrayList<>(Arrays.asList(obj,nameObj,value)),new LinkedHashMap<>());return;
+        }
+        setattrRaw(obj,nameObj,value);
+    }
+    static void setattrRaw(Object obj, Object nameObj, Object value) {
         if(obj instanceof PySuper && Set.of("__thisclass__","__self__","__self_class__").contains(nameObj))
             throw new PyException("AttributeError","readonly attribute");
         String name=(String)nameObj;
@@ -4303,6 +4324,7 @@ public final class PyRuntime {
             if(instance.cls.weakProxy){WeakrefProxy.setattr(instance,name,value);return;}
             PyProperty prop=instance.cls.lookupProperty(name);
             if(prop!=null) {
+                if(prop.setter==null && instance.cls.sealed) throw new PyException("AttributeError", "attribute '"+name+"' of '"+instance.cls.moduleName+"."+instance.cls.name+"' objects is not writable");
                 if(prop.setter==null) throw new PyException("AttributeError", "property '"+name+"' of '"+instance.cls.name+"' object has no setter");
                 invoke(instance,prop.setterMethod(),new Object[]{value}); return;
             }
@@ -4317,11 +4339,14 @@ public final class PyRuntime {
             if(descriptor instanceof PyInstance d && d.cls.lookupMethod("__set__") != null) {
                 callMethod(descriptor,"__set__",new Object[]{instance,value}); return;
             }
+            if(!instance.cls.instanceDictAllowed && instance.cls.sealed)
+                throw new PyException("AttributeError","'"+instance.cls.displayModule()+"."+instance.cls.name+"' object has no attribute '"+name+"' and no __dict__ for setting new attributes");
             if(!instance.cls.instanceDictAllowed)
                 throw new PyException("AttributeError","'"+instance.cls.name+"' object has no attribute '"+name+"'");
             instance.fields.put(name, value); return;
         }
         if(obj instanceof PyClass cls){
+            if(cls.sealed) throw new PyException("TypeError","cannot set '"+name+"' attribute of immutable type '"+cls.displayModule()+"."+cls.name+"'");
             if(cls.metaclass==null && AnnotationSupport.deferred() && AnnotationSupport.isAnnotationName(name))AnnotationSupport.classSet(cls,name,value);
             else classAddAttr(cls,name,value);
             return;
@@ -4371,6 +4396,7 @@ public final class PyRuntime {
             instance.fields.remove(name); return;
         }
         if(obj instanceof PyClass cls){String name=(String)nameObj;
+            if(cls.sealed) throw new PyException("TypeError","cannot set '"+name+"' attribute of immutable type '"+cls.displayModule()+"."+cls.name+"'");
             if(cls.metaclass==null && AnnotationSupport.deferred() && AnnotationSupport.isAnnotationName(name)){AnnotationSupport.classDelete(cls,name);return;}
             if(!cls.attrs.containsKey(name))throw new PyException("AttributeError","attribute not found");cls.attrs.remove(name);cls.methods.remove(name);cls.properties.remove(name);return;}
         throw typeError("attribute deletion on unsupported object",obj);

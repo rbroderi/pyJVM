@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+import _blake2
+
+
+def t(label, f, *a, **k):
+    try:
+        print(label, repr(f(*a, **k)))
+    except Exception as e:
+        print(label, type(e).__name__, e)
+
+
+b, s = _blake2.blake2b, _blake2.blake2s
+print(sorted(n for n in dir(_blake2) if not n.startswith('__')))
+print({n: getattr(_blake2, n) for n in dir(_blake2) if n.isupper()})
+print(hasattr(_blake2, '_GIL_MINSIZE'))
+for c in (b, s):
+    print(c.__name__, c.__module__, c.__doc__, c.SALT_SIZE, c.PERSON_SIZE, c.MAX_KEY_SIZE, c.MAX_DIGEST_SIZE)
+    h = c()
+    print(h.name, h.digest_size, h.block_size, h.hexdigest(), type(h) is c)
+    print(c(b'abc').hexdigest())
+    print(c(data=b'abc').hexdigest()[:16])
+
+print(b(b'abc', key=b'k', salt=b's', person=b'p', digest_size=20).hexdigest())
+print(s(b'abc', key=b'k', salt=b's', person=b'p', digest_size=20).hexdigest())
+print(b(b'abc', fanout=2, depth=2, leaf_size=4096, node_offset=1, node_depth=1, inner_size=64, last_node=True).hexdigest())
+print(s(b'abc', fanout=2, depth=2, leaf_size=4096, node_offset=1, node_depth=1, inner_size=32, last_node=True).hexdigest())
+print(b(b'a' * 1000000).hexdigest())
+print(s(b'a' * 1000000).hexdigest())
+for n in (0, 1, 127, 128, 129, 255, 256, 257):
+    print('b', n, b(b'x' * n).hexdigest()[:16], b(b'x' * n, key=b'k' * 64).hexdigest()[:16])
+for n in (0, 1, 63, 64, 65, 127, 128, 129):
+    print('s', n, s(b'x' * n).hexdigest()[:16], s(b'x' * n, key=b'k' * 32).hexdigest()[:16])
+for c in (b, s):
+    for n in (1, 7, 100):
+        h = c()
+        for i in range(0, 300, n):
+            h.update(b'x' * min(n, 300 - i))
+        assert h.hexdigest() == c(b'x' * 300).hexdigest(), (c, n)
+    for ds in (1, 2, 16, c.MAX_DIGEST_SIZE):
+        print(c.__name__, ds, c(b'abc', digest_size=ds).hexdigest())
+    print(c(key=b'k' * c.MAX_KEY_SIZE, salt=b's' * c.SALT_SIZE, person=b'p' * c.PERSON_SIZE).hexdigest()[:20])
+    print(c(b'abc', fanout=0, depth=255, node_depth=255).hexdigest()[:20])
+    print(c(b'abc', key=memoryview(b'kk')).hexdigest()[:16], c(b'abc', key=bytearray(b'kk')).hexdigest()[:16])
+    print(c(b'abc', salt=bytearray(b'ss'), person=memoryview(b'pp')).hexdigest()[:16])
+    for ln in (True, False, 0, 1, 'x', [], None):
+        print(c(b'abc', last_node=ln).hexdigest()[:16])
+    h = c(b'abc', digest_size=7, key=b'key', salt=b'salt', fanout=3)
+    d = h.digest()
+    h.update(b'def')
+    cp = h.copy()
+    print(d.hex(), h.hexdigest(), cp.hexdigest() == h.hexdigest(), cp.digest_size, cp.name, cp.block_size)
+    cp.update(b'zzz')
+    print(cp.hexdigest() != h.hexdigest(), type(cp) is c)
+
+print(b(b'abc', node_offset=2 ** 64 - 1).hexdigest()[:16], s(b'abc', node_offset=2 ** 48 - 1).hexdigest()[:16])
+print(b(b'abc', leaf_size=2 ** 32 - 1).hexdigest()[:16])
+print(b(b'abc', digest_size=True).digest_size)
+
+# validation
+for c in (b, s):
+    mx = c.MAX_DIGEST_SIZE
+    t('ds0', c, digest_size=0)
+    t('ds+1', c, digest_size=mx + 1)
+    t('ds-1', c, digest_size=-1)
+    t('key+1', c, key=b'k' * (c.MAX_KEY_SIZE + 1))
+    t('salt+1', c, salt=b's' * (c.SALT_SIZE + 1))
+    t('person+1', c, person=b'p' * (c.PERSON_SIZE + 1))
+    t('fanout256', c, fanout=256)
+    t('fanout-1', c, fanout=-1)
+    t('depth0', c, depth=0)
+    t('depth256', c, depth=256)
+    t('node_depth256', c, node_depth=256)
+    t('node_depth-1', c, node_depth=-1)
+    t('inner+1', c, inner_size=mx + 1)
+    t('inner-1', c, inner_size=-1)
+    t('leaf-1', c, leaf_size=-1)
+    t('node_offset-1', c, node_offset=-1)
+    t('node_offset2**64', c, node_offset=2 ** 64)
+    t('node_offset2**48', lambda: type(c(node_offset=2 ** 48)).__name__)
+    t('leaf str', c, leaf_size='x')
+    t('leaf float', c, leaf_size=1.5)
+    t('node_offset str', c, node_offset='x')
+    t('ds str', c, digest_size='x')
+    t('ds float', c, digest_size=1.5)
+    t('ds None', c, digest_size=None)
+    t('fanout str', c, fanout='x')
+    t('depth float', c, depth=1.5)
+    t('node_depth str', c, node_depth='x')
+    t('inner str', c, inner_size='x')
+    t('ds huge', c, digest_size=2 ** 70)
+    t('fanout huge', c, fanout=2 ** 40)
+    t('key str', c, key='k')
+    t('salt None', c, salt=None)
+    t('person int', c, person=5)
+    t('order ds key', c, digest_size=99, key=b'k' * 99)
+    t('order key salt', c, key=b'k' * 99, salt=b's' * 99)
+    t('order salt person', c, salt=b's' * 99, person=b'p' * 99)
+    t('order person fanout', c, person=b'p' * 99, fanout=999)
+    t('order fanout depth', c, fanout=999, depth=999)
+    t('order depth nd', c, depth=999, node_depth=999)
+    t('order nd inner', c, node_depth=999, inner_size=999)
+    t('order inner key', c, inner_size=999, key=b'k' * 99)
+    t('order nodeoff inner', c, node_offset=2 ** 50, inner_size=999)
+    t('order nodeoff key', c, node_offset=2 ** 50, key=b'k' * 99)
+    t('order depth leaf', c, depth=999, leaf_size=-1)
+    t('data str', c, 'text')
+    t('data int', c, 5)
+    t('data None', c, None)
+    t('data+string', c, b'a', string=b'b')
+    t('data=+string', c, data=b'a', string=b'b')
+    t('data twice', c, b'a', data=b'b')
+    t('two positional', c, b'', b'')
+    t('unknown kw', c, foo=1)
+    t('usedforsecurity', lambda: c(b'a', usedforsecurity=False).hexdigest()[:8])
+    h = c(b'abc')
+    t('update()', h.update)
+    t('update(kw)', h.update, data=b'')
+    t('update(2)', h.update, b'', b'')
+    t('update(str)', h.update, 'x')
+    t('update(int)', h.update, 5)
+    t('update(None)', h.update, None)
+    t('digest(1)', h.digest, 1)
+    t('hexdigest(1)', h.hexdigest, 1)
+    t('copy(1)', h.copy, 1)
+    t('update ret', h.update, b'x')

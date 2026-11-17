@@ -150,6 +150,7 @@ public final class ExceptionGroupSupport {
             throw new PyException("TypeError", builtin.name + ".__new__(X): X is not a subtype of " + builtin.name);
         PyInstance made = new PyInstance(cls);
         setConstructorArgs(made, Arrays.copyOfRange(args, 1, args.length));
+        BuiltinsExtra.initOSErrorFields(made, Arrays.copyOfRange(args, 1, args.length));
         return made;
     }
 
@@ -189,6 +190,10 @@ public final class ExceptionGroupSupport {
             Map<Object,Object> d = dict(e, false);
             if (d != null && d.containsKey(name)) return d.get(name);
         }
+        // OSError slots of a user subclass whose constructor did not fill them read None
+        if (e instanceof PyInstance inst && inst.cls.exceptionBase != null && !inst.fields.containsKey(name)
+                && (name.equals("errno") || name.equals("strerror") || name.equals("filename") || name.equals("filename2") || name.equals("winerror") && ImportSupport.WINDOWS)
+                && inst.cls.lookupAttr(name) == MISSING && PyRuntime.exceptionIsSubclass(inst.cls.exceptionBase, "OSError")) return null;
         return MISSING;
     }
 
@@ -212,6 +217,7 @@ public final class ExceptionGroupSupport {
         }
         if (e instanceof PyExceptionValue) {
             if (name.equals("args")) { setArgs((PyExceptionValue) e, value); return true; }
+            if (BuiltinsExtra.isOsSlot((PyExceptionValue) e, name)) { BuiltinsExtra.setOsSlot((PyExceptionValue) e, name, value); return true; }
             dict(e, true).put(name, value);
             return true;
         }
@@ -225,6 +231,7 @@ public final class ExceptionGroupSupport {
             default: break;
         }
         if (e instanceof PyExceptionValue v) {
+            if (BuiltinsExtra.isOsSlot(v, name)) { BuiltinsExtra.delOsSlot(v, name); return true; }
             Map<Object,Object> d = dict(e, false);
             if (d == null || !d.containsKey(name)) throw attributeError(e, name);
             d.remove(name);
@@ -237,7 +244,8 @@ public final class ExceptionGroupSupport {
         if (isGroup(v)) throw new PyException("AttributeError", "readonly attribute");
         PyTuple items = new PyTuple();
         for (Object item : iterable(value)) items.items.add(item);
-        v.value = items.items.size() == 1 && items.items.get(0) != null ? items.items.get(0)
+        if (v.value instanceof PyExcArgs old && old.attrs != null && ImportSupport.OS_ERRORS.contains(v.typeName)) { v.value = new PyExcArgs(items, null, old.attrs); return; }
+        v.value =items.items.size() == 1 && items.items.get(0) != null ? items.items.get(0)
             : items.items.isEmpty() ? null : new PyExcArgs(items, null);
     }
 
