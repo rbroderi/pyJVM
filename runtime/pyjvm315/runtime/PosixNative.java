@@ -37,7 +37,7 @@ final class PosixNative {
     }
 
     /** Handle without errno capture, for functions that cannot fail (malloc/free are checked by value, not errno). */
-    private static MethodHandle fnNoCapture(String name, FunctionDescriptor d) {
+    static MethodHandle fnNoCapture(String name, FunctionDescriptor d) {
         return LINKER.downcallHandle(LINKER.defaultLookup().findOrThrow(name), d);
     }
 

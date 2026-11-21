@@ -59,6 +59,7 @@ final class SelectModule {
     /** Bit 1: readable, bit 2: writable, or -1 for a descriptor that is not open. */
     private static int ready(long fd) {
         if (!IoFd.valid(fd)) return -1;
+        if (IoFd.KERNEL) return fd == 0 ? (stdinReady() ? 1 : 0) : fd <= 2 ? 2 : 3;
         IoFd.Fd f = IoFd.get(fd);
         if (f.std == 0) return stdinReady() ? 1 : 0;
         if (f.std > 0) return 2;

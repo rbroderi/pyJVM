@@ -12,6 +12,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
+import java.math.BigInteger;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -31,7 +32,8 @@ final class PosixFds {
     private PosixFds() {}
 
     static final int O_NONBLOCK = 04000, O_CLOEXEC = 02000000;
-    static final int F_GETFD = 1, F_GETFL = 3, F_DUPFD_CLOEXEC = 1030;
+    static final int F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_DUPFD_CLOEXEC = 1030, FD_CLOEXEC = 1;
+    static final long TIOCGWINSZ = 0x5413;
     static final int SEEK_CUR = 1;
     static final int EINTR = 4;
     static final short POLLIN = 1, POLLOUT = 4;
@@ -54,6 +56,8 @@ final class PosixFds {
     private static final MethodHandle ISATTY = PosixNative.fn("isatty", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
     private static final MethodHandle FCNTL = PosixNative.fn("fcntl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), VARIADIC2);
     private static final MethodHandle POLL = PosixNative.fn("poll", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT));
+    private static final MethodHandle FDATASYNC = PosixNative.fn("fdatasync", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
+    private static final MethodHandle IOCTL = PosixNative.fn("ioctl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, ADDRESS), VARIADIC2);
 
     // ---- descriptor generations (plan 1.7): not a descriptor table, nothing reads it for I/O ----------------
 
@@ -317,5 +321,101 @@ final class PosixFds {
         int r;
         try { r = (int) FCNTL.invokeExact(PosixNative.tl().cs, (int) fd, F_GETFD, 0); } catch (Throwable x) { throw PosixNative.rethrow(x); }
         return r != -1;
+    }
+
+    // ---- os-level descriptor functions (PosixOsFds) -----------------------------------------------------------
+
+    /** A u64 as a Python int: values above 2^63 must not print negative. */
+    static Object unsigned(long v) { return v >= 0 ? (Object) v : new BigInteger(Long.toUnsignedString(v)); }
+
+    private static long timeNs(MemorySegment st, long off) { return st.get(JAVA_LONG, off) * 1_000_000_000L + st.get(JAVA_LONG, off + 8); }
+
+    /**
+     * The one place that turns a {@code struct stat} (plan 3.2) into an {@code os.stat_result}. Every field is read
+     * before anything else can run, so the buffer is never read across a {@code dispatchPending()}.
+     */
+    static PyInstance statResult(MemorySegment st) {
+        long dev = st.get(JAVA_LONG, 0), ino = st.get(JAVA_LONG, 8), nlink = st.get(JAVA_LONG, 16);
+        long mode = Integer.toUnsignedLong(st.get(JAVA_INT, 24)), uid = Integer.toUnsignedLong(st.get(JAVA_INT, 28)), gid = Integer.toUnsignedLong(st.get(JAVA_INT, 32));
+        long rdev = st.get(JAVA_LONG, 40), size = st.get(JAVA_LONG, 48), blksize = st.get(JAVA_LONG, 56), blocks = st.get(JAVA_LONG, 64);
+        long[] at = {timeNs(st, 72), timeNs(st, 88), timeNs(st, 104)};
+        PyInstance r = PosixModule.newStatResult();
+        PosixModule.fill(r, mode, ino, dev, nlink, uid, gid, size, at);
+        if (ino < 0 || dev < 0) {                       // PosixModule.fill takes longs: patch the unsigned values in
+            PyTuple t = (PyTuple) r.slotValues.get(NativeTypes.STATE);
+            if (ino < 0) { t.items.set(1, unsigned(ino)); PosixModule.put(r, "st_ino", unsigned(ino)); }
+            if (dev < 0) { t.items.set(2, unsigned(dev)); PosixModule.put(r, "st_dev", unsigned(dev)); }
+        }
+        PosixModule.put(r, "st_rdev", unsigned(rdev));
+        PosixModule.put(r, "st_blksize", blksize);
+        PosixModule.put(r, "st_blocks", blocks);
+        return r;
+    }
+
+    /** {@code os.fstat}: the kernel's answer for the descriptor, into a fresh 144-byte buffer. */
+    static Object fstat(long fd) {
+        int f = cfd(fd);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment st = a.allocate(STAT_SIZE, 8);
+            fstatRaw(f, st);
+            return statResult(st);
+        }
+    }
+
+    /** {@code fcntl(fd, cmd, 0)} for a getter; -1 is an error (never a flag set). */
+    private static int fcntlGet(int fd, int cmd) {
+        MemorySegment cs = PosixNative.tl().cs;
+        int r;
+        try { r = (int) FCNTL.invokeExact(cs, fd, cmd, 0); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+        if (r == -1) throw PosixNative.osError(PosixNative.errno(cs), null);
+        return r;
+    }
+
+    private static void fcntlSet(int fd, int cmd, int value) {
+        MemorySegment cs = PosixNative.tl().cs;
+        int r;
+        try { r = (int) FCNTL.invokeExact(cs, fd, cmd, value); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+        if (r == -1) throw PosixNative.osError(PosixNative.errno(cs), null);
+    }
+
+    /** Read-modify-write of one bit of F_GETFD/F_GETFL; the setter runs only if the value changes. */
+    private static void setBit(int fd, int getCmd, int setCmd, int bit, boolean on) {
+        int old = fcntlGet(fd, getCmd);
+        int nw = on ? old | bit : old & ~bit;
+        if (nw != old) fcntlSet(fd, setCmd, nw);
+    }
+
+    static boolean getInheritable(long fd) { return (fcntlGet(cfd(fd), F_GETFD) & FD_CLOEXEC) == 0; }
+
+    static void setInheritable(long fd, boolean inheritable) { setBit(cfd(fd), F_GETFD, F_SETFD, FD_CLOEXEC, !inheritable); }
+
+    static boolean getBlocking(long fd) { return (fcntlGet(cfd(fd), F_GETFL) & O_NONBLOCK) == 0; }
+
+    static void setBlocking(long fd, boolean blocking) { setBit(cfd(fd), F_GETFL, F_SETFL, O_NONBLOCK, !blocking); }
+
+    static void fdatasync(long fd) {
+        int f = cfd(fd);
+        MemorySegment cs = PosixNative.tl().cs;
+        while (true) {
+            int r;
+            try { r = (int) FDATASYNC.invokeExact(cs, f); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+            if (r == 0) return;
+            int e = PosixNative.errno(cs);
+            if (e != EINTR) throw PosixNative.osError(e, null);
+            SignalModule.dispatchPending();
+        }
+    }
+
+    /** {@code ioctl(fd, TIOCGWINSZ)}: {columns, lines}; errors (a pipe: ENOTTY) raise OSError. Not retried, as in CPython. */
+    static long[] winsize(long fd) {
+        int f = cfd(fd);
+        MemorySegment cs = PosixNative.tl().cs;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment ws = a.allocate(8, 8);
+            int r;
+            try { r = (int) IOCTL.invokeExact(cs, f, TIOCGWINSZ, ws); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+            if (r == -1) throw PosixNative.osError(PosixNative.errno(cs), null);
+            return new long[]{ws.get(JAVA_SHORT, 2) & 0xffffL, ws.get(JAVA_SHORT, 0) & 0xffffL};
+        }
     }
 }

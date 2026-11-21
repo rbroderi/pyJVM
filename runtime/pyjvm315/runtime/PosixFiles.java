@@ -119,6 +119,7 @@ final class PosixFiles {
         methodVar(scandirClass, PosixFiles.class, "__exit__", "sdExit", "self", "args");
         method(scandirClass, PosixFiles.class, "close", "sdClose", "self");
         finish(scandirClass);
+        if (IoFd.KERNEL) PosixOsFds.install(m);
     }
 
     // ---- file descriptors (the table lives in IoFd) ------------------------------------------------
