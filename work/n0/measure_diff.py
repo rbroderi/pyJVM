@@ -1,13 +1,14 @@
+"""Diff measure-314.txt against its neighbours: usage `python measure_diff.py [DIR]` (default: this script's directory)."""
+import os
 import re
 import sys
 
-base = r"C:\Users\richa\workspace_local\pyjvm-work\n0\measure-%s.txt"
+base = os.path.join(sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__)), "measure-%s.txt")
 
 
 def load(v):
     text = open(base % v, encoding="utf-8").read()
-    text = re.sub(r"posix_measure_\w+", "posix_measure_X", text)
-    text = re.sub(r"(fd|fileno|\()\d+", r"\1N", text) if False else text
+    text = re.sub(r"posix_measure_\w+", "posix_measure_X", text)   # outputs from before the <tmp> scrubbing
     return text.splitlines()
 
 

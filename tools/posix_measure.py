@@ -13,6 +13,7 @@ import errno
 import io
 import os
 import select
+import shutil
 import signal
 import stat
 import sys
@@ -53,7 +54,31 @@ def fact_exc(name: str, fn) -> None:
         print(f"{name}: no error -> {show(result)}")
 
 
+class _Scrub:
+    """stdout filter: the per-run temporary directory is printed as <tmp>, so outputs diff cleanly."""
+
+    def __init__(self, out, tmp: str) -> None:
+        self.out, self.tmp = out, tmp
+
+    def write(self, s: str) -> int:
+        return self.out.write(s.replace(self.tmp, "<tmp>"))
+
+    def flush(self) -> None:
+        self.out.flush()
+
+
 def main() -> int:
+    tmp = tempfile.mkdtemp(prefix="posix_measure_")
+    real = sys.stdout
+    sys.stdout = _Scrub(real, tmp)
+    try:
+        return _measure(tmp)
+    finally:
+        sys.stdout = real
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _measure(tmp: str) -> int:
     if not sys.platform.startswith("linux"):
         print("posix_measure.py: Linux only", file=sys.stderr)
         return 2
@@ -93,7 +118,6 @@ def main() -> int:
         obj = getattr(owner, nm, None)
         print(f"sig {getattr(owner, '__name__', owner)}.{nm}: {getattr(obj, '__text_signature__', 'absent')}")
 
-    tmp = tempfile.mkdtemp(prefix="posix_measure_")
     path = os.path.join(tmp, "f")
     with open(path, "wb") as fh:
         fh.write(b"0123456789")
@@ -206,6 +230,7 @@ def main() -> int:
     e = ents["f"]
     fact("DirEntry inode", lambda: e.inode() == os.lstat(e.path).st_ino)
     fact("DirEntry stat", lambda: e.stat() == os.stat(e.path))
+    fact("DirEntry stat nofollow", lambda: ents["dangling"].stat(follow_symlinks=False) == os.lstat(ents["dangling"].path))
     fact("DirEntry dangling stat", lambda: ents["dangling"].stat())
     # -- non-blocking _io -------------------------------------------------------
     fact("FileIO.read nb", lambda: io.FileIO(pr, closefd=False).read(10))
@@ -280,7 +305,7 @@ def main() -> int:
     fact("poll unregister unknown", lambda: p.unregister(12345))
     fact("poll register 70000", lambda: select.poll().register(q, 70000))
     fact("poll register -1", lambda: select.poll().register(q, -1))
-    fact("poll 2**40", lambda: select.poll().poll(2**40) if False else _poll_big())
+    fact("poll 2**40", _poll_big)
     fact("poll timeout str", lambda: select.poll().poll("x"))
     os.close(s)
     fact("poll HUP", lambda: [x for x in (lambda pp: (pp.register(q, select.POLLIN), pp.poll(0))[1])(select.poll())])
@@ -293,7 +318,9 @@ def main() -> int:
     fact("epoll register twice", lambda: ep.register(q))
     fact("epoll modify unknown", lambda: ep.modify(12345, select.EPOLLIN))
     fact("epoll unregister unknown", lambda: ep.unregister(12345))
-    fact("epoll register regular file", lambda: ep.register(os.open(path, os.O_RDONLY)))
+    rf = os.open(path, os.O_RDONLY)
+    fact("epoll register regular file", lambda: ep.register(rf))
+    os.close(rf)
     fact("epoll register 9999", lambda: ep.register(9999))
     fact("epoll register -1", lambda: ep.register(-1))
     fact("epoll register str", lambda: ep.register("x"))
@@ -333,7 +360,9 @@ def main() -> int:
     fact("wakeup 9999", lambda: signal.set_wakeup_fd(9999))
     fact("wakeup first", lambda: signal.set_wakeup_fd(ww))
     fact("wakeup previous", lambda: signal.set_wakeup_fd(-1))
-    fact("wakeup regular file", lambda: (lambda f: (signal.set_wakeup_fd(f), signal.set_wakeup_fd(-1))[1])(os.open(path, os.O_RDWR)))
+    rw = os.open(path, os.O_RDWR)
+    fact("wakeup regular file", lambda: (signal.set_wakeup_fd(rw), signal.set_wakeup_fd(-1))[1])
+    os.close(rw)
     os.set_blocking(wr, False)
     signal.signal(signal.SIGUSR1, lambda *a: None)
     signal.set_wakeup_fd(ww)

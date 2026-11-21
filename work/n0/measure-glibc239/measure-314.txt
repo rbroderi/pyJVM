@@ -1,0 +1,249 @@
+python: 3.14
+select.dir: ['EPOLLERR', 'EPOLLET', 'EPOLLHUP', 'EPOLLIN', 'EPOLLMSG', 'EPOLLONESHOT', 'EPOLLOUT', 'EPOLLPRI', 'EPOLLRDBAND', 'EPOLLRDHUP', 'EPOLLRDNORM', 'EPOLLWAKEUP', 'EPOLLWRBAND', 'EPOLLWRNORM', 'EPOLL_CLOEXEC', 'PIPE_BUF', 'POLLERR', 'POLLHUP', 'POLLIN', 'POLLMSG', 'POLLNVAL', 'POLLOUT', 'POLLPRI', 'POLLRDBAND', 'POLLRDHUP', 'POLLRDNORM', 'POLLWRBAND', 'POLLWRNORM', 'epoll', 'error', 'poll', 'select']
+epoll.dir: ['__enter__', '__exit__', 'close', 'closed', 'fileno', 'fromfd', 'modify', 'poll', 'register', 'unregister']
+poll.dir: ['modify', 'poll', 'register', 'unregister']
+os.has readinto: True
+select.has EPOLLWAKEUP: True
+select.has EPOLLEXCLUSIVE: False
+select.EPOLLERR: 8
+select.EPOLLET: 2147483648
+select.EPOLLHUP: 16
+select.EPOLLIN: 1
+select.EPOLLMSG: 1024
+select.EPOLLONESHOT: 1073741824
+select.EPOLLOUT: 4
+select.EPOLLPRI: 2
+select.EPOLLRDBAND: 128
+select.EPOLLRDHUP: 8192
+select.EPOLLRDNORM: 64
+select.EPOLLWAKEUP: 536870912
+select.EPOLLWRBAND: 512
+select.EPOLLWRNORM: 256
+select.EPOLL_CLOEXEC: 524288
+select.PIPE_BUF: 4096
+select.POLLERR: 8
+select.POLLHUP: 16
+select.POLLIN: 1
+select.POLLMSG: 1024
+select.POLLNVAL: 32
+select.POLLOUT: 4
+select.POLLPRI: 2
+select.POLLRDBAND: 128
+select.POLLRDHUP: 8192
+select.POLLRDNORM: 64
+select.POLLWRBAND: 512
+select.POLLWRNORM: 256
+os.O_RDONLY: 0
+os.O_WRONLY: 1
+os.O_RDWR: 2
+os.O_ACCMODE: 3
+os.O_CREAT: 64
+os.O_EXCL: 128
+os.O_NOCTTY: 256
+os.O_TRUNC: 512
+os.O_APPEND: 1024
+os.O_NONBLOCK: 2048
+os.O_NDELAY: 2048
+os.O_DSYNC: 4096
+os.O_ASYNC: 8192
+os.O_DIRECT: 16384
+os.O_LARGEFILE: 0
+os.O_DIRECTORY: 65536
+os.O_NOFOLLOW: 131072
+os.O_NOATIME: 262144
+os.O_CLOEXEC: 524288
+os.O_SYNC: 1052672
+os.O_RSYNC: 1052672
+os.O_FSYNC: 1052672
+os.O_PATH: 2097152
+os.O_TMPFILE: 4259840
+os.SEEK_SET: 0
+os.SEEK_CUR: 1
+os.SEEK_END: 2
+os.SEEK_DATA: 3
+os.SEEK_HOLE: 4
+fcntl.F_DUPFD: 0
+fcntl.F_GETFD: 1
+fcntl.F_SETFD: 2
+fcntl.F_GETFL: 3
+fcntl.F_SETFL: 4
+fcntl.F_DUPFD_CLOEXEC: 1030
+fcntl.FD_CLOEXEC: 1
+errno.EPERM: 1
+errno.ENOENT: 2
+errno.EINTR: 4
+errno.EBADF: 9
+errno.EAGAIN: 11
+errno.EEXIST: 17
+errno.ENOTDIR: 20
+errno.EISDIR: 21
+errno.EINVAL: 22
+errno.ENOTTY: 25
+errno.ESPIPE: 29
+errno.EPIPE: 32
+sig os.dup2: ($module, /, fd, fd2, inheritable=True)
+sig os.pipe2: ($module, flags, /)
+sig os.set_inheritable: ($module, fd, inheritable, /)
+sig os.get_inheritable: ($module, fd, /)
+sig os.set_blocking: ($module, fd, blocking, /)
+sig os.get_blocking: ($module, fd, /)
+sig os.pread: ($module, fd, length, offset, /)
+sig os.pwrite: ($module, fd, buffer, offset, /)
+sig os.closerange: ($module, fd_low, fd_high, /)
+sig os.readinto: ($module, fd, buffer, /)
+sig os.stat: ($module, /, path, *, dir_fd=None, follow_symlinks=True)
+sig os.lstat: ($module, /, path, *, dir_fd=None)
+sig epoll.register: ($self, /, fd,
+         eventmask=select.EPOLLIN | select.EPOLLPRI | select.EPOLLOUT)
+sig epoll.modify: ($self, /, fd, eventmask)
+sig epoll.unregister: ($self, /, fd)
+sig epoll.poll: ($self, /, timeout=None, maxevents=-1)
+sig epoll.fromfd: ($type, fd, /)
+sig select.epoll: None
+sig signal.set_wakeup_fd: ($module, fd, /, *, warn_on_full_buffer=True)
+open inheritable: False F_GETFD=1
+open dir O_RDONLY: 'ok'
+open dir O_WRONLY: IsADirectoryError(21, 'Is a directory') filename='<tmp>'
+open file O_DIRECTORY: NotADirectoryError(20, 'Not a directory') filename='<tmp>/f'
+open empty path: FileNotFoundError(2, 'No such file or directory') filename=''
+open NUL path: ValueError('open: embedded null character in path',)
+create mode: 0o644
+read dirfd: IsADirectoryError(21, 'Is a directory')
+lseek dirfd: 0
+fsync dirfd: None
+FileIO(dir): IsADirectoryError(21, 'Is a directory') filename='<tmp>'
+FileIO(dirfd): IsADirectoryError(21, 'Is a directory') filename=4
+open(dir): IsADirectoryError(21, 'Is a directory') filename='<tmp>'
+lseek pipe: OSError(29, 'Illegal seek')
+lseek bad whence: OSError(22, 'Invalid argument')
+write read-only fd: OSError(9, 'Bad file descriptor')
+read write-only fd: OSError(9, 'Bad file descriptor')
+ftruncate -1: OSError(22, 'Invalid argument')
+ftruncate read-only: OSError(22, 'Invalid argument')
+fsync read-only: None
+read -1: OSError(22, 'Invalid argument')
+bad fd close: OSError(9, 'Bad file descriptor')
+bad fd fstat: OSError(9, 'Bad file descriptor')
+bad fd get_inheritable: OSError(9, 'Bad file descriptor')
+bad fd dup: OSError(9, 'Bad file descriptor')
+bad fd set_blocking: OSError(9, 'Bad file descriptor')
+bad fd dup2: OSError(9, 'Bad file descriptor')
+isatty 9999: False
+close -1: OSError(9, 'Bad file descriptor')
+close 2**40: OverflowError('Python int too large to convert to C int',)
+closerange 2**40: OverflowError('Python int too large to convert to C int',)
+dup inheritable: False
+dup2 returns fd2 / inheritable: 200 True
+dup2 inheritable=False: 201 False
+dup2 same: 3
+dup2 same non-inheritable: OSError(22, 'Invalid argument')
+dup2 -1: OSError(9, 'Bad file descriptor')
+pipe inheritable: False False
+pipe F_GETFL access: 0 1
+pipe2 nonblock: inheritable=False blocking=False
+read empty nonblocking pipe: BlockingIOError(11, 'Resource temporarily unavailable')
+pipe2(0): inheritable=True blocking=True
+pipe2 bad flags: OSError(22, 'Invalid argument')
+pipe fstat: fifo=True size=0
+write broken pipe: BrokenPipeError(32, 'Broken pipe')
+set_inheritable True: 0
+closerange a>b: None
+get_terminal_size(pipe): OSError(25, 'Inappropriate ioctl for device')
+umask(0o7777777): '0o777'
+float fd: TypeError("'float' object cannot be interpreted as an integer",)
+str fd: TypeError("'str' object cannot be interpreted as an integer",)
+write str: TypeError("a bytes-like object is required, not 'str'",)
+O_APPEND offset after write: 11 size=11
+pread/pwrite keep offset: b'2345' off=0
+pread -1: OSError(22, 'Invalid argument')
+stat==fstat: True
+stat(fd)==fstat(fd): True
+stat(9999): OSError(9, 'Bad file descriptor') filename=9999
+lstat(int): TypeError('lstat: path should be string, bytes or os.PathLike, not int',)
+stat(1.5): TypeError('stat: path should be string, bytes, os.PathLike or integer, not float',)
+stat missing: FileNotFoundError(2, 'No such file or directory') filename='<tmp>/nope'
+stat NUL: ValueError('stat: embedded null character in path',)
+lstat NUL: ValueError('lstat: embedded null character in path',)
+stat empty: FileNotFoundError(2, 'No such file or directory') filename=''
+stat long component: OSError(36, 'File name too long') filename='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+stat through file: NotADirectoryError(20, 'Not a directory') filename='<tmp>/f/x'
+lstat dangling: (True, 14)
+stat dangling: FileNotFoundError(2, 'No such file or directory') filename='<tmp>/dangling'
+stat /dev/null: (True, True)
+DirEntry inode: True
+DirEntry stat: True
+DirEntry stat nofollow: True
+DirEntry dangling stat: FileNotFoundError(2, 'No such file or directory') filename='<tmp>/dangling'
+FileIO.read nb: None
+FileIO.readall nb: None
+FileIO.readinto nb: None
+Buffered.read(10) nb: None
+Buffered.read() nb: None
+Buffered.readinto nb: None
+Buffered.read1 nb: b''
+Buffered.readline nb: b''
+Buffered.peek nb: b''
+Text.read(5) nb: ''
+Text.readline nb: ''
+Buffered.read(10) 3 bytes: b'abc'
+FileIO.readall 3 bytes: b'abc'
+FileIO.write full pipe: returned None after 65536 bytes written
+BufferedWriter full pipe 8: 8
+BufferedWriter 25 bytes: BlockingIOError(11, 'write could not complete without blocking', 8) characters_written=8
+BufferedWriter flush: BlockingIOError(11, 'write could not complete without blocking', 0) characters_written=0
+BufferedWriter flush drained: None
+select data: ([4], [5], [])
+select writer closed: ([6], [], [])
+select reader closed: ([], [9], [])
+select closed fd: OSError(9, 'Bad file descriptor')
+select fd>=1024: ValueError('filedescriptor out of range in select()',)
+select negative timeout: ValueError('timeout must be non-negative',)
+select timeout str: TypeError('timeout must be a float or None',)
+poll order: [(5, 4), (9999, 32)]
+poll float timeout: [(5, 4), (9999, 32)]
+poll modify unregistered: FileNotFoundError(2, 'No such file or directory')
+poll unregister unknown: KeyError(12345,)
+poll register 70000: OverflowError('Python int too large for C unsigned short',)
+poll register -1: ValueError('Cannot convert negative int',)
+poll 2**40: OverflowError('timeout is too large',)
+poll timeout str: TypeError('timeout must be an integer or None',)
+poll HUP: [(4, 16)]
+epoll fileno>2/inheritable: True False
+epoll register twice: FileExistsError(17, 'File exists')
+epoll modify unknown: OSError(9, 'Bad file descriptor')
+epoll unregister unknown: OSError(9, 'Bad file descriptor')
+epoll register regular file: PermissionError(1, 'Operation not permitted')
+epoll register 9999: OSError(9, 'Bad file descriptor')
+epoll register -1: ValueError('file descriptor cannot be a negative integer (-1)',)
+epoll register str: TypeError('argument must be an int, or have a fileno() method.',)
+epoll register mask -1: OSError(22, 'Invalid argument')
+epoll register mask 2**32: []
+epoll poll(0,0): ValueError('maxevents must be greater than 0, got 0',)
+epoll poll(0,-2): ValueError('maxevents must be greater than 0, got -2',)
+epoll poll(0,-1): []
+epoll poll timeout str: TypeError('timeout must be an integer or None',)
+epoll poll data: [(True, 1)]
+epoll ONESHOT: (1, 0)
+epoll repr: '<select.epoll object'
+epoll closed: True
+epoll second close: None
+epoll poll after close: ValueError('I/O operation on closed epoll object',)
+epoll fileno after close: ValueError('I/O operation on closed epoll object',)
+epoll register after close: ValueError('I/O operation on closed epoll object',)
+epoll(0): ValueError('negative sizehint',)
+epoll(flags=12): OSError('invalid flags',)
+epoll(-1, EPOLL_CLOEXEC): None
+epoll with: True
+wakeup blocking fd: ValueError('the fd 5 must be in non-blocking mode',)
+wakeup 9999: OSError(9, 'Bad file descriptor')
+wakeup first: -1
+wakeup previous: 5
+wakeup regular file: ValueError('the fd 6 must be in non-blocking mode',)
+wakeup byte is signum: True
+wakeup full pipe warn=True: '[\'Exception ignored while trying to write to the signal wakeup fd:\', \'Traceback (most recent call last):\', \'  File "<string>", line 6, in <lambda>\', \'BlockingIOError: [Errno 11] Resource temporarily unavailable\']'
+wakeup full pipe warn=False: '[]'
+read interrupted by pthread_kill handler: b'H'
+setitimer raising handler interrupts os.read: Boom fast=True
+setitimer raising handler interrupts select.select: Boom fast=True
+setitimer raising handler interrupts epoll.poll: Boom fast=True
+returning handler does not shorten select: True

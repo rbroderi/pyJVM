@@ -144,3 +144,17 @@ $env:PYJVM_BUILD_CACHE='C:\Users\richa\workspace_local\pyjvm-work\bc-conf'; $env
 
 ## Environment lessons (cloud container; may not apply locally)
 Container restarts ~every 7 min killed background jobs; stale half-built caches caused bogus failures ("no attribute compile_source") - wipe cache dirs and prefer `PYJVM_BUILD_CACHE` (atomic builds). Background JVM jobs must reset SIGINT (`perl -e '$SIG{INT}="DEFAULT"; exec @ARGV'`).
+
+## Work log (append-only; newest last)
+Each session appends dated entries here at key points (ticket start/finish, gate results, decisions, blockers, pauses). Do not rewrite earlier entries.
+
+### 2026-11-21: E: machine (`E:\pyjvm`, desktop app session) resumes N0 ticket 0
+- **Host:** a second machine, not `workspace_local`. Repo `E:\pyjvm` on branch `n0-fds` (tracking origin), CPython corpus `E:\cpython` (5b28ebd, Lib only), scratch/lock folder `E:\pyjvm-work`. Windows: Temurin 25.0.5, uv 0.13.8, uv-managed Pythons. 63 GB RAM, nonpaged pool back to ~1.6 GB (the NtFC leak cleared on reboot); the owner says this machine has plenty of CPU/RAM for runs.
+- **WSL here:** Ubuntu **24.04, glibc 2.39** (the plan's reference data is glibc 2.35 / 22.04). Provisioned today: `~/jdk-25` (Temurin 25.0.5.1), uv 0.13.6, uv-managed CPython 3.13.18 / 3.14.10 / 3.15.2, `~/pyjvm-n0` cloned from GitHub on `n0-fds` with `.venv313/314/315` (pytest). `~/pyjvm-env.sh` sets `JAVA_HOME`, `PATH`, `PYTHONPATH`, `PYJVM_LOCK=/mnt/e/pyjvm-work/run.lock`. No `~/pyjvm` (regular-gates clone) or `~/cpython` yet.
+- **Ticket 0 finished:**
+  - `work/n0/baseline.md` written from the B0 logs (counts and failing names per lane and OS; Linux known-failing: `time_struct_time_and_strftime` on all lanes, `zlib_streams` 3.15, `threading_imports` 3.13, flaky `test_concurrent_processes_do_not_corrupt_the_cache`).
+  - `tests/test_licenses.py` rerun on Windows: 4 passed (the B0 Windows pytest failure was only the missing headers).
+  - Independent review (Opus subagent): approve with nits, no blockers; all baseline counts/names verified against the logs. Fixed: the four ticket-0 scripts no longer hard-code the lock path or hang when it is missing (new `work/n0/run_lock.sh` and `work/n0/RunLock.ps1`: atomic create, release only if still ours, EXIT/INT trap; paths from `PYJVM_LOCK` in WSL and `PYJVM_WORK`/`PYJVM_MAIN` on Windows); Windows caches are per tree and lane; `tools/posix_measure.py` prints the temp dir as `<tmp>`, removes it, closes two leaked descriptors, drops dead code, and measures `DirEntry.stat(follow_symlinks=False) == lstat`; `measure.sh`/`measure_diff.py` take paths as arguments; baseline wording on the Windows tree's untracked files; plan 7.1 note; `work/README.md` marks the root `run_*.ps1` as superseded. Lock helpers smoke-tested on both OSes.
+  - Re-measured under glibc 2.39 (`work/n0/measure-glibc239/`): same 3.14-vs-neighbour differences as plan 7.1, only descriptor numbers differ; `gen_posix_tables.py` gives the same 133 strerror entries.
+- **Not done on this machine:** no pyJVM gate runs yet (baseline is the 2026-11-17 one). Windows has no `.venv313/314/315` in `E:\pyjvm` yet.
+- **Next:** ticket 1 (spike S1, scratch in `~/pyjvm-work/n0/spike/`, output `work/n0/spike.md`).

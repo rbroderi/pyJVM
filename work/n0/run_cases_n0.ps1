@@ -1,25 +1,29 @@
-param([string]$CaseList, [string]$Lanes = '315,314,313', [string]$Tree = 'C:\Users\richa\workspace_local\pyjvm-work\wt-n0', [string]$Log = 'C:\Users\richa\workspace_local\pyjvm-work\n0\logs\cases.log')
+param([string]$CaseList, [string]$Lanes = '315,314,313', [string]$Tree = '', [string]$Log = '')
 # Each lane runs entirely under its own CPython (host compiler and reference are the same interpreter).
-# Takes the shared run lock around each case itself. Caches live under pyjvm-work\n0\.
+# Takes the shared run lock around each case itself. Caches are per tree and lane under $PYJVM_WORK\n0\.
+# PYJVM_WORK: the pyjvm-work folder; PYJVM_MAIN: the repo whose .venv31x interpreters are used (-Tree defaults to it).
+$work = if ($env:PYJVM_WORK) { $env:PYJVM_WORK } else { 'C:\Users\richa\workspace_local\pyjvm-work' }
+$main = if ($env:PYJVM_MAIN) { $env:PYJVM_MAIN } else { 'C:\Users\richa\workspace_local\pyjvm' }
+if (-not $Tree) { $Tree = $main }
+if (-not $Log) { $Log = "$work\n0\logs\cases.log" }
+. (Join-Path $PSScriptRoot 'RunLock.ps1')
 $Cases = $CaseList -split ','
-$main = 'C:\Users\richa\workspace_local\pyjvm'
-$lock = 'C:\Users\richa\workspace_local\pyjvm-work\run.lock'
+$tag = Split-Path -Leaf $Tree
 Set-Location $Tree
 $env:PYTHONPATH = $Tree
 $env:Path = "$HOME\.local\bin;" + $env:Path
 New-Item -ItemType Directory -Force (Split-Path $Log) | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $Log
 foreach ($lane in ($Lanes -split ',')) {
-    $env:PYJVM_BUILD_CACHE = "C:\Users\richa\workspace_local\pyjvm-work\n0\bc-$lane"
-    $env:PYJVM_CACHE = "C:\Users\richa\workspace_local\pyjvm-work\n0\c-$lane"
+    $env:PYJVM_BUILD_CACHE = "$work\n0\bc-$tag-$lane"
+    $env:PYJVM_CACHE = "$work\n0\c-$tag-$lane"
     $py = "$main\.venv$lane\Scripts\python.exe"
     foreach ($c in $Cases) {
-        while (-not (New-Item -ItemType File $lock -ErrorAction SilentlyContinue)) { Start-Sleep 30 }
+        $held = Enter-RunLock "run_cases_n0 $tag $lane $c"
         try {
-            "run_cases_n0 $lane $c $(Get-Date)" | Set-Content $lock
             "=== $lane $c $(Get-Date -Format T)" | Out-File -Append -Encoding utf8 $Log
             & $py -m pyjvm315.conformance "tests/conformance/$c.py" --python $py --selfhosted *>&1 | Out-File -Append -Encoding utf8 $Log
-        } finally { Remove-Item -Force $lock }
+        } finally { Exit-RunLock $held }
     }
 }
 "=== DONE $(Get-Date -Format T)" | Out-File -Append -Encoding utf8 $Log

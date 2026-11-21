@@ -1,7 +1,8 @@
 #!/bin/bash
 # Full gates on Linux, one at a time. A step whose log ends with a DONE line is skipped, so rerunning resumes.
 # Tree: PYJVM_TREE (default ~/pyjvm). Logs: ~/pyjvm-work/logs/<tree-name>-<commit>/ so a rerun at another commit starts fresh.
-# Each step takes the shared run lock (C:\...\pyjvm-work\run.lock) itself; do not call this under the lock.
+# Each step takes the shared run lock ($PYJVM_LOCK, the Windows-side pyjvm-work\run.lock seen from WSL) itself;
+# do not call this under the lock. ~/pyjvm-env.sh sets JAVA_HOME/PATH and PYJVM_LOCK for this machine.
 # Steps: STEPS="pytest methodsize conf315 conf314 conf313 probe strict" (default: the first five).
 . ~/pyjvm-env.sh
 TREE=${PYJVM_TREE:-$HOME/pyjvm}
@@ -11,26 +12,19 @@ git log --oneline -1
 W=~/pyjvm-work
 L=$W/logs/$(basename "$TREE")-$(git rev-parse --short HEAD)
 mkdir -p "$L"
-LOCK=/mnt/c/Users/richa/workspace_local/pyjvm-work/run.lock
+. "$(dirname "$0")/run_lock.sh"
 PY13="$TREE/.venv313/bin/python"
 PY14="$TREE/.venv314/bin/python"
 PY15="$TREE/.venv315/bin/python"
 
-take_lock() {
-  until ( set -o noclobber; echo "linux_gates $(basename "$TREE") $1 $(date)" > "$LOCK" ) 2>/dev/null; do sleep 30; done
-}
-drop_lock() { rm -f "$LOCK"; }
-
 step() {   # step NAME command...   (env prefix via export before the call)
   local name=$1; shift
   if tail -1 "$L/$name.log" 2>/dev/null | grep -q '^DONE'; then echo "skip $name (done)"; return; fi
-  take_lock "$name"
-  trap drop_lock EXIT
+  take_lock "linux_gates $(basename "$TREE") $name"
   echo "start $name $(date +%T)" > "$L/$name.log"
   "$@" >> "$L/$name.log" 2>&1
   echo "DONE exit $? $(date +%T)" >> "$L/$name.log"
   drop_lock
-  trap - EXIT
   echo "$name: $(tail -3 "$L/$name.log" | tr '\n' ' ')"
 }
 
