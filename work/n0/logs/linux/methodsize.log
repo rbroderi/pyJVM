@@ -1,0 +1,10 @@
+start methodsize 09:53:33
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+    7734  pyjvm315.runtime.PyRuntime.getattr(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+    4549  pyjvm315.runtime.ErrnoModule.<clinit>()V
+    4291  pyjvm315.runtime.StringMethods.call(Ljava/lang/Object;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;
+    3935  pyjvm315.parser.AstSchema.<clinit>()V
+    3354  pyjvm315.runtime.PyRuntime.callFunction(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+4698 methods checked, 0 over 8000 bytes
+DONE exit 0 09:53:43

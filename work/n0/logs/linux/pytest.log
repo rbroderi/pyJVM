@@ -1,0 +1,28 @@
+start pytest 09:30:17
+.................F...................................................... [ 52%]
+..............................................................ss         [100%]
+=================================== FAILURES ===================================
+______________ test_concurrent_processes_do_not_corrupt_the_cache ______________
+
+kit = <test_class_cache.Kit object at 0x7f4a8ff5b770>
+tmp_path = PosixPath('/tmp/pytest-of-ubuntu/pytest-0/test_concurrent_processes_do_n0')
+
+    def test_concurrent_processes_do_not_corrupt_the_cache(kit, tmp_path):
+        body = "\n".join(f"def f{i}(x):\n    return x + {i}\n" for i in range(60))
+        root = _libs(tmp_path, {"cmod.py": body + "\ndef answer():\n    return f59(1) + f0(1)\n"})
+        prog = _main_for(kit, root)
+        with ThreadPoolExecutor(4) as pool:
+            results = list(pool.map(lambda _: kit.run(prog), range(4)))
+        for r in results:
+            assert r.returncode == 0, r.stderr
+>           assert r.stdout == "61 cmod.py\n"
+E           AssertionError: assert '[0.001s][war...n61 cmod.py\n' == '61 cmod.py\n'
+E             
+E             + [0.001s][warning][perf,memops] Cannot use file /tmp/hsperfdata_ubuntu/4536 because it is locked by another process (errno = 11)
+E               61 cmod.py
+
+tests/test_class_cache.py:306: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_class_cache.py::test_concurrent_processes_do_not_corrupt_the_cache
+1 failed, 133 passed, 2 skipped in 1395.44s (0:23:15)
+DONE exit 1 09:53:33

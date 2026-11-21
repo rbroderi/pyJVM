@@ -1,0 +1,37 @@
+﻿start 11:08:18 AM
+--- methodsize
+python.exe : Note: Some input files use unchecked or unsafe operations.
+At C:\Users\richa\workspace_local\pyjvm-work\n0\run_pytest_n0.ps1:14 char:5
++     & $py -m pyjvm315.methodsize --runtime *>&1 | Out-File -Append -E ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Note: Some inpu...afe operations.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Note: Recompile with -Xlint:unchecked for details.
+    7734  pyjvm315.runtime.PyRuntime.getattr(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+    4549  pyjvm315.runtime.ErrnoModule.<clinit>()V
+    4291  pyjvm315.runtime.StringMethods.call(Ljava/lang/Object;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;
+    3935  pyjvm315.parser.AstSchema.<clinit>()V
+    3354  pyjvm315.runtime.PyRuntime.callFunction(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+4698 methods checked, 0 over 8000 bytes
+--- pytest
+..............................................................F......... [ 52%]
+..........................s...................................ss         [100%]
+================================== FAILURES ===================================
+______________ test_other_compiler_and_tool_files_are_plain_gpl _______________
+
+    def test_other_compiler_and_tool_files_are_plain_gpl():
+        core = {ROOT / "pyjvm315" / f"{m}.py" for m in CORE}
+        paths = (list((ROOT / "pyjvm315").rglob("*.py")) + list((ROOT / "tools").glob("*.py"))
+                 + list((ROOT / "tests").glob("*.py")))
+        bad = [str(p) for p in paths if p not in core
+               and (COMPILER_ID not in _head(p) or "AdditionRef" in _head(p))]
+>       assert not bad, bad
+E       AssertionError: ['C:\\Users\\richa\\workspace_local\\pyjvm-work\\wt-n0\\tools\\gen_posix_tables.py', 'C:\\Users\\richa\\workspace_local\\pyjvm-work\\wt-n0\\tools\\posix_measure.py']
+E       assert not ['C:\\Users\\richa\\workspace_local\\pyjvm-work\\wt-n0\\tools\\gen_posix_tables.py', 'C:\\Users\\richa\\workspace_local\\pyjvm-work\\wt-n0\\tools\\posix_measure.py']
+
+tests\test_licenses.py:33: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_licenses.py::test_other_compiler_and_tool_files_are_plain_gpl
+1 failed, 132 passed, 3 skipped in 2015.37s (0:33:35)
+end 11:42:12 AM
