@@ -22,7 +22,8 @@ step() {   # step NAME command...   (env prefix via export before the call)
   if tail -1 "$L/$name.log" 2>/dev/null | grep -q '^DONE'; then echo "skip $name (done)"; return; fi
   take_lock "linux_gates $(basename "$TREE") $name"
   echo "start $name $(date +%T)" > "$L/$name.log"
-  "$@" >> "$L/$name.log" 2>&1
+  # SIGINT back to default (a background job inherits SIG_IGN; CPython keeps it and signal cases would differ)
+  perl -e '$SIG{INT}="DEFAULT"; exec @ARGV' "$@" >> "$L/$name.log" 2>&1
   echo "DONE exit $? $(date +%T)" >> "$L/$name.log"
   drop_lock
   echo "$name: $(tail -3 "$L/$name.log" | tr '\n' ' ')"

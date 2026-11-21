@@ -153,6 +153,7 @@ def test_windows_never_loads_posix_ffm(jvm_kit, tmp_path, monkeypatch):
     main.write_text(WINDOWS_NO_POSIX_FFM, encoding="utf-8")
     # relative path: the JVM runs with the program's directory as cwd, and a drive letter in -Xlog output is fragile
     monkeypatch.setenv("JDK_JAVA_OPTIONS", "-Xlog:class+load:file=classload.log")
+    monkeypatch.setenv("PYJVM_POSIX_FDS", "kernel")   # IoFd.KERNEL must stay false on Windows whatever the variable says
     result = compare_file(main, sys.executable, runtime_cache=runtime, selfhosted=selfhosted)
     assert result.status == "PASS", result.detail
     log = (tmp_path / "classload.log").read_text(encoding="utf-8", errors="replace")

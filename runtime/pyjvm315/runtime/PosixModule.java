@@ -67,7 +67,7 @@ public final class PosixModule {
     }
 
     /** The working directory the process emulates: the JVM cannot chdir, so relative paths resolve against this. */
-    private static volatile Path cwd;
+    static volatile Path cwd;
 
     static String cwd() { return (cwd != null ? cwd : Path.of("").toAbsolutePath()).toString(); }
 

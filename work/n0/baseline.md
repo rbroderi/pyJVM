@@ -34,8 +34,8 @@ Failure details:
 - `zlib_streams` (3.15 only): a gzip header round trip prints `b'EXTRA' b'EXTRA'` where CPython prints `b'EXTRA' b''` (the second value should be empty).
 - `threading_imports` (3.13 only): first line `["KeyError('')"] 7 ...` where CPython prints `[] 8 ...` (a `KeyError('')` raised somewhere during the threading checks, and one fewer item counted).
 
-## Flaky on the E: host (WSL Ubuntu 24.04)
-- `signal_basic`: failed on all three Linux lanes in one L-min batch during ticket 2's acceptance (2026-11-21), then passed 9/9 (three runs per lane) on the same tree, and 3/3 lanes in the pre-ticket reference run. The failing output was not kept (`conf_cases.sh` prints only the last three lines). Treat a single failure as flaky; rerun alone, and keep the full output if it fails again.
+## Launch-environment failure (explained, not flaky)
+- `signal_basic` failed on all three Linux lanes in two L-min batches (tickets 2 and 3) with one line: `getsignal(SIGINT) is default_int_handler` prints `False` under CPython, `True` under pyJVM. Cause: those batches were started as background jobs from a non-interactive bash (`setsid nohup ... &`), which hands SIGINT down as SIG_IGN (`SigIgn: 0x7`); CPython keeps an inherited SIG_IGN, the JVM installs its handler regardless. Fixed in the scripts: `conf_cases.sh` and `linux_gates.sh` launch every run through `perl -e '$SIG{INT}="DEFAULT"; exec @ARGV'` (HANDOFF "Environment lessons"); confirmed PASS in the same SIG_IGN shell. Not part of the known-failing set. The pyJVM side (ignoring an inherited SIG_IGN for SIGINT) is a real fidelity gap, listed for ticket 8.
 
 ## Rechecks
 - 2026-11-21: `tests/test_licenses.py` rerun on Windows at cf4f8d3 (headers present): 4 passed. The Windows pytest baseline is therefore 133 passed / 0 failed / 3 skipped for comparison purposes.

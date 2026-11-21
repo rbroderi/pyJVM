@@ -246,7 +246,7 @@ final class IoBuffered {
         if (a > 0) { out.write(b.rbuf, b.rpos, a); b.rpos = b.rend = 0; }
         if (b.ops instanceof FileOps f) {
             while (true) {
-                long hint = 8192;
+                long hint = IoFd.KERNEL ? 65536 : 8192;
                 try { hint = Math.max(8192, IoFd.size(f.f.fd) - IoFd.tell(f.f.fd) + 1); } catch (PyException ignored) { }
                 byte[] d = IoFd.read(f.f.fd, (int) Math.min(hint, 1 << 26));
                 if (d.length == 0) break;

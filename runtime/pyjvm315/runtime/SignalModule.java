@@ -159,7 +159,7 @@ final class SignalModule {
         return signum(NativeArgs.parse(fname, a, k, new String[]{"signalnum"}, 1, 1)[0]);
     }
 
-    private static boolean isMain() { return Thread.currentThread() == MAIN; }
+    static boolean isMain() { return Thread.currentThread() == MAIN; }
 
     private static PyException osErr(String type, int errno, String msg) { return PosixModule.osError(type, errno, msg, null); }
 

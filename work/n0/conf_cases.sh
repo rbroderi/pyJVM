@@ -19,7 +19,9 @@ for lane in ${LANES:-315 314 313}; do
     target="tests/conformance/$c.py"
     [ -d "tests/conformance/$c" ] && target="tests/conformance/$c"
     take_lock "conf_cases $N $lane $c"
-    "$PYX" -m pyjvm315.conformance "$target" --python "$PYX" --selfhosted > "$O/$lane-$c.out" 2>&1
+    # SIGINT back to default: a background job from a non-interactive bash inherits SIG_IGN, and CPython (the reference)
+    # keeps it, so signal_basic's getsignal(SIGINT) line would differ (HANDOFF "Environment lessons")
+    perl -e '$SIG{INT}="DEFAULT"; exec @ARGV' "$PYX" -m pyjvm315.conformance "$target" --python "$PYX" --selfhosted > "$O/$lane-$c.out" 2>&1
     drop_lock
     tail -3 "$O/$lane-$c.out" | sed "s/^/[$lane $c] /"
     grep -qE '^(FAIL|ERROR)' "$O/$lane-$c.out" && grep -E '^(FAIL|ERROR|CPython:|JVM)' "$O/$lane-$c.out" | cut -c1-400 | sed "s/^/[$lane $c] /"

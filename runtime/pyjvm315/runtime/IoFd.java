@@ -27,6 +27,14 @@ import java.util.TreeMap;
 final class IoFd {
     private IoFd() {}
 
+    /**
+     * POSIX descriptors are kernel descriptors ({@link PosixFds}) instead of this table. Opt-in with
+     * {@code PYJVM_POSIX_FDS=kernel}; always false on Windows (the variable is not even read there).
+     */
+    static final boolean KERNEL = !ImportSupport.WINDOWS && "kernel".equals(System.getenv("PYJVM_POSIX_FDS"));
+
+    static { if (KERNEL) PosixNative.requireSupportedHost(); }
+
     static final class Fd {
         FileChannel ch; boolean append; int refs = 1; String path; boolean dir; int std = -1; boolean readable, writable;
         /** BasicFileAttributes.fileKey() of the file when opened (dev+inode on POSIX; null where unsupported). */
@@ -51,12 +59,25 @@ final class IoFd {
     static PyException badFd() { return PosixModule.osError("OSError", 9, "Bad file descriptor", null); }
 
     static synchronized Fd get(long fd) {
+        if (KERNEL) throw new IllegalStateException("IoFd.get in kernel mode");
         Fd f = fd < 0 || fd > Integer.MAX_VALUE ? null : TABLE.get((int) fd);
         if (f == null) throw badFd();
         return f;
     }
 
-    static boolean valid(long fd) { synchronized (IoFd.class) { return fd >= 0 && fd <= Integer.MAX_VALUE && TABLE.containsKey((int) fd); } }
+    /** The descriptor is open; raises EBADF otherwise. */
+    static void checkOpen(long fd) {
+        if (KERNEL) { if (!PosixFds.valid(fd)) throw badFd(); return; }
+        get(fd);
+    }
+
+    /** The descriptor refers to a directory. */
+    static boolean isDir(long fd) {
+        if (KERNEL) return PosixFds.isDir(fd);
+        return get(fd).dir;
+    }
+
+    static boolean valid(long fd) { if (KERNEL) return PosixFds.valid(fd); synchronized (IoFd.class) { return fd >= 0 && fd <= Integer.MAX_VALUE && TABLE.containsKey((int) fd); } }
 
     private static synchronized long register(Fd f) {
         int n = 3;
@@ -70,6 +91,7 @@ final class IoFd {
 
     static long open(String path, long flags, long mode) {
         IoUtil.syncAll();
+        if (KERNEL) return PosixFds.open(path, flags, mode);
         Set<StandardOpenOption> opts = EnumSet.noneOf(StandardOpenOption.class);
         if ((flags & DELETE_ON_CLOSE) != 0) opts.add(StandardOpenOption.DELETE_ON_CLOSE);
         long access = flags & 3;
@@ -136,6 +158,7 @@ final class IoFd {
     }
 
     static void close(long fd) {
+        if (KERNEL) { PosixFds.close(fd); return; }
         Fd f;
         synchronized (IoFd.class) {
             f = TABLE.get((int) fd);
@@ -154,6 +177,7 @@ final class IoFd {
     }
 
     static long dup(long fd) {
+        if (KERNEL) return PosixFds.dup(fd);
         Fd f = get(fd);
         synchronized (IoFd.class) { f.refs++; }
         return register(f);
@@ -198,6 +222,7 @@ final class IoFd {
 
     /** Up to {@code n} bytes; an empty array at end of file. */
     static byte[] read(long fd, int n) {
+        if (KERNEL) return PosixFds.read(fd, n);
         Fd f = get(fd);
         if (n <= 0) return new byte[0];
         if (f.nativeIo) return WindowsHandles.read(f.handle, n);
@@ -221,6 +246,7 @@ final class IoFd {
     }
 
     static int write(long fd, byte[] b, int off, int len) {
+        if (KERNEL) return PosixFds.write(fd, b, off, len);
         Fd f = get(fd);
         if (f.nativeIo) return WindowsHandles.write(f.handle, b, off, len);
         try {
@@ -242,6 +268,7 @@ final class IoFd {
     }
 
     static long seek(long fd, long pos, int how) {
+        if (KERNEL) return PosixFds.lseek(fd, pos, how);
         Fd f = get(fd);
         if (f.ch == null) {
             if (f.dir) return 0;
@@ -257,14 +284,16 @@ final class IoFd {
 
     static long tell(long fd) { return seek(fd, 0, 1); }
 
-    static boolean seekable(long fd) { return get(fd).ch != null; }
+    static boolean seekable(long fd) { if (KERNEL) return PosixFds.seekable(fd); return get(fd).ch != null; }
 
     static long size(long fd) {
+        if (KERNEL) return PosixFds.size(fd);
         Fd f = get(fd);
         try { return f.ch == null ? 0 : f.ch.size(); } catch (IOException e) { throw PosixModule.osError(e, null); }
     }
 
     static void truncate(long fd, long size) {
+        if (KERNEL) { PosixFds.ftruncate(fd, size); return; }
         Fd f = get(fd);
         if (size < 0) throw PosixModule.osError("OSError", 22, "Invalid argument", null);
         if (f.ch == null || !f.writable) throw badFd();
@@ -276,11 +305,13 @@ final class IoFd {
     }
 
     static void sync(long fd) {
+        if (KERNEL) { PosixFds.fsync(fd); return; }
         Fd f = get(fd);
         try { if (f.ch != null && f.writable) f.ch.force(true); } catch (IOException e) { throw PosixModule.osError(e, null); }
     }
 
     static boolean isatty(long fd) {
+        if (KERNEL) return PosixFds.isatty(fd);
         Fd f = get(fd);
         if (f.nativeIo) return WindowsHandles.fileType(f.handle) == WindowsNative.FILE_TYPE_CHAR;
         String target = null;

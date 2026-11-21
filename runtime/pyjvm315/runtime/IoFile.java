@@ -94,7 +94,7 @@ final class IoFile {
         if (!cf && !isFd) throw new PyException("ValueError", "Cannot use closefd=False with file name");
         if (!isFd && SysExtras.auditing()) SysExtras.audit("open", file, ms, AuditEvents.platformOpenFlags(flags));
         if (isFd) {
-            IoFd.get(fd);
+            IoFd.checkOpen(fd);
         } else if (opener != null) {
             Object r = PyRuntime.callFunction(opener, new java.util.ArrayList<Object>(java.util.List.of(file, (long) flags)), new java.util.LinkedHashMap<Object,Object>());
             if (!(r instanceof Long) && !(r instanceof Boolean)) throw new PyException("TypeError", "expected integer from opener");
@@ -103,8 +103,10 @@ final class IoFile {
         } else {
             fd = IoFd.open(path, flags, 0666);
         }
-        IoFd.Fd e = IoFd.get(fd);
-        if (e.dir) {
+        boolean dir;
+        try { dir = IoFd.isDir(fd); }
+        catch (RuntimeException ex) { if (!isFd || cf) IoFd.close(fd); throw ex; }   // kernel fstat can fail (EINTR + raising handler)
+        if (dir) {
             if (!isFd || cf) IoFd.close(fd);
             throw PosixModule.osError("IsADirectoryError", 21, "Is a directory", path);
         }
@@ -130,7 +132,7 @@ final class IoFile {
         if (!s.readable) throw IoUtil.unsupported("File not open for reading");
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         while (true) {
-            long hint = 8192;
+            long hint = IoFd.KERNEL ? 65536 : 8192;
             try { hint = Math.max(8192, IoFd.size(s.fd) - IoFd.tell(s.fd) + 1); } catch (PyException ignored) { }
             byte[] chunk = IoFd.read(s.fd, (int) Math.min(hint, 1 << 26));
             if (chunk.length == 0) break;
