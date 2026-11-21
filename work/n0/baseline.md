@@ -34,5 +34,8 @@ Failure details:
 - `zlib_streams` (3.15 only): a gzip header round trip prints `b'EXTRA' b'EXTRA'` where CPython prints `b'EXTRA' b''` (the second value should be empty).
 - `threading_imports` (3.13 only): first line `["KeyError('')"] 7 ...` where CPython prints `[] 8 ...` (a `KeyError('')` raised somewhere during the threading checks, and one fewer item counted).
 
+## Flaky on the E: host (WSL Ubuntu 24.04)
+- `signal_basic`: failed on all three Linux lanes in one L-min batch during ticket 2's acceptance (2026-11-21), then passed 9/9 (three runs per lane) on the same tree, and 3/3 lanes in the pre-ticket reference run. The failing output was not kept (`conf_cases.sh` prints only the last three lines). Treat a single failure as flaky; rerun alone, and keep the full output if it fails again.
+
 ## Rechecks
 - 2026-11-21: `tests/test_licenses.py` rerun on Windows at cf4f8d3 (headers present): 4 passed. The Windows pytest baseline is therefore 133 passed / 0 failed / 3 skipped for comparison purposes.

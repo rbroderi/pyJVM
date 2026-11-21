@@ -167,19 +167,7 @@ public final class PosixModule {
 
     static String strerror(int errno) {
         if (ImportSupport.WINDOWS) return WindowsNtModule.strerror(errno);
-        return switch (errno) {
-            case 1 -> "Operation not permitted";
-            case 2 -> "No such file or directory";
-            case 13 -> "Permission denied";
-            case 17 -> "File exists";
-            case 20 -> "Not a directory";
-            case 21 -> "Is a directory";
-            case 9 -> "Bad file descriptor";
-            case 12 -> "Cannot allocate memory";
-            case 22 -> "Invalid argument";
-            case 39 -> "Directory not empty";
-            default -> "Unknown error " + errno;
-        };
+        return PosixErrnoText.strerror(errno);
     }
 
     static PyException osError(IOException e, String path) {

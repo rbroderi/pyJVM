@@ -120,3 +120,42 @@ def test_native_stdlib_modules_match_cpython(python_exe, jvm_kit):
     main = Path(__file__).parent / "conformance" / "native_stdlib_modules" / "main.py"
     result = compare_file(main, python_exe, runtime_cache=runtime, selfhosted=selfhosted)
     assert result.status == "PASS", result.detail
+
+
+WINDOWS_NO_POSIX_FFM = '''
+import os, io, select, signal, subprocess, sys, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, "f.txt")
+with open(p, "w") as f:
+    f.write("hello\\n")
+with open(p) as f:
+    print(f.read().strip())
+fd = os.open(p, os.O_RDONLY)
+print(os.read(fd, 5))
+os.close(fd)
+r, w = os.pipe()
+os.write(w, b"x")
+print(os.read(r, 1))
+os.close(r)
+os.close(w)
+print(os.strerror(2))
+os.remove(p)
+os.rmdir(d)
+'''
+
+POSIX_FFM_CLASSES = ("PosixNative", "PosixFds", "PosixOsFds", "PosixSelect", "PosixSelectModule", "PosixErrnoText")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the POSIX FFM classes must never load on Windows")
+def test_windows_never_loads_posix_ffm(jvm_kit, tmp_path, monkeypatch):
+    runtime, selfhosted = jvm_kit
+    main = tmp_path / "main.py"
+    main.write_text(WINDOWS_NO_POSIX_FFM, encoding="utf-8")
+    # relative path: the JVM runs with the program's directory as cwd, and a drive letter in -Xlog output is fragile
+    monkeypatch.setenv("JDK_JAVA_OPTIONS", "-Xlog:class+load:file=classload.log")
+    result = compare_file(main, sys.executable, runtime_cache=runtime, selfhosted=selfhosted)
+    assert result.status == "PASS", result.detail
+    log = (tmp_path / "classload.log").read_text(encoding="utf-8", errors="replace")
+    assert "pyjvm315.runtime.PosixModule" in log      # shared class: proves the log really covers the runtime
+    loaded = [name for name in POSIX_FFM_CLASSES if f"pyjvm315.runtime.{name} " in log]
+    assert not loaded, f"POSIX FFM classes loaded on Windows: {loaded}"

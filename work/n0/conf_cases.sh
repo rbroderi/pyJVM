@@ -9,12 +9,19 @@ export PYTHONPATH="$TREE"
 W=~/pyjvm-work
 N=$(basename "$TREE")
 . "$(dirname "$0")/run_lock.sh"
+# Full output of every run goes to $W/logs/cases-$N/<lane>-<case>.out; a directory case (tests/conformance/<c>/) is run as such.
+O=$W/logs/cases-$N
+mkdir -p "$O"
 for lane in ${LANES:-315 314 313}; do
   PYX="$TREE/.venv$lane/bin/python"
   export PYJVM_BUILD_CACHE=$W/bc-$N-conf-$lane PYJVM_CACHE=$W/c-$N-conf-$lane
   for c in "$@"; do
+    target="tests/conformance/$c.py"
+    [ -d "tests/conformance/$c" ] && target="tests/conformance/$c"
     take_lock "conf_cases $N $lane $c"
-    "$PYX" -m pyjvm315.conformance "tests/conformance/$c.py" --python "$PYX" --selfhosted 2>&1 | tail -3 | sed "s/^/[$lane $c] /"
+    "$PYX" -m pyjvm315.conformance "$target" --python "$PYX" --selfhosted > "$O/$lane-$c.out" 2>&1
     drop_lock
+    tail -3 "$O/$lane-$c.out" | sed "s/^/[$lane $c] /"
+    grep -qE '^(FAIL|ERROR)' "$O/$lane-$c.out" && grep -E '^(FAIL|ERROR|CPython:|JVM)' "$O/$lane-$c.out" | cut -c1-400 | sed "s/^/[$lane $c] /"
   done
 done
