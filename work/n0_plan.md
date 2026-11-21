@@ -206,7 +206,7 @@ Rule for all of them: 3.13 and 3.15 values are below; ticket 0 writes the 3.14 r
 ## 4. Review checklist that applies to every ticket (Opus)
 1. **Windows untouched.** No file named `Windows*` is in the diff. In shared files every changed line is (a) inside `if (IoFd.KERNEL)` / `if (!WINDOWS ...)`, (b) a pure visibility change, or (c) explicitly named by the ticket. The body of each existing `IoFd` method below its guard is byte-identical (`git diff -w` shows only added lines there).
 2. **Class loading.** No `Posix{Native,Fds,OsFds,Select,SelectModule,ErrnoText}` reference is reachable on Windows: each is behind a `KERNEL`/`!WINDOWS` test, never in a static initialiser of a shared class, never as a field type initialised eagerly. And no `Windows*` reference from the new classes. `test_windows_never_loads_posix_ffm` (ticket 2) passes.
-3. **Every syscall checks its result** and builds the error from the captured errno of *that* call (no JVM call between the downcall and `errno(cs)`).
+3. **Every syscall checks its result** and builds the error from the captured errno of *that* call (no JVM call between the downcall and `errno(cs)`). errno is read **only after a failing return value**: a successful call does not clear the captured errno, so the segment can hold a stale value (spike, 7.2).
 4. **No descriptor leak on error paths** (a successful open/pipe/dup followed by a failure must close what it opened; `adopt` only after success; `forget` before `close`).
 5. **No double close** (state is set to closed before `close(2)` is called; a failed close is not retried).
 6. **Close-on-exec** on every creating call (1.7).
@@ -557,6 +557,12 @@ Outputs: `pyjvm-work\n0\measure-313.txt`, `-314.txt`, `-315.txt` (script `tools/
 - 3.14 equals **3.13** (differs from 3.15) for: `poll.poll(2**40)` -> `OverflowError: timeout is too large`; timeout type errors (`select.select`: `timeout must be a float or None`; `poll.poll`/`epoll.poll`: `timeout must be an integer or None`); `epoll.register(fd, 2**32)` accepted with no DeprecationWarning. Gate these with `atLeast(3, 15)`.
 - All other measured items (errors, constants, signatures, struct behaviours, non-blocking `_io`, signals) are identical on all three lanes.
 - `tools/gen_posix_tables.py` run under 3.13: 133 entries; 132 = "Operation not possible due to RF-kill", 133 = "Memory page has hardware error".
+
+### 7.2 Ticket 1: spike S1 (WSL Ubuntu 24.04, glibc 2.39, kernel 6.6.87.2, Temurin 25.0.5.1; 2026-11-21)
+Report: `work/n0/spike.md` (sources in `~/pyjvm-work/n0/spike/` on that host). Options exactly as 1.3: `captureCallState("errno")` on every handle, `firstVariadicArg(2)` for `open`/`fcntl`, `malloc`/`free` without capture, per-thread call state and 64 KiB buffer from `Arena.ofAuto()`; run as `java --enable-native-access=ALL-UNNAMED`.
+- Items 1-4 and 6 pass: two threads x 2000 round trips without error; ENOENT/EBADF errno correct across 200000 iterations with allocation and `System.gc()` between call and read; **SIGPIPE: a write to a pipe whose read end is closed returns -1/EPIPE and the JVM survives** (main and second thread), so no `signal(SIGPIPE, SIG_IGN)` step is needed (risk 2's SIGPIPE half is closed); `poll` 50 ms timeout returns 0 after 50.1-50.8 ms, closed fd gives POLLNVAL; a single 16 MiB `read(2)` into a `malloc` buffer matches `FileChannel`.
+- Item 5 (warm cache, 256 MiB in 64 KiB reads): FFM 11951 MB/s vs `FileChannel` 11337 MB/s (mean of three; ratio 1.05, a second JVM 1.07). Not slower than 2x, so ticket 12 needs no extra measurement for this.
+- **New rule:** a successful call leaves the previous errno in the call-state segment (a stale 22 seen after a successful read). Read errno only after a failing return (added to checklist item 3).
 
 ## 8. Questions for the owner
 All four are answered (owner, 2026-11-17); nothing is open.

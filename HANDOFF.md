@@ -158,3 +158,10 @@ Each session appends dated entries here at key points (ticket start/finish, gate
   - Re-measured under glibc 2.39 (`work/n0/measure-glibc239/`): same 3.14-vs-neighbour differences as plan 7.1, only descriptor numbers differ; `gen_posix_tables.py` gives the same 133 strerror entries.
 - **Not done on this machine:** no pyJVM gate runs yet (baseline is the 2026-11-17 one). Windows has no `.venv313/314/315` in `E:\pyjvm` yet.
 - **Next:** ticket 1 (spike S1, scratch in `~/pyjvm-work/n0/spike/`, output `work/n0/spike.md`).
+- Committed ticket 0 locally on `n0-fds` as `e3c6bbf` (not pushed). Windows per-lane venvs created in `E:\pyjvm`: `.venv313` (3.13.18), `.venv314` (3.14.10), `.venv315` (3.15.2), uv-managed, with pytest.
+
+### 2026-11-21: N0 ticket 1 (spike S1) done
+- Implemented by a Sonnet subagent in WSL (`~/pyjvm-work/n0/spike/Spike.java`, scratch only); report `work/n0/spike.md`; notes in plan 7.2. All checks pass: two-thread use, errno capture under allocation/GC, **SIGPIPE -> -1/EPIPE with the JVM alive** (no SIG_IGN step needed), 50 ms poll timing and POLLNVAL, single 16 MiB malloc read. Throughput FFM 11951 vs FileChannel 11337 MB/s (ratio 1.05).
+- Finding carried into the plan: a successful call does not clear the captured errno; read errno only after a failing return (review checklist item 3 updated).
+- Review (lead, against the ticket's checklist): options exactly as 1.3, read end closed and verified closed before the EPIPE write, numbers from WSL, nothing added to the repo except the report.
+- **Next:** ticket 2 (`PosixNative` foundation, `PosixErrnoText`, host check, Windows class-loading test). Its L-min/W-min acceptance runs will be the first pyJVM runs on this machine. WSL sync: `~/pyjvm-n0` has a second remote `win` = `/mnt/e/pyjvm` (the Windows checkout), so local ticket commits reach WSL with `git pull --ff-only win n0-fds` without pushing.
