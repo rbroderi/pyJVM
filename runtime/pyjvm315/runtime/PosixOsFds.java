@@ -7,6 +7,7 @@ import static pyjvm315.runtime.NativeTypes.*;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The {@code posix} functions that work on kernel descriptors ({@code IoFd.KERNEL}): registered over the shared
@@ -59,6 +60,52 @@ final class PosixOsFds {
         fn(m, "getegid", (a, k) -> ids(GETEGID));
         fn(m, "getppid", (a, k) -> ids(GETPPID));
         fn(m, "get_terminal_size", (a, k) -> terminalSize(m, a));
+        fn(m, "stat", (a, k) -> stat(a, k));
+        fn(m, "lstat", (a, k) -> lstat(a, k));
+    }
+
+    // ---- stat, lstat -------------------------------------------------------------------------------------------
+
+    private static boolean isInt(Object o) { return o instanceof Long || o instanceof Boolean || o instanceof java.math.BigInteger; }
+
+    private static boolean isPath(Object o) {
+        return o instanceof String || o instanceof PyBytes || (o instanceof PyInstance i && i.cls.lookupMethod("__fspath__") != null);
+    }
+
+    private static Object pathArg(String func, List<Object> a, Map<Object, Object> k) {
+        Object o = a.isEmpty() ? k.get("path") : a.get(0);
+        if (a.isEmpty() && !k.containsKey("path")) throw new PyException("TypeError", func + "() missing required argument 'path' (pos 1)");
+        return o;
+    }
+
+    private static PyException badPath(String func, String accepts, Object o) {
+        return new PyException("TypeError", func + ": path should be " + accepts + ", not " + PyRuntime.typeName(o));
+    }
+
+    private static void noDirFd(String func, Map<Object, Object> k) {
+        if (k.get("dir_fd") != null) throw new PyException("NotImplementedError", "os." + func + ": dir_fd is not supported");
+    }
+
+    /** {@code os.stat(path, *, dir_fd=None, follow_symlinks=True)}; an int is a descriptor ({@code True} is 1). */
+    private static Object stat(List<Object> a, Map<Object, Object> k) {
+        Object o = pathArg("stat", a, k);
+        noDirFd("stat", k);
+        Object u = NativeSubclass.unwrap(o);
+        boolean follow = !k.containsKey("follow_symlinks") || PyRuntime.truth(k.get("follow_symlinks"));
+        if (isInt(u)) {
+            if (!follow) throw new PyException("ValueError", "stat: cannot use fd and follow_symlinks together");
+            return PosixFds.fstat(PosixFiles.fd(u), u instanceof Boolean b ? (Object) (b ? 1L : 0L) : u);
+        }
+        if (!isPath(o) && !isPath(u)) throw badPath("stat", "string, bytes, os.PathLike or integer", o);
+        return PosixModule.stat(PosixModule.pathString(o), follow);
+    }
+
+    /** {@code os.lstat(path, *, dir_fd=None)}: a descriptor is a TypeError. */
+    private static Object lstat(List<Object> a, Map<Object, Object> k) {
+        Object o = pathArg("lstat", a, k);
+        noDirFd("lstat", k);
+        if (!isPath(o) && !isPath(NativeSubclass.unwrap(o))) throw badPath("lstat", "string, bytes or os.PathLike", o);
+        return PosixModule.stat(PosixModule.pathString(o), false);
     }
 
     /** {@code umask(2)} stores {@code mask & 0777} and returns the previous mask; nothing is cached on the Java side. */

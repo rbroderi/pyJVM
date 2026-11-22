@@ -201,6 +201,7 @@ public final class PosixModule {
     static Object stat(String path, boolean follow) {
         IoUtil.syncAll();
         if (ImportSupport.WINDOWS) return WindowsNtModule.stat(path, follow);
+        if (IoFd.KERNEL) return PosixFds.statPath(follow ? "stat" : "lstat", path, follow);
         Path p = resolve(path);
         try {
             LinkOption[] opts = follow ? new LinkOption[0] : new LinkOption[]{LinkOption.NOFOLLOW_LINKS};

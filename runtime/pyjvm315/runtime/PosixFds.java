@@ -38,6 +38,7 @@ final class PosixFds {
     static final int EINTR = 4;
     static final short POLLIN = 1, POLLOUT = 4;
     static final int S_IFMT = 0170000, S_IFDIR = 0040000;
+    static final int AT_FDCWD = -100, AT_SYMLINK_NOFOLLOW = 256;
     /** sizeof(struct stat) on Linux x86-64; st_mode is a u32 at 24, st_size an i64 at 48. */
     static final long STAT_SIZE = 144;
     /** I/O above this goes through malloc instead of the thread buffer (which grows up to this size). */
@@ -51,6 +52,7 @@ final class PosixFds {
     private static final MethodHandle WRITE = PosixNative.fn("write", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
     private static final MethodHandle LSEEK = PosixNative.fn("lseek", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_INT));
     private static final MethodHandle FSTAT = PosixNative.fn("fstat", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
+    private static final MethodHandle FSTATAT = PosixNative.fn("fstatat", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     private static final MethodHandle FTRUNCATE = PosixNative.fn("ftruncate", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG));
     private static final MethodHandle FSYNC = PosixNative.fn("fsync", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
     private static final MethodHandle ISATTY = PosixNative.fn("isatty", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
@@ -88,8 +90,8 @@ final class PosixFds {
      * The NUL-terminated path for a syscall, in {@code a}: a relative path is joined to the emulated cwd by string
      * (no normalisation: the kernel resolves {@code ..} through symlinks), encoded UTF-8 with surrogateescape.
      */
-    static MemorySegment pathBytes(Arena a, String path) {
-        if (path.indexOf('\0') >= 0) throw new PyException("ValueError", "open: embedded null character in path");
+    static MemorySegment pathBytes(Arena a, String func, String path) {
+        if (path.indexOf('\0') >= 0) throw new PyException("ValueError", func + ": embedded null character in path");
         Path cwd = PosixModule.cwd;
         String full = path.isEmpty() || path.startsWith("/") || cwd == null ? path : cwd + "/" + path;
         byte[] b = Codecs.encode(full, "utf-8", "surrogateescape");
@@ -152,7 +154,7 @@ final class PosixFds {
         int fl = (int) (flags & 0xffffffffL & ~IoFd.DELETE_ON_CLOSE) | O_CLOEXEC;
         PosixNative.Tl t = PosixNative.tl();
         try (Arena a = Arena.ofConfined()) {
-            MemorySegment p = pathBytes(a, path);
+            MemorySegment p = pathBytes(a, "open", path);
             while (true) {
                 int fd = (int) OPEN.invokeExact(t.cs, p, fl, (int) mode);
                 if (fd >= 0) { adopt(fd); return fd; }
@@ -253,16 +255,27 @@ final class PosixFds {
     }
 
     /** {@code fstat(2)} into {@code st} (at least {@link #STAT_SIZE} bytes); EINTR retried; errors raise OSError. */
-    static void fstatRaw(int fd, MemorySegment st) {
+    static void fstatRaw(int fd, MemorySegment st) { fstatRaw(fd, st, null); }
+
+    /** As {@link #fstatRaw(int, MemorySegment)}; a non-null {@code filename} (the int of {@code os.stat(fd)}) is put on the error. */
+    static void fstatRaw(int fd, MemorySegment st, Object filename) {
         MemorySegment cs = PosixNative.tl().cs;
         while (true) {
             int r;
             try { r = (int) FSTAT.invokeExact(cs, fd, st); } catch (Throwable x) { throw PosixNative.rethrow(x); }
             if (r == 0) return;
             int e = PosixNative.errno(cs);
-            if (e != EINTR) throw PosixNative.osError(e, null);
+            if (e != EINTR) throw filename == null ? PosixNative.osError(e, null) : withFilename(PosixNative.osError(e, null), filename);
             SignalModule.dispatchPending();
         }
+    }
+
+    /** The same OSError with {@code filename} replaced (any object: {@code os.stat(9999)} names the int). */
+    private static PyException withFilename(PyException base, Object filename) {
+        PyExcArgs a = (PyExcArgs) base.value;
+        java.util.LinkedHashMap<String,Object> attrs = new java.util.LinkedHashMap<>(a.attrs);
+        attrs.put("filename", filename);
+        return new PyException(base.typeName, new PyExcArgs(a.args, null, attrs));
     }
 
     /** {@code st_mode} of {@code fd}; the stat buffer is the thread buffer, read before anything else can reuse it. */
@@ -353,13 +366,37 @@ final class PosixFds {
     }
 
     /** {@code os.fstat}: the kernel's answer for the descriptor, into a fresh 144-byte buffer. */
-    static Object fstat(long fd) {
+    static Object fstat(long fd) { return fstat(fd, null); }
+
+    /** {@code os.stat(fd)}: as {@code fstat}, an error names the descriptor int as its filename. */
+    static Object fstat(long fd, Object filename) {
         int f = cfd(fd);
         try (Arena a = Arena.ofConfined()) {
             MemorySegment st = a.allocate(STAT_SIZE, 8);
-            fstatRaw(f, st);
+            fstatRaw(f, st, filename);
             return statResult(st);
         }
+    }
+
+    /**
+     * {@code os.stat}/{@code os.lstat} of a path: one {@code fstatat(AT_FDCWD, ...)} (no existence pre-check), the
+     * path and a fresh 144-byte buffer in a confined arena that outlives any {@code dispatchPending()} on EINTR.
+     * Errors come from errno and carry the caller's string.
+     */
+    static Object statPath(String func, String path, boolean follow) {
+        PosixNative.Tl t = PosixNative.tl();
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment p = pathBytes(a, func, path);
+            MemorySegment st = a.allocate(STAT_SIZE, 8);
+            int flags = follow ? 0 : AT_SYMLINK_NOFOLLOW;
+            while (true) {
+                int r = (int) FSTATAT.invokeExact(t.cs, AT_FDCWD, p, st, flags);
+                if (r == 0) return statResult(st);
+                int e = PosixNative.errno(t.cs);
+                if (e != EINTR) throw PosixNative.osError(e, path);
+                SignalModule.dispatchPending();
+            }
+        } catch (Throwable x) { throw PosixNative.rethrow(x); }
     }
 
     /** {@code fcntl(fd, cmd, 0)} for a getter; -1 is an error (never a flag set). */
