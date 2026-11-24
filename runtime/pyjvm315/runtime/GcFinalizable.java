@@ -15,6 +15,12 @@ final class GcFinalizable extends PyInstance {
     private final WeakrefDelivery.ThreadInfo owner = WeakrefDelivery.currentThread();
     volatile boolean finalized;
 
+    /** How many {@code __del__} calls are running on this thread (a counter: finalizers can nest). */
+    private static final ThreadLocal<int[]> DEL_DEPTH = ThreadLocal.withInitial(() -> new int[1]);
+
+    /** True while this thread is inside a {@code __del__} (directly or through anything it calls). */
+    static boolean inDel() { return DEL_DEPTH.get()[0] > 0; }
+
     GcFinalizable(PyClass cls) {
         super(cls);
         WeakrefDelivery.ensureWatcher();
@@ -27,8 +33,12 @@ final class GcFinalizable extends PyInstance {
         WeakrefDelivery.post(new WeakrefDelivery.Task(owner, WeakrefDelivery.SEQ.incrementAndGet(), true) {
             @Override void run() {
                 self.finalized = true;
-                Object del = PyRuntime.getattr(self, "__del__");
-                PyRuntime.callFunction(del, new ArrayList<Object>(), new LinkedHashMap<Object, Object>());
+                int[] d = DEL_DEPTH.get();
+                d[0]++;
+                try {
+                    Object del = PyRuntime.getattr(self, "__del__");
+                    PyRuntime.callFunction(del, new ArrayList<Object>(), new LinkedHashMap<Object, Object>());
+                } finally { d[0]--; }
             }
             @Override String what() { return null; }
             @Override Object subject() { return PyRuntime.getattr(self, "__del__"); }

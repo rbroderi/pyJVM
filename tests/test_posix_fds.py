@@ -182,3 +182,84 @@ def test_std_streams_flushed_on_uncaught_exception(jvm_kit, tmp_path):
     proc = _run_pyjvm(jvm_kit, main, {})
     assert proc.returncode == 1 and proc.stdout == "before"
     assert proc.stderr.startswith("Traceback (most recent call last):") and proc.stderr.endswith("ValueError: boom\n")
+
+
+# A descriptor closed behind a file object's back, the object dropped, then the number reused by a new open. CPython
+# finalizes at the drop (its close fails with EBADF, ignored in __del__); pyJVM's finalizer runs later, at gc.collect,
+# when the number denotes the new descriptor: it must skip the close (the generation changed), so fd2 survives.
+STALE_FINALIZER = '''
+import gc, os, tempfile
+d = tempfile.mkdtemp()
+p1, p2 = os.path.join(d, "one"), os.path.join(d, "two")
+for p, data in ((p1, b"first"), (p2, b"second")):
+    with open(p, "wb") as w:
+        w.write(data)
+
+def stale(wrap):
+    fd = os.open(p1, os.O_RDONLY)
+    f = wrap(fd)
+    os.close(fd)
+    del f
+    fd2 = os.open(p2, os.O_RDONLY)
+    print(fd2 == fd)   # the lowest free number; a JVM thread taking it in between makes this False (a loud failure)
+    for _ in range(3):
+        gc.collect()
+    os.fstat(fd2)
+    print(os.read(fd2, 100))
+    os.close(fd2)
+
+stale(lambda fd: os.fdopen(fd, "rb"))
+stale(lambda fd: open(fd, "rb", buffering=0))
+stale(lambda fd: open(fd, "r"))
+for p in (p1, p2):
+    os.remove(p)
+os.rmdir(d)
+'''
+
+# The plain case: a file object dropped unclosed still has its descriptor closed by the finalizer (raw, buffered and a
+# text wrapper, whose __del__ closes its FileIO through the same guard).
+DROPPED_UNCLOSED = '''
+import gc, os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, "f")
+with open(p, "wb") as w:
+    w.write(b"data")
+real = os.path.realpath(p)
+
+def dropped(mode, **kw):
+    f = open(p, mode, **kw)
+    fd = f.fileno()
+    del f
+    for _ in range(3):
+        gc.collect()
+    try:
+        held = os.readlink("/proc/self/fd/%d" % fd) == real
+    except FileNotFoundError:
+        held = False
+    print(mode, "still open" if held else "closed")
+
+dropped("r")
+dropped("w")
+dropped("rb")
+dropped("ab", buffering=0)
+os.remove(p)
+os.rmdir(d)
+'''
+
+
+def _same_as_cpython(kit, tmp_path, script, expected):
+    main = tmp_path / "main.py"
+    main.write_text(script, encoding="utf-8")
+    ref = subprocess.run([sys.executable, str(main)], capture_output=True, encoding="utf-8", timeout=120)
+    assert (ref.returncode, ref.stdout) == (0, expected), ref.stderr
+    proc = _run_pyjvm(kit, main, {})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected
+
+
+def test_stale_finalizer_keeps_reused_descriptor(jvm_kit, tmp_path):
+    _same_as_cpython(jvm_kit, tmp_path, STALE_FINALIZER, "True\nb'second'\n" * 3)
+
+
+def test_dropped_file_is_closed_by_finalizer(jvm_kit, tmp_path):
+    _same_as_cpython(jvm_kit, tmp_path, DROPPED_UNCLOSED, "r closed\nw closed\nrb closed\nab closed\n")

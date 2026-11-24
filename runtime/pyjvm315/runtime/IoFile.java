@@ -14,6 +14,8 @@ final class IoFile {
 
     static final class St {
         long fd = -1; boolean readable, writable, appending, created, closefd = true;
+        /** The kernel generation of {@code fd} when this object took it (0 off the kernel, or for a number never adopted). */
+        long gen;
     }
 
     static void define(PyModule m) {
@@ -59,7 +61,7 @@ final class IoFile {
 
     public static Object init(Object self, Object file, Object mode, Object closefd, Object opener) {
         St s = st(self);
-        if (s.fd >= 0 && s.closefd) { try { IoFd.close(s.fd); } catch (PyException ignored) { } }
+        if (s.fd >= 0 && s.closefd && !staleInDel(s, s.fd)) { try { IoFd.close(s.fd); } catch (PyException ignored) { } }
         s.fd = -1;
         file = NativeSubclass.unwrap(file);
         long fd = -1;
@@ -111,6 +113,7 @@ final class IoFile {
             throw PosixModule.osError("IsADirectoryError", 21, "Is a directory", path);
         }
         s.fd = fd; s.readable = read; s.writable = write; s.appending = append; s.created = create; s.closefd = cf;
+        s.gen = IoFd.KERNEL ? PosixFds.gen(fd) : 0;
         ((PyInstance) self).fields.put("name", file);
         ((PyInstance) self).fields.remove("__IOBase_closed");
         if (append) { try { IoFd.seek(fd, 0, 2); } catch (PyException ex) { if (!"OSError".equals(ex.typeName)) throw ex; } }
@@ -182,9 +185,23 @@ final class IoFile {
         finally {
             long fd = s.fd;
             s.fd = -1;
-            if (s.closefd) IoFd.close(fd);
+            if (s.closefd && !staleInDel(s, fd)) IoFd.close(fd);
         }
         return null;
+    }
+
+    /**
+     * A close reached from a {@code __del__} whose number now denotes another descriptor (closed behind this object's
+     * back and reused): skipping it keeps the new owner's descriptor open, where CPython's close would fail with EBADF
+     * and be ignored. A close outside any {@code __del__} always closes (CPython semantics), as does a number this
+     * runtime never adopted and still does not know (generation 0 both times). Short-circuits before PosixFds off the
+     * kernel (Windows, nio), so the condition there is the old {@code closefd} test. Deliberate difference: a number
+     * that {@code os.dup2} made into another descriptor also counts as reused, so a {@code __del__}-reached close of the
+     * old object leaves the dup2 target open (CPython closes it). Only close(2) is guarded: a buffered wrapper's flush
+     * before it still writes to the number (HANDOFF, ticket 7 follow-ups).
+     */
+    private static boolean staleInDel(St s, long fd) {
+        return IoFd.KERNEL && GcFinalizable.inDel() && PosixFds.gen(fd) != s.gen;
     }
 
     public static Object fileno(Object self) { return open(self).fd; }
