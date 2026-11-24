@@ -35,7 +35,7 @@ final class PosixFds {
     static final int F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_DUPFD_CLOEXEC = 1030, FD_CLOEXEC = 1;
     static final long TIOCGWINSZ = 0x5413;
     static final int SEEK_CUR = 1;
-    static final int EINTR = 4;
+    static final int EINTR = 4, EAGAIN = 11;
     static final short POLLIN = 1, POLLOUT = 4;
     static final int S_IFMT = 0170000, S_IFDIR = 0040000;
     static final int AT_FDCWD = -100, AT_SYMLINK_NOFOLLOW = 256;
@@ -118,9 +118,10 @@ final class PosixFds {
     // ---- signals (1.6) ------------------------------------------------------------------------------------
 
     /**
-     * Pre-wait before a read or write on the main thread while signal handling is active: 50 ms {@code poll} slices
-     * with pending Python handlers run between them. Returns when the descriptor is ready (or in error: the syscall
-     * reports it), or at once for a non-blocking descriptor (the syscall then returns EAGAIN).
+     * Pre-wait before a read or write on the main thread while signal handling is active: {@code poll} slices with
+     * pending Python handlers run between them. Returns when the descriptor is ready (or in error: the syscall reports
+     * it), or after the first empty slice for a non-blocking descriptor (the syscall then returns EAGAIN). The first
+     * slice is a zero-timeout probe, so a non-blocking descriptor never waits; the following slices are 50 ms.
      */
     static void awaitReady(int fd, short events) {
         if (!SignalModule.active || !SignalModule.isMain()) return;
@@ -132,7 +133,7 @@ final class PosixFds {
             p.set(JAVA_SHORT, 4, events);
             p.set(JAVA_SHORT, 6, (short) 0);
             int n;
-            try { n = (int) POLL.invokeExact(t.cs, p, 1L, SLICE_MS); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+            try { n = (int) POLL.invokeExact(t.cs, p, 1L, first ? 0 : SLICE_MS); } catch (Throwable x) { throw PosixNative.rethrow(x); }
             if (n > 0) return;
             if (n < 0) {
                 int e = PosixNative.errno(t.cs);
@@ -150,6 +151,38 @@ final class PosixFds {
         int fl;
         try { fl = (int) FCNTL.invokeExact(t.cs, fd, F_GETFL, 0); } catch (Throwable x) { throw PosixNative.rethrow(x); }
         return fl != -1 && (fl & O_NONBLOCK) != 0;
+    }
+
+    /**
+     * {@code signal.set_wakeup_fd(fd)}'s checks, as CPython's: the descriptor must exist ({@code fstat}; errors raise
+     * OSError from errno) and be in non-blocking mode (else ValueError). A regular file passes.
+     */
+    static void checkWakeupFd(long fd) {
+        int f = cfd(fd);
+        try (Arena a = Arena.ofConfined()) {
+            fstatRaw(f, a.allocate(STAT_SIZE, 8));
+        }
+        if ((fcntlGet(f, F_GETFL) & O_NONBLOCK) == 0) throw new PyException("ValueError", "the fd " + f + " must be in non-blocking mode");
+    }
+
+    /**
+     * The signal wakeup write: one {@code write(2)} of the byte {@code value} to {@code fd}, retried only on EINTR (as
+     * CPython's {@code _Py_write_noraise}; no handlers run, no pre-wait). Returns 0, or the errno of the failure. Runs on
+     * whatever thread delivers the signal, so it uses that thread's own call state and a buffer of its own (never the
+     * thread I/O buffer).
+     */
+    static int writeByteNoThrow(int fd, int value) {
+        try (Arena a = Arena.ofConfined()) {   // no Tl: the JDK runs each signal handler on a fresh thread
+            MemorySegment cs = PosixNative.callState(a);
+            MemorySegment b = a.allocate(1);
+            b.set(JAVA_BYTE, 0, (byte) value);
+            while (true) {
+                long r = (long) WRITE.invokeExact(cs, fd, b, 1L);
+                if (r >= 0) return 0;
+                int e = PosixNative.errno(cs);
+                if (e != EINTR) return e;
+            }
+        } catch (Throwable x) { throw PosixNative.rethrow(x); }
     }
 
     // ---- descriptor calls ---------------------------------------------------------------------------------

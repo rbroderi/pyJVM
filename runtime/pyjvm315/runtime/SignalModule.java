@@ -42,6 +42,13 @@ final class SignalModule {
     private static ScheduledFuture<?> timerTask;
     private static long timerDeadline, timerInterval;
     private static NativeFunction defaultInt;
+    /**
+     * POSIX, kernel descriptors: SIGINT was SIG_IGN when the process started (read once, at the first import; HotSpot
+     * leaves an inherited SIG_IGN in place). Limit: HotSpot then refuses to install a handler for SIGINT, so after a
+     * later {@code signal.signal(SIGINT, h)} only in-process signals (raise_signal, os.kill to itself) reach h; a
+     * Ctrl-C or an outside kill stays ignored (CPython would run h). The nio rollback keeps the old behaviour.
+     */
+    private static Boolean sigintInheritedIgnored;
     static PyClass itimerError;
 
     private static Thread findMain() {
@@ -112,7 +119,8 @@ final class SignalModule {
         finish(itimerError);
         m.attrs.put("ItimerError", itimerError);
         defaultInt = fn("default_int_handler", (a, k) -> { throw new PyException("KeyboardInterrupt", null); });
-        handlers[2] = defaultInt;
+        if (sigintInheritedIgnored == null) sigintInheritedIgnored = IoFd.KERNEL && PosixNative.sigintIgnored();
+        handlers[2] = sigintInheritedIgnored ? (Object) SIG_IGN : defaultInt;   // CPython installs its handler only over SIG_DFL
         m.attrs.put("default_int_handler", defaultInt);
         fn(m, "signal", (a, k) -> signal(a, k));
         fn(m, "getsignal", (a, k) -> getsignal(NativeArgs.parse("getsignal", a, k, new String[]{"signalnum"}, 1, 1)[0]));
@@ -221,6 +229,7 @@ final class SignalModule {
         }
         synchronized (LOCK) { pending[sig] = true; anyPending = true; LOCK.notifyAll(); }
         if (WIN) writeWakeup(sig);   // after the flags are set, as trip_signal does (bpo-30038)
+        else if (IoFd.KERNEL) writeWakeupPosix(sig);
     }
 
     private static void defaultAction(int sig) {
@@ -365,11 +374,33 @@ final class SignalModule {
             synchronized (LOCK) { old = wakeupFd; wakeupFd = fd; wakeupWarn = warn; }
             return old;
         }
+        if (IoFd.KERNEL) {
+            if (fd != -1) PosixFds.checkWakeupFd(fd);
+            long old;
+            synchronized (LOCK) { old = wakeupFd; wakeupFd = fd; wakeupWarn = warn; }
+            return old;
+        }
         if (fd != -1) throw new PyException("NotImplementedError", "set_wakeup_fd needs a pipe or socket descriptor, which this runtime does not provide");
         return -1L;
     }
 
-    /** Windows: the socket that gets one byte (the signal number) when a signal is tripped, or -1. */
+    /**
+     * POSIX (kernel descriptors): trip_signal's write of the signal number to the wakeup descriptor. A failure is
+     * reported on stderr as CPython reports it, except EAGAIN (a full pipe) when {@code warn_on_full_buffer=False}.
+     */
+    private static void writeWakeupPosix(int sig) {
+        long fd = wakeupFd;
+        if (fd == -1) return;
+        int e = PosixFds.writeByteNoThrow((int) fd, sig);
+        if (e != 0 && (wakeupWarn || e != PosixFds.EAGAIN)) {
+            String head = LangVersion.atLeast(3, 14) ? "Exception ignored while trying to write to the signal wakeup fd:"
+                : "Exception ignored when trying to write to the signal wakeup fd:";
+            System.err.print(head + "\n" + ErrnoModule.osErrorType(e) + ": [Errno " + e + "] " + PosixNative.strerror(e) + "\n");
+            System.err.flush();
+        }
+    }
+
+    /** Windows: the socket that gets one byte (the signal number) when a signal is tripped, or -1. POSIX: the descriptor. */
     private static volatile long wakeupFd = -1;
     private static volatile boolean wakeupWarn = true;
 

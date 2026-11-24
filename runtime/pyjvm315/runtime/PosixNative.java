@@ -58,6 +58,9 @@ final class PosixNative {
 
     static Tl tl() { return TL.get(); }
 
+    /** A call-state segment in {@code a}, for a one-off call on a thread that should not get a {@link Tl} (signal delivery threads are new each time). */
+    static MemorySegment callState(Arena a) { return a.allocate(CALL_STATE); }
+
     /** The errno captured by the last downcall on {@code cs}; read it only after that call reported failure. */
     static int errno(MemorySegment cs) { return (int) ERRNO.get(cs, 0L); }
 
@@ -116,6 +119,22 @@ final class PosixNative {
         MemorySegment cs = tl().cs;
         try (Arena a = Arena.ofConfined()) {
             if ((int) UNSETENV.invokeExact(cs, cString(a, name)) != 0) throw osError(errno(cs), null);
+        } catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /**
+     * Whether SIGINT is ignored ({@code SIG_IGN}) in this process, read with {@code sigaction(SIGINT, NULL, &old)}:
+     * an inherited SIG_IGN stays (HotSpot does not take over an ignored SIGINT), and CPython then keeps SIG_IGN as the
+     * Python-level handler. {@code struct sigaction} on Linux x86-64 is 152 bytes with the handler pointer at offset 0.
+     * A failing call (it cannot fail for a valid signal) counts as not ignored.
+     */
+    static boolean sigintIgnored() {
+        MethodHandle sigaction = fn("sigaction", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS));
+        MemorySegment cs = tl().cs;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment old = a.allocate(152, 8);
+            if ((int) sigaction.invokeExact(cs, 2, MemorySegment.NULL, old) != 0) return false;
+            return old.get(JAVA_LONG, 0) == 1L;
         } catch (Throwable t) { throw rethrow(t); }
     }
 

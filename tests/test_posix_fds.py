@@ -29,9 +29,10 @@ def jvm_kit():
         yield runtime, build_selfhosted(Path(td) / "selfhosted")
 
 
-def _run_pyjvm(kit, main: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_pyjvm(kit, main: Path, env: dict[str, str], prefix: tuple[str, ...] = ()) -> subprocess.CompletedProcess[str]:
     """Compile ``main`` and run it under pyJVM with ``env`` added to this process's environment (an inherited
-    PYJVM_POSIX_FDS is dropped: the mode is whatever ``env`` says, kernel by default)."""
+    PYJVM_POSIX_FDS is dropped: the mode is whatever ``env`` says, kernel by default). ``prefix`` is put in front of
+    the ``java`` command (a wrapper that execs it)."""
     runtime, selfhosted = kit
     out = main.parent / "out"
     compile_file(main, out, "ConformanceMain")
@@ -42,7 +43,7 @@ def _run_pyjvm(kit, main: Path, env: dict[str, str]) -> subprocess.CompletedProc
     full["PYJVM_LANG_VERSION"] = "%d.%d" % reference_version(sys.executable)
     full["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(sys.executable)
     full.setdefault("PYTHONIOENCODING", "utf-8")
-    cmd = ["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+    cmd = [*prefix, "java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
            "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
     return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full, timeout=600)
 
@@ -263,3 +264,79 @@ def test_stale_finalizer_keeps_reused_descriptor(jvm_kit, tmp_path):
 
 def test_dropped_file_is_closed_by_finalizer(jvm_kit, tmp_path):
     _same_as_cpython(jvm_kit, tmp_path, DROPPED_UNCLOSED, "r closed\nw closed\nrb closed\nab closed\n")
+
+
+# signal.set_wakeup_fd on a full non-blocking pipe: with warn_on_full_buffer (the default) the failed write is reported
+# on stderr under a header whose wording depends on the lane; with warn_on_full_buffer=False EAGAIN is silent, any other
+# error (EPIPE once the read end is closed) is still reported. CPython also prints a traceback of whatever frame runs
+# its deferred report; pyJVM writes from the delivering thread, so only the header and the error line are compared.
+WAKEUP_FULL = '''
+import os, signal, sys
+r, w = os.pipe()
+os.set_blocking(w, False)
+for chunk in (65536, 1):
+    try:
+        while True:
+            os.write(w, b"x" * chunk)
+    except BlockingIOError:
+        pass
+signal.signal(signal.SIGUSR1, lambda n, f: None)
+print(signal.set_wakeup_fd(w))
+signal.raise_signal(signal.SIGUSR1)
+sys.stderr.flush()
+print("warn done", flush=True)
+signal.set_wakeup_fd(w, warn_on_full_buffer=False)
+signal.raise_signal(signal.SIGUSR1)
+sys.stderr.flush()
+print("nowarn done", flush=True)
+os.close(r)
+signal.raise_signal(signal.SIGUSR1)
+sys.stderr.flush()
+print("broken done", flush=True)
+signal.set_wakeup_fd(-1)
+'''
+
+WAKEUP_HEADER = {(3, 13): "Exception ignored when trying to write to the signal wakeup fd:"}
+WAKEUP_HEADER_LATER = "Exception ignored while trying to write to the signal wakeup fd:"   # 3.14 and later
+
+
+def _wakeup_report(stderr: str) -> list[str]:
+    return [ln for ln in stderr.splitlines() if ln.startswith("Exception ignored") or " [Errno " in ln]
+
+
+def test_wakeup_fd_full_buffer_warning_header_per_lane(jvm_kit, tmp_path):
+    main = tmp_path / "main.py"
+    main.write_text(WAKEUP_FULL, encoding="utf-8")
+    header = WAKEUP_HEADER.get(reference_version(sys.executable), WAKEUP_HEADER_LATER)
+    expected = [header, "BlockingIOError: [Errno 11] Resource temporarily unavailable", header, "BrokenPipeError: [Errno 32] Broken pipe"]
+    ref = subprocess.run([sys.executable, str(main)], capture_output=True, encoding="utf-8", timeout=120)
+    assert ref.returncode == 0 and _wakeup_report(ref.stderr) == expected, ref.stderr
+    proc = _run_pyjvm(jvm_kit, main, {})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ref.stdout == "-1\nwarn done\nnowarn done\nbroken done\n"
+    assert _wakeup_report(proc.stderr) == expected, proc.stderr
+
+
+# SIGINT inherited as SIG_IGN (a background job of a non-interactive shell, nohup-like launchers) stays SIG_IGN, as in
+# CPython, which installs default_int_handler only over SIG_DFL; inherited SIG_DFL still gets default_int_handler.
+SIGINT_SCRIPT = '''
+import signal
+h = signal.getsignal(signal.SIGINT)
+print(h is signal.default_int_handler, repr(h))
+'''
+
+
+@pytest.mark.skipif(shutil.which("perl") is None, reason="needs perl to launch with a chosen SIGINT disposition")
+@pytest.mark.parametrize("disposition,expected", [
+    ("IGNORE", "False <Handlers.SIG_IGN: 1>\n"),
+    ("DEFAULT", "True <built-in function default_int_handler>\n"),
+])
+def test_inherited_sigint_disposition(jvm_kit, tmp_path, disposition, expected):
+    main = tmp_path / "main.py"
+    main.write_text(SIGINT_SCRIPT, encoding="utf-8")
+    prefix = ("perl", "-e", '$SIG{INT}="%s"; exec @ARGV' % disposition)
+    ref = subprocess.run([*prefix, sys.executable, str(main)], capture_output=True, encoding="utf-8", timeout=120)
+    assert (ref.returncode, ref.stdout) == (0, expected), ref.stderr
+    proc = _run_pyjvm(jvm_kit, main, {}, prefix)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected
