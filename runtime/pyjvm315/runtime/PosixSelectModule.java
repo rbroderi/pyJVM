@@ -50,7 +50,9 @@ final class PosixSelectModule {
         method(pollClass, PosixSelectModule.class, "__repr__", "pRepr", "self");
         methodVarKw(pollClass, PosixSelectModule.class, "poll", "pPoll", "self", "args", "kwargs", new PyDict());
         finish(pollClass);
-        m.attrs.put("poll", pollClass);
+        NativeFunction pollFn = new NativeFunction("poll", (a, k) -> makePoll(pollClass, a, k));
+        pollFn.attrs.put("__module__", "select");
+        m.attrs.put("poll", pollFn);
         addEpoll(m);
         return m;
     }
@@ -131,11 +133,34 @@ final class PosixSelectModule {
             int[][] fds = new int[3][];
             int nfds = 0;
             for (int i = 0; i < 3; i++) {
-                List<Object> items = SelectModule.seq(args.get(i));
+                // a list is read live, as CPython's seq2set over PySequence_Fast: its size is re-read after every
+                // fileno() call, so a fileno() that shrinks the list ends the scan (test_select_mutated). Only an exact
+                // list is a bare ArrayList here; a list subclass is a PyInstance (payload ArrayList) and is snapshotted
+                // by seq(), which matches CPython: PySequence_Fast returns the object itself only for exact lists and
+                // tuples, and copies a subclass through iteration.
+                Object arg = args.get(i);
+                List<Object> items;
+                int[] got;
+                if (arg instanceof ArrayList<?> live) {
+                    items = new ArrayList<>();
+                    got = new int[live.size()];
+                    for (int j = 0; j < live.size(); j++) {
+                        Object x = live.get(j);
+                        int fd = cfd(x);
+                        if (fd >= PosixSelect.FD_SETSIZE) throw new PyException("ValueError", "filedescriptor out of range in select()");
+                        if (items.size() == got.length) got = java.util.Arrays.copyOf(got, got.length * 2 + 1);
+                        got[items.size()] = fd;
+                        items.add(x);
+                    }
+                    got = java.util.Arrays.copyOf(got, items.size());
+                } else {
+                    items = SelectModule.seq(arg);
+                    got = null;
+                }
                 lists.add(items);
                 fds[i] = new int[items.size()];
                 for (int j = 0; j < fds[i].length; j++) {
-                    int fd = cfd(items.get(j));
+                    int fd = got != null ? got[j] : cfd(items.get(j));
                     if (fd >= PosixSelect.FD_SETSIZE) throw new PyException("ValueError", "filedescriptor out of range in select()");   // before any bit is written
                     PosixSelect.setBit(pristine, (long) i * sb, fd);
                     fds[i][j] = fd;
@@ -168,10 +193,16 @@ final class PosixSelectModule {
         final java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean();
     }
 
+    /** {@code type(select.poll())()}: the poll type cannot be instantiated, only {@code select.poll()} makes one (as CPython). */
     public static Object pollNew(Object cls, Object args, Object kwargs) {
-        if (!((PyDict) kwargs).isEmpty()) throw new PyException("TypeError", "select.poll() takes no keyword arguments");
-        if (!((PyTuple) args).items.isEmpty()) throw new PyException("TypeError", "select.poll() takes no arguments (" + ((PyTuple) args).items.size() + " given)");
-        return newInstance((PyClass) cls, new Poll());
+        throw new PyException("TypeError", "cannot create 'select.poll' instances");
+    }
+
+    /** The module function {@code select.poll()}. */
+    private static Object makePoll(PyClass cls, List<Object> args, Map<Object, Object> kwargs) {
+        if (!kwargs.isEmpty()) throw new PyException("TypeError", "select.poll() takes no keyword arguments");
+        if (!args.isEmpty()) throw new PyException("TypeError", "select.poll() takes no arguments (" + args.size() + " given)");
+        return newInstance(cls, new Poll());
     }
 
     private static Poll poll(Object self) { return state(self, Poll.class, "select.poll"); }

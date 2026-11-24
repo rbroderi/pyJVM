@@ -29,10 +29,11 @@ def jvm_kit():
         yield runtime, build_selfhosted(Path(td) / "selfhosted")
 
 
-def _run_pyjvm(kit, main: Path, env: dict[str, str], prefix: tuple[str, ...] = ()) -> subprocess.CompletedProcess[str]:
+def _run_pyjvm(kit, main: Path, env: dict[str, str], prefix: tuple[str, ...] = (),
+               pass_fds: tuple[int, ...] = ()) -> subprocess.CompletedProcess[str]:
     """Compile ``main`` and run it under pyJVM with ``env`` added to this process's environment (an inherited
     PYJVM_POSIX_FDS is dropped: the mode is whatever ``env`` says, kernel by default). ``prefix`` is put in front of
-    the ``java`` command (a wrapper that execs it)."""
+    the ``java`` command (a wrapper that execs it); ``pass_fds`` are inherited by the JVM under their own numbers."""
     runtime, selfhosted = kit
     out = main.parent / "out"
     compile_file(main, out, "ConformanceMain")
@@ -45,7 +46,8 @@ def _run_pyjvm(kit, main: Path, env: dict[str, str], prefix: tuple[str, ...] = (
     full.setdefault("PYTHONIOENCODING", "utf-8")
     cmd = [*prefix, "java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
            "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
-    return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full, timeout=600)
+    return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full, timeout=600,
+                          pass_fds=pass_fds)
 
 
 DEV_NULL = '''
@@ -349,3 +351,42 @@ def test_inherited_sigint_disposition(jvm_kit, tmp_path, disposition, expected):
     proc = _run_pyjvm(jvm_kit, main, {}, prefix)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == expected
+
+
+# os.closerange closes stdio and the descriptors pyJVM adopted, but skips any other number (JVM-owned or inherited:
+# generation 0), so the daemonise idiom closerange(3, MAXFD) cannot break class loading. os.close still closes anything.
+CLOSERANGE_SCRIPT = '''
+import os
+inherited = int(os.environ["INHERITED_FD"])
+own = os.open(os.environ["OWN_PATH"], os.O_RDONLY)
+os.closerange(3, 1024)
+try:
+    os.read(own, 1)
+    print("adopted open")
+except OSError as e:
+    print("adopted closed", e.errno == 9)
+print("inherited", os.read(inherited, 5))
+import fractions                      # not loaded yet: needs the JVM's class path and the stdlib files
+print(fractions.Fraction(1, 3) * 3)
+with open(os.environ["OWN_PATH"]) as f:
+    print(f.read())
+os.close(inherited)
+print("inherited closed")
+'''
+
+
+def test_closerange_skips_unadopted_descriptors(jvm_kit, tmp_path):
+    main = tmp_path / "main.py"
+    main.write_text(CLOSERANGE_SCRIPT, encoding="utf-8")
+    own = tmp_path / "own.txt"
+    own.write_text("own text", encoding="utf-8")
+    shared = tmp_path / "inherited.txt"
+    shared.write_bytes(b"hello world")
+    fd = os.open(shared, os.O_RDONLY)
+    try:
+        assert fd > 2
+        proc = _run_pyjvm(jvm_kit, main, {"INHERITED_FD": str(fd), "OWN_PATH": str(own)}, pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "adopted closed True\ninherited b'hello'\n1\nown text\ninherited closed\n", proc.stderr

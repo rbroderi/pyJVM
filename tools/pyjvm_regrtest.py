@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """In-process runner for CPython's Lib/test modules (compiled and run by pyJVM, or run by CPython for comparison).
 
-usage: pyjvm_regrtest.py [-v] [-k PATTERN] test_name [test_name ...]
+usage: pyjvm_regrtest.py [-v] [-k PATTERN]... test_name [test_name ...]
 
 Loads ``test.<name>`` for each name, runs its unittest suite and prints one ``RESULT <id> <status>`` line per test
 (ok, FAIL, ERROR, skipped, expected failure, unexpected success) followed by a summary line. tools/run_cpython_test.py
@@ -13,6 +13,16 @@ import sys
 import unittest
 
 
+def _safe_str(obj):
+    """str(obj), falling back to repr() and then object.__repr__() when those raise."""
+    for fmt in (str, repr, object.__repr__):
+        try:
+            return fmt(obj)
+        except Exception:
+            pass
+    return "<unprintable>"
+
+
 class _Result(unittest.TextTestResult):
     def __init__(self, stream, descriptions, verbosity, **kwargs):
         super().__init__(stream, descriptions, verbosity, **kwargs)
@@ -20,6 +30,14 @@ class _Result(unittest.TextTestResult):
 
     def _note(self, test, status):
         self.statuses.append((test.id(), status))
+
+    def _exc_info_to_string(self, err, test):
+        # a traceback that cannot be formatted must not abort the whole module run
+        try:
+            return super()._exc_info_to_string(err, test)
+        except Exception as exc:
+            return "%s: %s\n(traceback not formatted: %s: %s)\n" % (
+                getattr(err[0], "__name__", "?"), _safe_str(err[1]), type(exc).__name__, _safe_str(exc))
 
     def addSuccess(self, test):
         super().addSuccess(test)
@@ -53,7 +71,7 @@ class _Result(unittest.TextTestResult):
 
 def main(argv):
     verbose = False
-    pattern = None
+    patterns = []
     names = []
     i = 0
     while i < len(argv):
@@ -62,7 +80,7 @@ def main(argv):
             verbose = True
         elif arg == "-k":
             i += 1
-            pattern = argv[i]
+            patterns.append(argv[i])
         else:
             names.append(arg)
         i += 1
@@ -80,8 +98,8 @@ def main(argv):
             failed = True
             continue
         loader = unittest.TestLoader()
-        if pattern:
-            loader.testNamePatterns = ["*%s*" % pattern]
+        if patterns:
+            loader.testNamePatterns = ["*%s*" % p for p in patterns]
         suite = loader.loadTestsFromModule(module)
         stream = io.StringIO()
         runner = unittest.TextTestRunner(stream=stream, verbosity=2 if verbose else 1, resultclass=_Result)

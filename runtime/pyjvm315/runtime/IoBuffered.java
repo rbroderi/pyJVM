@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** {@code _io.BufferedReader}, {@code BufferedWriter}, {@code BufferedRandom} and {@code BufferedRWPair}. */
 final class IoBuffered {
@@ -71,7 +72,24 @@ final class IoBuffered {
         byte[] rbuf = new byte[0]; int rpos, rend;
         byte[] wbuf; int wlen;
         boolean isReader, isWriter, reg;
-        public void flushQuietly() { if (raw != null && wlen > 0) flushWrite(this); }
+        /** CPython's per-object buffer lock ({@code ENTER_BUFFERED}): held around every operation that touches the buffers. */
+        final ReentrantLock lock = new ReentrantLock();
+        /** The exit/path-operation flush: skipped while any thread (this one included) is inside the object. */
+        public void flushQuietly() {
+            if (raw == null || wlen <= 0 || lock.isHeldByCurrentThread() || !lock.tryLock()) return;
+            try { if (wlen > 0) flushWrite(this); } finally { lock.unlock(); }
+        }
+    }
+
+    /**
+     * CPython's {@code ENTER_BUFFERED}: takes the object's lock, waiting while another thread holds it. A re-entry from
+     * the thread that holds it (a signal handler, or a raw stream calling back, that uses the object while an operation
+     * of this thread is under way) raises {@code RuntimeError("reentrant call inside <repr>")} instead. The caller
+     * releases with {@code b.lock.unlock()} in a finally.
+     */
+    static void enter(Object self, B b) {
+        if (b.lock.isHeldByCurrentThread()) throw new PyException("RuntimeError", "reentrant call inside " + PyRuntime.pyRepr(self));
+        b.lock.lock();
     }
 
     // ---- class definitions ----------------------------------------------------------------------------
@@ -223,6 +241,11 @@ final class IoBuffered {
         B b = open(self, "read of closed file");
         long n = IoUtil.sizeArg(size);
         if (n < -1) throw new PyException("ValueError", "read length must be non-negative or -1");
+        enter(self, b);
+        try { return readLocked(b, n); } finally { b.lock.unlock(); }
+    }
+
+    private static Object readLocked(B b, long n) {
         if (b.wlen > 0) flushOrRaise(b);
         if (n == -1) { byte[] all = readAll(b); return all == null ? null : new PyBytes(all); }
         if (n == 0) return new PyBytes(new byte[0]);
@@ -296,11 +319,14 @@ final class IoBuffered {
         if (n < -1) throw new PyException("ValueError", "read length must be non-negative or -1");
         if (n == -1) n = b.size;
         if (n == 0) return new byte[0];
-        if (b.wlen > 0) flushOrRaise(b);
-        int a = avail(b);
-        if (a > 0) return take(b, (int) Math.min(a, n));
-        dropRead(b);
-        return b.ops.read((int) Math.min(n, b.size));
+        enter(self, b);
+        try {
+            if (b.wlen > 0) flushOrRaise(b);
+            int a = avail(b);
+            if (a > 0) return take(b, (int) Math.min(a, n));
+            dropRead(b);
+            return b.ops.read((int) Math.min(n, b.size));
+        } finally { b.lock.unlock(); }
     }
 
     public static Object readinto(Object self, Object buffer) { return readIntoImpl(self, buffer, false); }
@@ -318,14 +344,22 @@ final class IoBuffered {
 
     public static Object peek(Object self, Object size) {
         B b = open(self, "peek of closed file");
-        if (b.wlen > 0) flushOrRaise(b);
-        if (avail(b) == 0) fill(b);                     // EOF or would block: the buffer stays empty, b''
-        return new PyBytes(Arrays.copyOfRange(b.rbuf, b.rpos, b.rend));
+        enter(self, b);
+        try {
+            if (b.wlen > 0) flushOrRaise(b);
+            if (avail(b) == 0) fill(b);                 // EOF or would block: the buffer stays empty, b''
+            return new PyBytes(Arrays.copyOfRange(b.rbuf, b.rpos, b.rend));
+        } finally { b.lock.unlock(); }
     }
 
     public static Object readline(Object self, Object size) {
         B b = open(self, "readline of closed file");
         long limit = IoUtil.sizeArg(size);
+        enter(self, b);
+        try { return readlineLocked(b, limit); } finally { b.lock.unlock(); }
+    }
+
+    private static Object readlineLocked(B b, long limit) {
         if (b.wlen > 0) flushOrRaise(b);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         while (limit < 0 || out.size() < limit) {
@@ -358,7 +392,11 @@ final class IoBuffered {
                 off += n;
             }
         } finally {
-            if (off > 0) { System.arraycopy(b.wbuf, off, b.wbuf, 0, b.wlen - off); b.wlen -= off; }
+            if (off > 0) {                              // never a negative length, even if wlen changed under us
+                int rest = b.wlen - off;
+                if (rest > 0) System.arraycopy(b.wbuf, off, b.wbuf, 0, rest);
+                b.wlen = Math.max(rest, 0);
+            }
             if (b.wlen == 0 && b.reg) { b.reg = false; IoUtil.clean(b); }
         }
         return !blocked;
@@ -398,12 +436,18 @@ final class IoBuffered {
     public static Object write(Object self, Object buffer) {
         B b = open(self, "write to closed file");
         byte[] d = IoUtil.bytesLike(buffer);
-        writeBytes(b, d);
+        writeBytes(self, b, d);
         return (long) d.length;
     }
 
+    /** {@link #writeBytesLocked} under the object's lock ({@code self} is the buffered object, for the reentrancy error). */
+    static void writeBytes(Object self, B b, byte[] d) {
+        enter(self, b);
+        try { writeBytesLocked(b, d); } finally { b.lock.unlock(); }
+    }
+
     /** Append to the write buffer, flushing to the raw stream when it is full. */
-    static void writeBytes(B b, byte[] d) {
+    private static void writeBytesLocked(B b, byte[] d) {
         if (avail(b) > 0) dropRead(b);
         if (d.length <= b.size - b.wlen) {
             System.arraycopy(d, 0, b.wbuf, b.wlen, d.length);
@@ -428,16 +472,20 @@ final class IoBuffered {
 
     public static Object flush(Object self) {
         B b = open(self, "flush of closed file");
-        if (b.wlen > 0) flushOrRaise(b);
+        enter(self, b);
+        try { if (b.wlen > 0) flushOrRaise(b); } finally { b.lock.unlock(); }
         return null;
     }
 
     public static Object truncate(Object self, Object pos) {
         B b = open(self, "truncate of closed file");
-        if (b.wlen > 0) flushOrRaise(b);
-        if (avail(b) > 0) dropRead(b);
-        Object p = pos == null ? (Object) b.ops.tell() : pos;
-        return PyRuntime.callMethod(b.raw, "truncate", new Object[]{p});
+        enter(self, b);
+        try {
+            if (b.wlen > 0) flushOrRaise(b);
+            if (avail(b) > 0) dropRead(b);
+            Object p = pos == null ? (Object) b.ops.tell() : pos;
+            return PyRuntime.callMethod(b.raw, "truncate", new Object[]{p});
+        } finally { b.lock.unlock(); }
     }
 
     // ---- positioning ------------------------------------------------------------------------------------
@@ -450,12 +498,15 @@ final class IoBuffered {
         if (w < 0 || w > 2) throw new PyException("ValueError", "whence value " + w + " unsupported");
         if (!PyRuntime.truth(PyRuntime.callMethod(b.raw, "seekable", new Object[0]))) throw IoUtil.unsupported("File or stream is not seekable.");
         long off = IoUtil.asLong(t);
-        if (b.wlen > 0) flushOrRaise(b);
-        if (w == 1) off -= avail(b);
-        b.rpos = b.rend = 0;
-        long r = b.ops.seek(off, (int) w);
-        if (r < 0) throw new PyException("OSError", "Raw stream returned invalid position " + r);
-        return r;
+        enter(self, b);
+        try {
+            if (b.wlen > 0) flushOrRaise(b);
+            if (w == 1) off -= avail(b);
+            b.rpos = b.rend = 0;
+            long r = b.ops.seek(off, (int) w);
+            if (r < 0) throw new PyException("OSError", "Raw stream returned invalid position " + r);
+            return r;
+        } finally { b.lock.unlock(); }
     }
 
     public static Object tell(Object self) {
@@ -480,6 +531,11 @@ final class IoBuffered {
 
     public static Object close(Object self) {
         B b = live(self);
+        enter(self, b);
+        try { return closeLocked(b); } finally { b.lock.unlock(); }
+    }
+
+    private static Object closeLocked(B b) {
         if (rawClosed(b)) return null;
         PyException flushErr = null;
         try { if (b.wlen > 0) flushOrRaise(b); } catch (PyException e) { flushErr = e; }
@@ -495,7 +551,10 @@ final class IoBuffered {
 
     public static Object detach(Object self) {
         B b = live(self);
-        if (b.wlen > 0) flushOrRaise(b);
+        if (b.wlen > 0) {                               // CPython's detach flushes through flush(), which takes the lock
+            enter(self, b);
+            try { if (b.wlen > 0) flushOrRaise(b); } finally { b.lock.unlock(); }
+        }
         Object raw = b.raw;
         b.raw = null;
         return raw;

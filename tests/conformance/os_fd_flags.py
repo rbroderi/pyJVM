@@ -107,6 +107,14 @@ if os.name == "posix":
         print("created", oct(stat.S_IMODE(os.stat(os.path.join(d, "n")).st_mode)))
         os.umask(old)
 
+        # FileIO over a directory descriptor fails with EISDIR and leaves the caller's descriptor open (CPython closes
+        # only what it opened itself; test_fileio testOpenDirFD)
+        import io
+        dfd = os.open(d, os.O_RDONLY)
+        opened.append(dfd)
+        show("FileIO(dirfd)", lambda: io.FileIO(dfd, "r"))
+        show("dirfd still open", lambda: stat.S_ISDIR(os.fstat(dfd).st_mode))
+
         # terminal size of something that is not a terminal
         show("terminal size", lambda: os.get_terminal_size(fd))
         show("terminal size bad", lambda: os.get_terminal_size(9999))

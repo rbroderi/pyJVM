@@ -107,9 +107,9 @@ final class IoFile {
         }
         boolean dir;
         try { dir = IoFd.isDir(fd); }
-        catch (RuntimeException ex) { if (!isFd || cf) IoFd.close(fd); throw ex; }   // kernel fstat can fail (EINTR + raising handler)
+        catch (RuntimeException ex) { if (!isFd || cf && !IoFd.KERNEL) IoFd.close(fd); throw ex; }   // kernel fstat can fail (EINTR + raising handler)
         if (dir) {
-            if (!isFd || cf) IoFd.close(fd);
+            if (!isFd || cf && !IoFd.KERNEL) IoFd.close(fd);       // kernel: as CPython, never close the caller's descriptor
             throw PosixModule.osError("IsADirectoryError", 21, "Is a directory", path);
         }
         s.fd = fd; s.readable = read; s.writable = write; s.appending = append; s.created = create; s.closefd = cf;

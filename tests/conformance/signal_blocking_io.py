@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Signals around blocking descriptor I/O on the main thread (PEP 475): a handler runs while os.read waits on a pipe, a
 # handler that raises interrupts a read or a write before anything was transferred, a handler that returns lets the call
-# go on, and signal.set_wakeup_fd on POSIX. POSIX only (kernel descriptors; PYJVM_POSIX_FDS=nio has no pipe).
+# go on, signal.set_wakeup_fd, and a handler re-entering a BufferedWriter.
+# POSIX only (kernel descriptors; PYJVM_POSIX_FDS=nio has no pipe).
 import io
 import os
 import signal
@@ -154,3 +155,54 @@ for attempt in range(2):          # the first one warms the error path up; the s
 print("e", err, took < 0.05)
 for fd in (r, w, r5, w5):
     os.close(fd)
+
+# (f) a handler that raises runs while the main thread loops over descriptor I/O that never has to wait (each read
+# finds data at once): the exception comes out of the loop soon after the timer fires (test_io test_reentrant_write_*)
+r6, w6 = os.pipe()
+signal.signal(signal.SIGALRM, alarm_raises)
+signal.setitimer(signal.ITIMER_REAL, 0.2)
+t0 = time.monotonic()
+try:
+    while time.monotonic() - t0 < 5:
+        os.write(w6, b"xy")
+        os.read(r6, 2)
+    print("f not interrupted")
+except TimeoutError as e:
+    print("f", "TimeoutError", e, time.monotonic() - t0 < 2)
+finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+os.close(r6)
+os.close(w6)
+
+# (g) a handler that writes to the BufferedWriter whose write the main thread is blocked in (a full pipe): the
+# reentrant call raises RuntimeError("reentrant call inside <repr>"), which comes out of the interrupted write; the
+# handler's 1/0 is never reached (test_io test_reentrant_write_buffered, made deterministic by the full pipe)
+r7, w7 = os.pipe()
+fill(w7)
+wio = io.open(w7, "wb", buffering=4096, closefd=False)
+
+
+def reenter(num, frame):
+    wio.write(b"z")
+    1 / 0
+
+
+signal.signal(signal.SIGALRM, reenter)
+signal.setitimer(signal.ITIMER_REAL, 0.2)
+try:
+    wio.write(b"y" * 12288)
+    print("g not interrupted")
+except (RuntimeError, ZeroDivisionError) as e:
+    print("g", type(e).__name__, str(e).replace("name=%d>" % w7, "name=W>"))
+finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+os.set_blocking(r7, False)
+try:
+    while os.read(r7, 65536):
+        pass
+except BlockingIOError:
+    pass
+wio.close()
+print("g closed", wio.closed)
+os.close(r7)
+os.close(w7)

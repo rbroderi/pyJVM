@@ -122,9 +122,12 @@ final class PosixFds {
      * pending Python handlers run between them. Returns when the descriptor is ready (or in error: the syscall reports
      * it), or after the first empty slice for a non-blocking descriptor (the syscall then returns EAGAIN). The first
      * slice is a zero-timeout probe, so a non-blocking descriptor never waits; the following slices are 50 ms.
+     * Handlers of signals that arrived before the call run first: pyJVM has no eval-loop signal check, so without this
+     * a loop of reads and writes that never wait would never run them (CPython runs them at the next bytecode).
      */
     static void awaitReady(int fd, short events) {
         if (!SignalModule.active || !SignalModule.isMain()) return;
+        SignalModule.dispatchPending();
         PosixNative.Tl t = PosixNative.tl();
         boolean first = true;
         while (true) {
@@ -254,20 +257,28 @@ final class PosixFds {
     }
 
     /**
-     * {@code os.closerange(low, high)}: closes the open descriptors in {@code [max(low, 0), high)}, errors ignored. Only
-     * the numbers listed in /proc/self/fd are visited (never a loop over the int range). The directory listing itself
-     * holds a descriptor that is already closed when the numbers are visited; closing it again is a harmless EBADF.
+     * {@code os.closerange(low, high)}: closes descriptors in {@code [max(low, 0), high)}, errors ignored, but only
+     * stdio (0, 1, 2) and the numbers this runtime adopted (generation != 0: {@code os.open}, {@code dup},
+     * {@code pipe}, {@code dup2} targets, {@code select.epoll}). A number above 2 that pyJVM never adopted is skipped:
+     * it belongs to the JVM (class-path jars, its own epoll/pipes) or was inherited from the parent, and closing it
+     * would break class loading or let a later JVM close hit a reused number. This deliberately diverges from CPython
+     * for inherited descriptors (they survive the daemonise/pre-exec idiom {@code closerange(3, MAXFD)}); an explicit
+     * {@code os.close(fd)} still closes any number. Only the generation table is visited, never the int range.
+     * Above 2 a number is closed only if this call removed it from the table ({@code GEN.remove(fd) != null}, atomic),
+     * so a number closed by another thread after the snapshot, and reopened unadopted by the JVM, is left alone. 0, 1
+     * and 2 are closed unconditionally, as CPython does, even if the JVM reused one of those numbers after
+     * {@code os.close(1)}.
      */
     static void closeRange(int low, int high) {
-        String[] names = new java.io.File("/proc/self/fd").list();
-        if (names == null) throw new PyException("OSError", "closerange: cannot list /proc/self/fd");
         int from = Math.max(low, 0);
+        if (from >= high) return;
+        java.util.TreeSet<Integer> fds = new java.util.TreeSet<>();
+        for (int fd = from; fd <= 2 && fd < high; fd++) fds.add(fd);
+        for (Integer fd : GEN.keySet()) if (fd >= from && fd < high) fds.add(fd);
         MemorySegment cs = PosixNative.tl().cs;
-        for (String s : names) {
-            int fd;
-            try { fd = Integer.parseInt(s); } catch (NumberFormatException e) { continue; }
-            if (fd < from || fd >= high) continue;
-            forget(fd);
+        for (int fd : fds) {
+            if (fd > 2) { if (GEN.remove(fd) == null) continue; }
+            else forget(fd);
             try { int ignored = (int) CLOSE.invokeExact(cs, fd); } catch (Throwable x) { throw PosixNative.rethrow(x); }
         }
     }

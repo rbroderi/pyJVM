@@ -2,7 +2,7 @@
 """Run CPython Lib/test modules on pyJVM and compare per-test results with CPython (roadmap P3-05).
 
 usage: python3.15 tools/run_cpython_test.py [--corpus DIR] [--python EXE] [--jvm-only | --cpython-only]
-                                            [-v] [-k PATTERN] test_bool test_tuple ...
+                                            [-v] [-k PATTERN]... test_bool test_tuple ...
 
 The corpus is a CPython checkout's ``Lib`` directory (default /tmp/claude-0/cpython/Lib, or $PYJVM_CPYTHON_LIB). Only its
 ``test`` package is put on the path (via a symlink directory); the standard library comes from the reference interpreter.
@@ -64,10 +64,11 @@ def main(argv=None):
     ap.add_argument("--jvm-only", action="store_true")
     ap.add_argument("--cpython-only", action="store_true")
     ap.add_argument("-v", action="store_true")
-    ap.add_argument("-k", dest="pattern")
+    ap.add_argument("-k", dest="patterns", action="append", default=[], help="test id substring (fnmatch); repeatable")
     ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--save", metavar="PREFIX", help="write each lane's raw stdout/stderr to PREFIX.<lane>.out/.err")
     ns = ap.parse_args(argv)
-    args = (["-v"] if ns.v else []) + (["-k", ns.pattern] if ns.pattern else []) + ns.tests
+    args = (["-v"] if ns.v else []) + [a for p in ns.patterns for a in ("-k", p)] + ns.tests
     status = 0
     with tempfile.TemporaryDirectory(prefix="pyjvm-testpath-") as path:
         (Path(path) / "test").symlink_to(Path(ns.corpus) / "test")
@@ -77,6 +78,11 @@ def main(argv=None):
             cpy = run_cpython(ns.python, env, args, ns.timeout)
         if not ns.cpython_only:
             jvm = run_jvm(ns.python, env, args, ns.timeout)
+    if ns.save:
+        for lane, proc in (("cpython", cpy), ("jvm", jvm)):
+            if proc:
+                Path(ns.save + "." + lane + ".out").write_text(proc.stdout, encoding="utf-8")
+                Path(ns.save + "." + lane + ".err").write_text(proc.stderr, encoding="utf-8")
     cres, csum = parse(cpy.stdout) if cpy else ({}, {})
     jres, jsum = parse(jvm.stdout) if jvm else ({}, {})
     if jvm and not jres:

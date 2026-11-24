@@ -286,6 +286,26 @@ os.close(nul)
 t("poll(1)", select.poll, 1)
 t("poll(a=1)", lambda: select.poll(a=1))
 print("poll type", type(pl).__name__, type(pl).__module__, repr(pl).startswith("<select.poll object at"))
+t("poll type()", type(pl))                                      # test_select.test_disallow_instantiation
+print("poll is", type(select.poll).__name__, select.poll.__module__, select.poll.__name__)
+# a fileno() that shrinks the list ends the scan: the list's size is re-read after each call (test_select_mutated)
+shrink = []
+sr, sw = os.pipe()
+
+
+class Shrinks:
+    def fileno(self):
+        del shrink[-1]
+        return sw
+
+
+shrink[:] = [Shrinks()] * 10
+res = select.select([], shrink, [], 0)
+print("mutated", len(res[1]), len(shrink), res[1] == shrink)
+shrink[:] = (Shrinks(),) * 4
+t("mutated tuple", lambda: len(select.select([], tuple(shrink), [], 0)[1]))
+os.close(sr)
+os.close(sw)
 print("methods", [n for n in dir(pl) if not n.startswith("_")])
 
 # ---- signals: a handler that returns does not shorten the timeout; one that raises interrupts the wait

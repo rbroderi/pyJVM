@@ -154,7 +154,7 @@ final class IoText {
         byte[] data = Arrays.copyOf(t.pbuf, t.plen);
         t.plen = 0;
         if (t.reg) { t.reg = false; IoUtil.clean(t); }
-        if (t.fast != null && t.fast.isWriter) IoBuffered.writeBytes(t.fast, data);
+        if (t.fast != null && t.fast.isWriter) IoBuffered.writeBytes(t.buffer, t.fast, data);
         else PyRuntime.callMethod(t.buffer, "write", new Object[]{new PyBytes(data)});
     }
 
