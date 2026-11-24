@@ -277,17 +277,26 @@ final class PosixFds {
         int f = cfd(fd);
         if (n < 0) return new byte[0];
         if (n > 0) awaitReady(f, POLLIN);       // n == 0 still reaches read(2), so a bad descriptor raises EBADF as in CPython
-        return readCore(f, n, false, 0);
+        return readCore(f, n, false, 0, false);
+    }
+
+    /** As {@link #read}, but a read that would block (EAGAIN: a non-blocking descriptor) returns null instead of raising. */
+    static byte[] readOrNull(long fd, int n) {
+        int f = cfd(fd);
+        if (n < 0) return new byte[0];
+        if (n > 0) awaitReady(f, POLLIN);
+        return readCore(f, n, false, 0, true);
     }
 
     /** {@code pread(2)}: as {@link #read} without the signal pre-wait (positional reads are for seekable files); the offset is not moved. */
     static byte[] pread(long fd, int n, long offset) {
         int f = cfd(fd);
         if (n < 0) return new byte[0];
-        return readCore(f, n, true, offset);
+        return readCore(f, n, true, offset, false);
     }
 
-    private static byte[] readCore(int f, int n, boolean at, long offset) {
+    /** The read loop; with {@code eagainNull} an EAGAIN returns null (nothing was read) instead of raising. */
+    private static byte[] readCore(int f, int n, boolean at, long offset, boolean eagainNull) {
         PosixNative.Tl t = PosixNative.tl();
         boolean big = n > BUF_MAX;
         MemorySegment own = big ? PosixNative.nativeAlloc(n) : null;
@@ -305,6 +314,7 @@ final class PosixFds {
                     return out;
                 }
                 int e = PosixNative.errno(t.cs);
+                if (e == EAGAIN && eagainNull) return null;
                 if (e != EINTR) throw PosixNative.osError(e, null);
                 SignalModule.dispatchPending();                 // nothing was read: no result is pending in buf
             }
@@ -317,13 +327,21 @@ final class PosixFds {
     static int write(long fd, byte[] b, int off, int len) {
         int f = cfd(fd);
         if (len > 0) awaitReady(f, POLLOUT);
-        return writeCore(f, b, off, len, false, 0);
+        return writeCore(f, b, off, len, false, 0, false);
+    }
+
+    /** As {@link #write}, but a write that would block (EAGAIN: a non-blocking descriptor) returns -1 instead of raising. */
+    static int writeOrNeg(long fd, byte[] b, int off, int len) {
+        int f = cfd(fd);
+        if (len > 0) awaitReady(f, POLLOUT);
+        return writeCore(f, b, off, len, false, 0, true);
     }
 
     /** {@code pwrite(2)}: as {@link #write} without the signal pre-wait; the offset is not moved. */
-    static int pwrite(long fd, byte[] b, int off, int len, long offset) { return writeCore(cfd(fd), b, off, len, true, offset); }
+    static int pwrite(long fd, byte[] b, int off, int len, long offset) { return writeCore(cfd(fd), b, off, len, true, offset, false); }
 
-    private static int writeCore(int f, byte[] b, int off, int len, boolean at, long offset) {
+    /** The write loop; with {@code eagainNeg} an EAGAIN returns -1 (nothing was written) instead of raising. */
+    private static int writeCore(int f, byte[] b, int off, int len, boolean at, long offset, boolean eagainNeg) {
         PosixNative.Tl t = PosixNative.tl();
         boolean big = len > BUF_MAX;
         MemorySegment own = big ? PosixNative.nativeAlloc(len) : null;
@@ -338,6 +356,7 @@ final class PosixFds {
                 } catch (Throwable x) { throw PosixNative.rethrow(x); }
                 if (r >= 0) return (int) r;
                 int e = PosixNative.errno(t.cs);
+                if (e == EAGAIN && eagainNeg) return -1;
                 if (e != EINTR) throw PosixNative.osError(e, null);
                 SignalModule.dispatchPending();
             }

@@ -16,7 +16,11 @@ final class IoBuffered {
     private static final String ME = IoBuffered.class.getName();
     static PyClass reader, writer, random, pair;
 
-    /** The raw stream under a buffer: a FileIO served by direct descriptor calls, or any object with the raw protocol. */
+    /**
+     * The raw stream under a buffer: a FileIO served by direct descriptor calls, or any object with the raw protocol.
+     * {@code read} returns null and {@code write} -1 when the call would block; only a FileOps over a non-blocking
+     * kernel descriptor does that (never on Windows or with nio descriptors, and ObjOps never does).
+     */
     interface Ops {
         byte[] read(int n);
         int write(byte[] b, int off, int len);
@@ -27,8 +31,8 @@ final class IoBuffered {
     static final class FileOps implements Ops {
         final IoFile.St f;
         FileOps(IoFile.St f) { this.f = f; }
-        public byte[] read(int n) { if (f.fd < 0) throw IoUtil.closed(); return IoFd.read(f.fd, n); }
-        public int write(byte[] b, int off, int len) { if (f.fd < 0) throw IoUtil.closed(); return IoFd.write(f.fd, b, off, len); }
+        public byte[] read(int n) { if (f.fd < 0) throw IoUtil.closed(); return IoFd.readOrNull(f.fd, n); }
+        public int write(byte[] b, int off, int len) { if (f.fd < 0) throw IoUtil.closed(); return IoFd.writeOrNeg(f.fd, b, off, len); }
         public long seek(long pos, int how) { if (f.fd < 0) throw IoUtil.closed(); return IoFd.seek(f.fd, pos, how); }
         public long tell() { if (f.fd < 0) throw IoUtil.closed(); return IoFd.tell(f.fd); }
     }
@@ -199,10 +203,12 @@ final class IoBuffered {
         if (a > 0) b.ops.seek(-a, 1);
     }
 
+    /** Refill the read buffer: the count read, 0 at end of file, -1 when the raw read would block (the buffer stays empty). */
     private static int fill(B b) {
-        if (b.wlen > 0) flushWrite(b);
+        if (b.wlen > 0) flushOrRaise(b);
         b.rpos = 0; b.rend = 0;
         byte[] d = b.ops.read(b.size);
+        if (d == null) return -1;
         b.rbuf = d; b.rend = d.length;
         return d.length;
     }
@@ -217,29 +223,35 @@ final class IoBuffered {
         B b = open(self, "read of closed file");
         long n = IoUtil.sizeArg(size);
         if (n < -1) throw new PyException("ValueError", "read length must be non-negative or -1");
-        if (b.wlen > 0) flushWrite(b);
-        if (n == -1) return new PyBytes(readAll(b));
+        if (b.wlen > 0) flushOrRaise(b);
+        if (n == -1) { byte[] all = readAll(b); return all == null ? null : new PyBytes(all); }
         if (n == 0) return new PyBytes(new byte[0]);
         int a = avail(b);
         if (a >= n) return new PyBytes(take(b, (int) n));
         ByteArrayOutputStream out = new ByteArrayOutputStream((int) Math.min(n, 1 << 20));
         if (a > 0) { out.write(b.rbuf, b.rpos, a); b.rpos += a; }
         long remaining = n - a;
+        boolean blocked = false;
         while (remaining > 0) {
             if (remaining >= b.size) {
                 byte[] d = b.ops.read((int) Math.min(remaining, 1 << 26));
+                if (d == null) { blocked = true; break; }
                 if (d.length == 0) break;
                 out.write(d, 0, d.length);
                 remaining -= d.length;
             } else {
-                if (fill(b) == 0) break;
+                int got = fill(b);
+                if (got < 0) { blocked = true; break; }
+                if (got == 0) break;
                 int t = (int) Math.min(remaining, avail(b));
                 out.write(b.rbuf, b.rpos, t); b.rpos += t; remaining -= t;
             }
         }
+        if (blocked && out.size() == 0) return null;    // would block before anything was read: None (EOF stays b'')
         return new PyBytes(out.toByteArray());
     }
 
+    /** Everything to end of file; null when the raw stream would block before anything was read (FileOps only). */
     private static byte[] readAll(B b) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int a = avail(b);
@@ -248,7 +260,8 @@ final class IoBuffered {
             while (true) {
                 long hint = IoFd.KERNEL ? 65536 : 8192;
                 try { hint = Math.max(8192, IoFd.size(f.f.fd) - IoFd.tell(f.f.fd) + 1); } catch (PyException ignored) { }
-                byte[] d = IoFd.read(f.f.fd, (int) Math.min(hint, 1 << 26));
+                byte[] d = IoFd.readOrNull(f.f.fd, (int) Math.min(hint, 1 << 26));
+                if (d == null) { if (out.size() == 0) return null; break; }
                 if (d.length == 0) break;
                 out.write(d, 0, d.length);
             }
@@ -272,16 +285,22 @@ final class IoBuffered {
     }
 
     public static Object read1(Object self, Object size) {
+        byte[] d = read1Raw(self, size);
+        return new PyBytes(d == null ? new byte[0] : d);       // would block: b'' (as CPython's read1)
+    }
+
+    /** read1's bytes, or null when the raw read would block (readinto1 then returns None, as CPython). */
+    private static byte[] read1Raw(Object self, Object size) {
         B b = open(self, "read of closed file");
         long n = IoUtil.sizeArg(size);
         if (n < -1) throw new PyException("ValueError", "read length must be non-negative or -1");
         if (n == -1) n = b.size;
-        if (n == 0) return new PyBytes(new byte[0]);
-        if (b.wlen > 0) flushWrite(b);
+        if (n == 0) return new byte[0];
+        if (b.wlen > 0) flushOrRaise(b);
         int a = avail(b);
-        if (a > 0) return new PyBytes(take(b, (int) Math.min(a, n)));
+        if (a > 0) return take(b, (int) Math.min(a, n));
         dropRead(b);
-        return new PyBytes(b.ops.read((int) Math.min(n, b.size)));
+        return b.ops.read((int) Math.min(n, b.size));
     }
 
     public static Object readinto(Object self, Object buffer) { return readIntoImpl(self, buffer, false); }
@@ -289,25 +308,28 @@ final class IoBuffered {
 
     private static Object readIntoImpl(Object self, Object buffer, boolean one) {
         int n = IoUtil.bufferSize(buffer);
-        byte[] d = IoUtil.bytesLike(one ? read1(self, (long) n) : read(self, (long) n));
+        byte[] d;
+        if (one) d = read1Raw(self, (long) n);
+        else { Object r = read(self, (long) n); d = r == null ? null : IoUtil.bytesLike(r); }
+        if (d == null) return null;                     // the read would block
         IoUtil.fill(buffer, d, 0, d.length);
         return (long) d.length;
     }
 
     public static Object peek(Object self, Object size) {
         B b = open(self, "peek of closed file");
-        if (b.wlen > 0) flushWrite(b);
-        if (avail(b) == 0) fill(b);
+        if (b.wlen > 0) flushOrRaise(b);
+        if (avail(b) == 0) fill(b);                     // EOF or would block: the buffer stays empty, b''
         return new PyBytes(Arrays.copyOfRange(b.rbuf, b.rpos, b.rend));
     }
 
     public static Object readline(Object self, Object size) {
         B b = open(self, "readline of closed file");
         long limit = IoUtil.sizeArg(size);
-        if (b.wlen > 0) flushWrite(b);
+        if (b.wlen > 0) flushOrRaise(b);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         while (limit < 0 || out.size() < limit) {
-            if (avail(b) == 0 && fill(b) == 0) break;
+            if (avail(b) == 0 && fill(b) <= 0) break;  // EOF (0) or would block (-1): what we have
             int end = b.rpos, stop = b.rend;
             if (limit >= 0) stop = (int) Math.min(stop, b.rpos + (limit - out.size()));
             boolean found = false;
@@ -321,18 +343,56 @@ final class IoBuffered {
 
     // ---- writing ----------------------------------------------------------------------------------------
 
-    static void flushWrite(B b) {
+    /**
+     * Write the buffer to the raw stream. Returns false when the raw write would block (-1; what was written before is
+     * dropped from the buffer, the rest stays), true otherwise; a raw write of 0 still ends the loop silently.
+     */
+    static boolean flushWrite(B b) {
         int off = 0;
+        boolean blocked = false;
         try {
             while (off < b.wlen) {
                 int n = b.ops.write(b.wbuf, off, b.wlen - off);
-                if (n <= 0) break;
+                if (n < 0) { blocked = true; break; }
+                if (n == 0) break;
                 off += n;
             }
         } finally {
             if (off > 0) { System.arraycopy(b.wbuf, off, b.wbuf, 0, b.wlen - off); b.wlen -= off; }
             if (b.wlen == 0 && b.reg) { b.reg = false; IoUtil.clean(b); }
         }
+        return !blocked;
+    }
+
+    /** {@link #flushWrite}, raising BlockingIOError (characters_written 0) when the raw write would block. */
+    static void flushOrRaise(B b) {
+        if (!flushWrite(b)) throw blockingError(0);
+    }
+
+    /**
+     * CPython's {@code BlockingIOError(EAGAIN, "write could not complete without blocking", written)}: the third argument
+     * stays in {@code args} and is {@code characters_written}; there is no filename.
+     */
+    static PyException blockingError(long written) {
+        String msg = "write could not complete without blocking";
+        PyException base = PosixModule.osError("BlockingIOError", 11, msg, null);
+        PyExcArgs a = (PyExcArgs) base.value;
+        LinkedHashMap<String,Object> attrs = new LinkedHashMap<>(a.attrs);
+        attrs.put("characters_written", written);
+        return new PyException(base.typeName, new PyExcArgs(tuple(11L, msg, written), null, attrs));
+    }
+
+    /**
+     * A write of {@code d} could not go on because the raw stream would block after {@code done} bytes of it were
+     * written: as CPython, buffer as much of the rest as fits; when all of it fits the write succeeds, else
+     * BlockingIOError reports the bytes consumed (written or buffered) in {@code characters_written}.
+     */
+    private static void bufferRest(B b, byte[] d, int done) {
+        int n = Math.min(d.length - done, b.size - b.wlen);
+        System.arraycopy(d, done, b.wbuf, b.wlen, n);
+        b.wlen += n;
+        if (!b.reg && b.wlen > 0) { b.reg = true; IoUtil.dirty(b); }
+        if (done + n < d.length) throw blockingError(done + n);
     }
 
     public static Object write(Object self, Object buffer) {
@@ -351,10 +411,14 @@ final class IoBuffered {
             if (!b.reg && b.wlen > 0) { b.reg = true; IoUtil.dirty(b); }
             return;
         }
-        flushWrite(b);
+        if (!flushWrite(b)) { bufferRest(b, d, 0); return; }
         if (d.length >= b.size) {
             int off = 0;
-            while (off < d.length) off += b.ops.write(d, off, d.length - off);
+            while (off < d.length) {
+                int n = b.ops.write(d, off, d.length - off);
+                if (n < 0) { bufferRest(b, d, off); return; }
+                off += n;
+            }
         } else {
             System.arraycopy(d, 0, b.wbuf, 0, d.length);
             b.wlen = d.length;
@@ -364,13 +428,13 @@ final class IoBuffered {
 
     public static Object flush(Object self) {
         B b = open(self, "flush of closed file");
-        if (b.wlen > 0) flushWrite(b);
+        if (b.wlen > 0) flushOrRaise(b);
         return null;
     }
 
     public static Object truncate(Object self, Object pos) {
         B b = open(self, "truncate of closed file");
-        if (b.wlen > 0) flushWrite(b);
+        if (b.wlen > 0) flushOrRaise(b);
         if (avail(b) > 0) dropRead(b);
         Object p = pos == null ? (Object) b.ops.tell() : pos;
         return PyRuntime.callMethod(b.raw, "truncate", new Object[]{p});
@@ -386,7 +450,7 @@ final class IoBuffered {
         if (w < 0 || w > 2) throw new PyException("ValueError", "whence value " + w + " unsupported");
         if (!PyRuntime.truth(PyRuntime.callMethod(b.raw, "seekable", new Object[0]))) throw IoUtil.unsupported("File or stream is not seekable.");
         long off = IoUtil.asLong(t);
-        if (b.wlen > 0) flushWrite(b);
+        if (b.wlen > 0) flushOrRaise(b);
         if (w == 1) off -= avail(b);
         b.rpos = b.rend = 0;
         long r = b.ops.seek(off, (int) w);
@@ -418,7 +482,7 @@ final class IoBuffered {
         B b = live(self);
         if (rawClosed(b)) return null;
         PyException flushErr = null;
-        try { if (b.wlen > 0) flushWrite(b); } catch (PyException e) { flushErr = e; }
+        try { if (b.wlen > 0) flushOrRaise(b); } catch (PyException e) { flushErr = e; }
         b.rpos = b.rend = 0;
         try { PyRuntime.callMethod(b.raw, "close", new Object[0]); }
         catch (PyException e) {
@@ -431,7 +495,7 @@ final class IoBuffered {
 
     public static Object detach(Object self) {
         B b = live(self);
-        if (b.wlen > 0) flushWrite(b);
+        if (b.wlen > 0) flushOrRaise(b);
         Object raw = b.raw;
         b.raw = null;
         return raw;

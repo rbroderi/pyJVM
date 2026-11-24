@@ -127,7 +127,8 @@ final class IoFile {
         if (!s.readable) throw IoUtil.unsupported("File not open for reading");
         long n = IoUtil.sizeArg(size);
         if (n < 0) return readall(self);
-        return new PyBytes(IoFd.read(s.fd, (int) Math.min(n, 1 << 30)));
+        byte[] d = IoFd.readOrNull(s.fd, (int) Math.min(n, 1 << 30));
+        return d == null ? null : new PyBytes(d);       // null: the read would block (non-blocking descriptor) -> None
     }
 
     public static Object readall(Object self) {
@@ -137,7 +138,8 @@ final class IoFile {
         while (true) {
             long hint = IoFd.KERNEL ? 65536 : 8192;
             try { hint = Math.max(8192, IoFd.size(s.fd) - IoFd.tell(s.fd) + 1); } catch (PyException ignored) { }
-            byte[] chunk = IoFd.read(s.fd, (int) Math.min(hint, 1 << 26));
+            byte[] chunk = IoFd.readOrNull(s.fd, (int) Math.min(hint, 1 << 26));
+            if (chunk == null) { if (out.size() == 0) return null; break; }     // would block: None, or what was read
             if (chunk.length == 0) break;
             out.write(chunk, 0, chunk.length);
         }
@@ -148,7 +150,8 @@ final class IoFile {
         St s = open(self);
         if (!s.readable) throw IoUtil.unsupported("File not open for reading");
         int n = IoUtil.bufferSize(buffer);
-        byte[] d = IoFd.read(s.fd, n);
+        byte[] d = IoFd.readOrNull(s.fd, n);
+        if (d == null) return null;
         IoUtil.fill(buffer, d, 0, d.length);
         return (long) d.length;
     }
@@ -157,7 +160,8 @@ final class IoFile {
         St s = open(self);
         if (!s.writable) throw IoUtil.unsupported("File not open for writing");
         byte[] d = IoUtil.bytesLike(b);
-        return (long) IoFd.write(s.fd, d, 0, d.length);
+        int n = IoFd.writeOrNeg(s.fd, d, 0, d.length);
+        return n < 0 ? null : (Object) (long) n;
     }
 
     public static Object seek(Object self, Object pos, Object whence) {

@@ -245,6 +245,24 @@ final class IoFd {
         }
     }
 
+    /**
+     * {@link #read} for {@code _io}: on the kernel a read that would block (a non-blocking descriptor) returns null;
+     * elsewhere (Windows, nio) exactly {@link #read}, which never returns null.
+     */
+    static byte[] readOrNull(long fd, int n) {
+        if (KERNEL) return PosixFds.readOrNull(fd, n);
+        return read(fd, n);
+    }
+
+    /**
+     * {@link #write} for {@code _io}: on the kernel a write that would block (a non-blocking descriptor) returns -1;
+     * elsewhere (Windows, nio) exactly {@link #write}, which never returns a negative count.
+     */
+    static int writeOrNeg(long fd, byte[] b, int off, int len) {
+        if (KERNEL) return PosixFds.writeOrNeg(fd, b, off, len);
+        return write(fd, b, off, len);
+    }
+
     static int write(long fd, byte[] b, int off, int len) {
         if (KERNEL) return PosixFds.write(fd, b, off, len);
         Fd f = get(fd);
