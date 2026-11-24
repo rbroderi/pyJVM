@@ -1,0 +1,38 @@
+posix
+true ('int', True, b'', 0)
+exit3 ('int', True, b'', 768)
+missing ('int', True, b'OSError:2:', 65280)
+noexec ('int', True, b'OSError:d:', 65280)
+isdir ('int', True, b'OSError:d:', 65280)
+notdir ('int', True, b'OSError:14:', 65280)
+noshebang ('int', True, b'OSError:8:', 65280)
+badinterp ('int', True, b'OSError:2:', 65280)
+list1 ('int', True, b'OSError:d:', 65280)
+list2 ('int', True, b'OSError:d:', 65280)
+list3 ('int', True, b'OSError:2:', 65280)
+list4 ('int', True, b'OSError:14:', 65280)
+list5 ('int', True, b'', 0)
+list6 ('int', True, b'', 0)
+cwd missing ('int', True, b'OSError:2:noexec:chdir', 65280)
+cwd notdir ('int', True, b'OSError:14:noexec:chdir', 65280)
+cwd empty ('int', True, b'OSError:2:noexec:chdir', 65280)
+cwd bytes ('int', True, b'', 0)
+cwd+missing ('int', True, b'OSError:2:noexec:chdir', 65280)
+bad stdio ('int', True, b'OSError:9:noexec', 65280)
+pgid 1 ('int', True, b'OSError:1:noexec', 65280)
+env ('int', True, b'', 0)
+env None ('int', True, b'', 0)
+args str ('int', True, b'', 0)
+args int TypeError expected str, bytes or os.PathLike object, not int
+exe str TypeError expected bytes, str found
+env str TypeError expected bytes, str found
+keep list TypeError fork_exec() argument 4 must be tuple, not list
+keep neg ValueError bad value(s) in fds_to_keep
+keep unsorted ValueError bad value(s) in fds_to_keep
+errpipe low ValueError errpipe_write must be >= 3
+argcount TypeError fork_exec expected 22 arguments, got 3
+fds close keep (0, b'cocc')
+fds noclose keep (0, b'cooc')
+fds noclose (0, b'ccoc')
+fds close (0, b'cccc')
+no children 10

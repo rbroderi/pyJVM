@@ -1,0 +1,39 @@
+posix_spawn [('os.posix_spawn', ('/bin/true', 'list', 'dict'))]
+waitpid []
+posix_spawnp [('os.posix_spawn', ('true', 'list', 'dict'))]
+wait []
+kill [('os.kill', (4320, 0))]
+killpg [('os.killpg', (4319, 0))]
+getpgid/getsid/sysconf/confstr []
+pidfd_open []
+posix_spawn failing [('os.posix_spawn', ('/no/such', 'list', 'dict'))]
+subprocess.run bare (fork_exec path) [('subprocess.Popen', ('true', 'list', None, None)), ('_posixsubprocess.fork_exec', ('tuple', 'list', None))]
+subprocess.run close_fds=False abs (posix_spawn path) [('subprocess.Popen', ('/bin/true', 'list', None, None)), ('os.posix_spawn', ('/bin/true', 'list', None))]
+subprocess.run cwd [('subprocess.Popen', ('/bin/true', 'list', '/', None)), ('_posixsubprocess.fork_exec', ('tuple', 'list', None))]
+subprocess.run missing [('subprocess.Popen', ('/no/such/prog', 'list', None, None)), ('_posixsubprocess.fork_exec', ('tuple', 'list', None))]
+send_signal [('os.kill', (4328, 15))]
+failed start: FileNotFoundError pid set: True returncode: 255 _child_created: True
+failed cwd: FileNotFoundError returncode: 255 _child_created: True
+failed posix_spawn path: FileNotFoundError has pid: True returncode: None _child_created: False
+/home/ubuntu/.local/share/uv/python/cpython-3.15.2-linux-x86_64-gnu/lib/python3.15/subprocess.py:1313: ResourceWarning: subprocess 4332 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+_active after dropping a running child: [True]
+_active after cleanup: 0
+['preexec_fn'] -> 0
+['umask'] -> 0
+['user'] -> 0
+['group'] -> 0
+['extra_groups'] -> EXC PermissionError [Errno 1] Operation not permitted
+['user'] -> EXC KeyError "getpwnam(): name not found: 'nosuchuser_xyz'"
+['user'] -> EXC ValueError User ID cannot be negative, got -5
+['umask'] -> 0
+['process_group'] -> 0
+['pass_fds'] -> EXC ValueError bad value(s) in fds_to_keep
+['pass_fds'] -> EXC ValueError invalid literal for int() with base 10: 'x'
+/home/ubuntu/.local/share/uv/python/cpython-3.15.2-linux-x86_64-gnu/lib/python3.15/subprocess.py:1313: ResourceWarning: subprocess 4341 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+os.system('exit 3') -> 768 | os.popen read: hi
+
+<sys>:0: ResourceWarning: unclosed file <_io.TextIOWrapper name=3 encoding='utf-8'>

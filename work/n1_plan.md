@@ -133,7 +133,7 @@ The plan (`Plan`) for one call:
 ## 2. Environment and workflow
 
 ### 2.1 Trees
-- Work continues in the N0 worktree layout (N0 2.1; on the E: machine the repo is `E:\pyjvm`, scratch and lock are in `E:\pyjvm-work`, the WSL clone is `~/pyjvm-n0` with a remote `win`). Branch **`n1-proc`**, created from **B1 = the N0 ticket 13 commit** (the lead fills in the hash here before ticket 0 starts; do not start while N0 tickets 11-13 are uncommitted or the tree is dirty). One local commit per ticket, never pushed unless the owner asks.
+- Work continues in the N0 worktree layout (N0 2.1; on the E: machine the repo is `E:\pyjvm`, scratch and lock are in `E:\pyjvm-work`, the WSL clone is `~/pyjvm-n0` with a remote `win`). Branch **`n1-proc`**, created from **B1 = the N0 ticket 13 commit, `68a5099`** (also origin `main` since 2026-11-24; do not start while N0 tickets 11-13 are uncommitted or the tree is dirty). One local commit per ticket, never pushed unless the owner asks.
 - Scratch for this phase: `E:\pyjvm-work\n1\` (Windows) and `~/pyjvm-work/n1/` (WSL). The measurement scripts and draft cases named in section 0 are there; ticket 0 copies them into the repo under `work/n1/`.
 
 ### 2.2 Rules for every ticket

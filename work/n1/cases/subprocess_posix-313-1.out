@@ -1,0 +1,64 @@
+posix True
+False True False
+0 b'hi\n' b'' True
+b'checked\n'
+b'bare name\n'
+3
+CalledProcessError 5 True
+0 0
+-15 -9
+True
+0 b'apple\nfig\npear\n' b''
+[b'err', b'out']
+2 None b'e1\n'
+0 b'' b'x\n'
+0 'from shell\n/bin/sh\n'
+'/bin/sh\n'
+(4, 'gso') go
+'caf\xe9\n'
+320000 True
+b"a b|c'd|\n"
+b'bytes mixed\n'
+True
+b'forty two\n'
+b'[][only]\n'
+b'[bytes]\n'
+ValueError illegal environment variable name
+b'[inherited]\n'
+b'[unset]\n'
+b'/usr\n' b'/usr\n'
+True True
+b'prog ran 1\n' b'prog ran 2\n'
+True
+True
+b'before\nto file\nafter\n'
+b'before\nto file\nafter\nappended\nerr\n'
+b'ant\nzebra\n'
+b''
+b'ant\n' b''
+b'cccc' b'cocc' b'ccoc' b'occo'
+False True
+b'via pass_fds\n'
+b'one\n' 0
+b'to-stderr-of-child\n'
+0 [b'swapped-err', b'swapped-out']
+b'0 0\n' b'1 1\n' b'0 1\n'
+True True
+-15
+b'SigBlk: 0000000000000000 SigIgn: 0000000000000000 '
+b'SigBlk: 0000000000000200 SigIgn: 0000000000000000 '
+int True True None (b'popen\n', None) 7 7
+9 9
+None
+TimeoutExpired 0.3
+-9 -9 -9
+communicate timeout
+(b'', None) -15
+None
+-2
+0 True
+run timeout ['sleep', '30']
+30
+True
+0 [0]
+"a b" c\"d

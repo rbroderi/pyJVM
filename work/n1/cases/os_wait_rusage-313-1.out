@@ -1,0 +1,17 @@
+posix
+wait3 none ChildProcessError 10 No child processes
+wait4 none ChildProcessError 10 No child processes
+wait4 kw none ChildProcessError 10 No child processes
+wait3 kw none ChildProcessError 10 No child processes
+wait3 badopt OSError 22 Invalid argument
+wait3 str TypeError None 'str' object cannot be interpreted as an integer
+wait4 str TypeError None 'str' object cannot be interpreted as an integer
+wait3 noarg TypeError None wait3() missing required argument 'options' (pos 1)
+tuple 3 True 1280 True resource struct_rusage 16
+['float', 'float', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int'] True True True True
+['ru_idrss', 'ru_inblock', 'ru_isrss', 'ru_ixrss', 'ru_majflt', 'ru_maxrss', 'ru_minflt', 'ru_msgrcv', 'ru_msgsnd', 'ru_nivcsw', 'ru_nsignals', 'ru_nswap', 'ru_nvcsw', 'ru_oublock', 'ru_stime', 'ru_utime'] 16 16 0
+True 16
+3 True 15 struct_rusage
+(0, 0) True (0, 0)
+9
+wait4 reaped ChildProcessError 10 No child processes

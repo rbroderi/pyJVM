@@ -1,0 +1,99 @@
+posix
+[('WNOHANG', 1), ('WUNTRACED', 2), ('WCONTINUED', 8), ('WEXITED', 4), ('WSTOPPED', 2), ('WNOWAIT', 16777216), ('P_PID', 1), ('P_PGID', 2), ('P_ALL', 0), ('P_PIDFD', 3), ('CLD_EXITED', 1), ('CLD_KILLED', 2), ('CLD_DUMPED', 3), ('CLD_TRAPPED', 4), ('CLD_STOPPED', 5), ('CLD_CONTINUED', 6), ('EX_OK', 0), ('EX_USAGE', 64), ('EX_CONFIG', 78), ('EX_NOTFOUND', None)]
+0x0 (True, 0, False, 0, False, 0, False, False)
+exitcode 0
+0x100 (True, 1, False, 0, False, 1, False, False)
+exitcode 1
+0xff00 (True, 255, False, 0, False, 255, False, False)
+exitcode 255
+0x9 (False, 0, True, 9, False, 0, False, False)
+exitcode -9
+0xf (False, 0, True, 15, False, 0, False, False)
+exitcode -15
+0x8b (False, 0, True, 11, False, 0, False, True)
+exitcode -11
+0x7f (False, 0, False, 127, True, 0, False, False)
+exitcode ValueError None process stopped by delivery of signal 0
+0x137f (False, 19, False, 127, True, 19, False, False)
+exitcode ValueError None process stopped by delivery of signal 19
+0xffff (False, 255, False, 127, False, 255, True, True)
+exitcode ValueError None invalid wait status: 65535
+0x10000 (True, 0, False, 0, False, 0, False, False)
+exitcode 0
+0x1ff00 (True, 255, False, 0, False, 255, False, False)
+exitcode 255
+-0x1 (False, 255, False, 127, False, 255, False, True)
+exitcode ValueError None invalid wait status: -1
+0x80000000 OverflowError None Python int too large to convert to C int
+exitcode OverflowError None Python int too large to convert to C int
+0x80 (True, 0, False, 0, False, 0, False, True)
+exitcode 0
+x TypeError None 'str' object cannot be interpreted as an integer
+1.0 TypeError None 'float' object cannot be interpreted as an integer
+kw (0, 1)
+WIFEXITED x TypeError None 'str' object cannot be interpreted as an integer
+waitpid-1 ChildProcessError 10 No child processes
+wait ChildProcessError 10 No child processes
+waitpid me ChildProcessError 10 No child processes
+waitpid 1 ChildProcessError 10 No child processes
+waitpid 0 ChildProcessError 10 No child processes
+waitpid badopt OSError 22 Invalid argument
+waitpid str TypeError None 'str' object cannot be interpreted as an integer
+waitpid float TypeError None 'float' object cannot be interpreted as an integer
+waitpid kw TypeError None posix.waitpid() takes no keyword arguments
+wait arg TypeError None posix.wait() takes no arguments (1 given)
+waitid ChildProcessError 10 No child processes
+waitid me ChildProcessError 10 No child processes
+waitid 0 OSError 22 Invalid argument
+waitid 99 OSError 22 Invalid argument
+waitid kw TypeError None posix.waitid() takes no keyword arguments
+waitpid big OverflowError None Python int too large to convert to C int
+waitpid 1arg TypeError None waitpid expected 2 arguments, got 1
+kill big OverflowError None Python int too large to convert to C int
+kill 1arg TypeError None kill expected 2 arguments, got 1
+True 768 tuple 3
+again ChildProcessError 10 No child processes
+(0, 0) None
+True 0x137f True 19
+stopped ValueError None process stopped by delivery of signal 19
+True 0xffff True
+True 15 True 15 -15
+True 1792 tuple
+True 0 True
+[0]
+waitid_result 5 True True 17 4 1 True (17, 4, 1) posix.waitid_result(si_pid=PID, si_uid=UID, si_signo=17, si_status=4, si_code=1)
+4 1
+True 17 9 2
+kill me 0 None
+kill nopid ProcessLookupError 3 No such process
+kill init PermissionError 1 Operation not permitted
+kill 99 OSError 22 Invalid argument
+kill -1sig OSError 22 Invalid argument
+kill 65 OSError 22 Invalid argument
+kill str TypeError None 'str' object cannot be interpreted as an integer
+kill float TypeError None 'float' object cannot be interpreted as an integer
+kill kw TypeError None posix.kill() takes no keyword arguments
+kill enum None
+killpg nopg ProcessLookupError 3 No such process
+killpg own 0 None
+killpg 99 OSError 22 Invalid argument
+killpg str TypeError None 'str' object cannot be interpreted as an integer
+killpg kw TypeError None posix.killpg() takes no keyword arguments
+killpg neg OSError 22 Invalid argument
+getpgid (True, True, True, 'int')
+getpgid nopid ProcessLookupError 3 No such process
+getpgid str TypeError None 'str' object cannot be interpreted as an integer
+getsid (True, 'int')
+getsid nopid ProcessLookupError 3 No such process
+getsid kw TypeError None posix.getsid() takes no keyword arguments
+getpgrp arg TypeError None posix.getpgrp() takes no arguments (1 given)
+setpgid nopid ProcessLookupError 3 No such process
+setpgid after exec PermissionError 13 Permission denied
+True True
+killpg child None
+-15
+killpg dead ProcessLookupError 3 No such process
+kill zombie (None, None)
+kill reaped ProcessLookupError 3 No such process
+[10]
+left ChildProcessError 10 No child processes

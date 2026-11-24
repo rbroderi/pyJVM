@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Print os.strerror(n) for n in 1..133 as a Java string array body (Linux CPython).
+"""Print generated POSIX tables as Java source (Linux CPython).
+
+Default mode: os.strerror(n) for n in 1..133 as a Java string array body.
+``--conf`` mode (N1 plan): the sysconf/confstr name tables, see conf_tables().
 
 Used to generate PosixErrnoText.TEXT for the N0 plan.  Output is one Java string literal
 per line, index 0 being errno 1.  Run under a Linux CPython; the texts are glibc's English
@@ -26,9 +29,34 @@ def java_literal(text: str) -> str:
     return '"' + "".join(out) + '"'
 
 
+def conf_tables() -> list[str]:
+    """Four Java array initialisers from os.sysconf_names and os.confstr_names.
+
+    Names sorted ascending (plain string order), values parallel by index:
+    SYSCONF_NAMES, SYSCONF_VALUES, CONFSTR_NAMES, CONFSTR_VALUES.  Several names may share
+    a value (SC_PAGESIZE and SC_PAGE_SIZE); the output is identical on every CPython lane.
+    """
+    out = []
+    for label, table in (("SYSCONF", os.sysconf_names), ("CONFSTR", os.confstr_names)):
+        names = sorted(table)
+        out.append(f"static final String[] {label}_NAMES = {{")
+        out.extend(f"    {java_literal(n)}," for n in names)
+        out.append("};")
+        out.append(f"static final int[] {label}_VALUES = {{")
+        out.extend(f"    {table[n]},  // {n}" for n in names)
+        out.append("};")
+    return out
+
+
 def main() -> int:
     if not sys.platform.startswith("linux"):
         print("gen_posix_tables.py: run under Linux CPython", file=sys.stderr)
+        return 2
+    if sys.argv[1:] == ["--conf"]:
+        print("\n".join(conf_tables()))
+        return 0
+    if sys.argv[1:]:
+        print("usage: gen_posix_tables.py [--conf]", file=sys.stderr)
         return 2
     print("static final String[] TEXT = {")
     for n in range(1, 134):

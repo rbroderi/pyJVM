@@ -1,0 +1,257 @@
+# N1 measurement, part 2: os.posix_spawn[p], _posixsubprocess.fork_exec, child state. CPython only, Linux.
+# SAFETY: never signal pid -1, pgid 1 or pgid 0 with a real signal: os.killpg(1, sig) is kill(-1, sig) = every process of the user.
+import os, sys, signal, errno, time, subprocess, tempfile, shutil, stat, pathlib, _posixsubprocess
+
+def show(label, fn):
+    try:
+        r = fn()
+        print(label, "->", repr(r))
+    except BaseException as e:
+        extra = ""
+        if isinstance(e, OSError):
+            extra = " errno=%r filename=%r filename2=%r" % (e.errno, e.filename, e.filename2)
+        print(label, "-> EXC", type(e).__name__ + ":", str(e).replace(D, "<tmp>"), extra.replace(D, "<tmp>"))
+
+D = os.path.realpath(tempfile.mkdtemp(prefix="n1m2"))
+os.mkdir(D + "/sub"); os.mkdir(D + "/noperm")
+def mk(name, text, mode):
+    with open(D + "/" + name, "w") as f: f.write(text)
+    os.chmod(D + "/" + name, mode)
+mk("noexec", "#!/bin/sh\necho hi\n", 0o644)
+mk("noshebang", "echo noshebang ran\n", 0o755)
+mk("badinterp", "#!/no/such/interp\n", 0o755)
+mk("sub/prog", "#!/bin/sh\necho prog ran in $(pwd)\n", 0o755)
+mk("prog2", "#!/bin/sh\necho prog2 \"$@\"\n", 0o755)
+os.chmod(D + "/noperm", 0)
+env = dict(os.environ)
+
+def wait(pid):
+    return os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+def run_out(spawn, path, argv, e=None, **kw):
+    r, w = os.pipe()
+    try:
+        fa = list(kw.pop("file_actions", [])) + [(os.POSIX_SPAWN_DUP2, w, 1)]
+        pid = spawn(path, argv, env if e is None else e, file_actions=fa, **kw)
+    finally:
+        os.close(w)
+    data = b""
+    while True:
+        b = os.read(r, 65536)
+        if not b: break
+        data += b
+    os.close(r)
+    return wait(pid), data.replace(D.encode(), b"<tmp>")
+
+print("== os.posix_spawn basics")
+show("spawn true", lambda: wait(os.posix_spawn("/bin/true", ["true"], env)))
+show("spawn sh exit 3", lambda: wait(os.posix_spawn("/bin/sh", ["sh", "-c", "exit 3"], env)))
+show("returns int pid > 0", lambda: (lambda p: (type(p).__name__, p > 0, wait(p)))(os.posix_spawn("/bin/true", ["true"], env)))
+show("stdout via DUP2", lambda: run_out(os.posix_spawn, "/bin/echo", ["echo", "hello"]))
+show("argv tuple", lambda: run_out(os.posix_spawn, "/bin/echo", ("echo", "t")))
+show("argv bytes/pathlike mix", lambda: run_out(os.posix_spawn, b"/bin/echo", [b"echo", pathlib.PurePosixPath("/x/y"), "z"]))
+show("path PathLike", lambda: run_out(os.posix_spawn, pathlib.PurePosixPath("/bin/echo"), ["echo", "p"]))
+show("env passed", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "echo $N1V-$HOME"], {"N1V": "v1"}))
+show("env bytes keys", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "echo $N1V"], {b"N1V": b"vb"}))
+show("env empty dict", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "echo [$HOME]"], {}))
+show("env os.environ object", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "echo ok"], os.environ))
+show("argv[0] is free text", lambda: run_out(os.posix_spawn, "/bin/sh", ["zzz", "-c", "echo $0"]))
+print("== os.posix_spawn errors")
+show("missing", lambda: os.posix_spawn("/no/such/prog", ["x"], env))
+show("missing bytes path", lambda: os.posix_spawn(b"/no/such/prog", ["x"], env))
+show("missing PathLike", lambda: os.posix_spawn(pathlib.PurePosixPath("/no/such/prog"), ["x"], env))
+show("noexec", lambda: os.posix_spawn(D + "/noexec", ["x"], env))
+show("isdir", lambda: os.posix_spawn(D, ["x"], env))
+show("notdir", lambda: os.posix_spawn(D + "/noexec/x", ["x"], env))
+show("noshebang", lambda: os.posix_spawn(D + "/noshebang", ["x"], env))
+show("badinterp", lambda: os.posix_spawn(D + "/badinterp", ["x"], env))
+show("empty path", lambda: os.posix_spawn("", ["x"], env))
+show("relative bare name (no PATH search)", lambda: os.posix_spawn("true", ["true"], env))
+show("argv empty list", lambda: os.posix_spawn("/bin/true", [], env))
+show("argv empty tuple", lambda: os.posix_spawn("/bin/true", (), env))
+show("argv[0] empty str", lambda: wait(os.posix_spawn("/bin/true", [""], env)))
+show("argv not sequence", lambda: os.posix_spawn("/bin/true", 5, env))
+show("argv str", lambda: os.posix_spawn("/bin/true", "true", env))
+show("argv item int", lambda: os.posix_spawn("/bin/true", ["true", 5], env))
+show("argv item NUL", lambda: os.posix_spawn("/bin/true", ["true", "a\0b"], env))
+show("path NUL", lambda: os.posix_spawn("/bin/tr\0ue", ["true"], env))
+show("path int", lambda: os.posix_spawn(5, ["true"], env))
+show("env None", lambda: os.posix_spawn("/bin/true", ["true"], None))
+show("env list", lambda: os.posix_spawn("/bin/true", ["true"], ["A=1"]))
+show("env key with =", lambda: os.posix_spawn("/bin/true", ["true"], {"A=B": "1"}))
+show("env key empty", lambda: os.posix_spawn("/bin/true", ["true"], {"": "1"}))
+show("env value int", lambda: os.posix_spawn("/bin/true", ["true"], {"A": 1}))
+show("env key NUL", lambda: os.posix_spawn("/bin/true", ["true"], {"A\0": "1"}))
+show("env value with = ok", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "echo $A"], {"A": "x=y z"}))
+show("too few args", lambda: os.posix_spawn("/bin/true", ["true"]))
+show("env as keyword", lambda: os.posix_spawn("/bin/true", ["true"], env=env))
+show("unknown keyword", lambda: os.posix_spawn("/bin/true", ["true"], env, bogus=1))
+show("file_actions positional", lambda: os.posix_spawn("/bin/true", ["true"], env, []))
+print("== file_actions")
+show("fa None", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, file_actions=None)))
+show("fa () ", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, file_actions=())))
+show("fa int", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=5))
+show("fa [5]", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[5]))
+show("fa [()]", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[()]))
+show("fa [[CLOSE, 9]] list item", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[[os.POSIX_SPAWN_CLOSE, 9]]))
+show("fa unknown id", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(99, 1)]))
+show("fa id str", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[("x", 1)]))
+show("fa CLOSE wrong arity", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_CLOSE,)]))
+show("fa CLOSE extra", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_CLOSE, 1, 2)]))
+show("fa DUP2 wrong arity", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_DUP2, 1)]))
+show("fa OPEN wrong arity", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_OPEN, 1, "/dev/null")]))
+show("fa CLOSE fd str", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_CLOSE, "x")]))
+show("fa CLOSE not-open fd ok", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_CLOSE, 9999)])))
+show("fa CLOSE -1", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_CLOSE, -1)]))
+show("fa DUP2 bad fd", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_DUP2, 9999, 1)]))
+show("fa OPEN missing dir", lambda: os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_OPEN, 1, D + "/nodir/f", os.O_WRONLY | os.O_CREAT, 0o644)]))
+def fa_open():
+    pid = os.posix_spawn("/bin/echo", ["echo", "to file"], env, file_actions=[(os.POSIX_SPAWN_OPEN, 1, D + "/out.txt", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)])
+    rc = wait(pid)
+    return rc, open(D + "/out.txt").read(), oct(os.stat(D + "/out.txt").st_mode & 0o777)
+show("fa OPEN creates file", fa_open)
+show("fa OPEN path bytes/PathLike", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, file_actions=[(os.POSIX_SPAWN_OPEN, 1, os.fsencode(D + "/o2"), os.O_WRONLY | os.O_CREAT, 0o600), (os.POSIX_SPAWN_OPEN, 2, pathlib.PurePosixPath(D + "/o3"), os.O_WRONLY | os.O_CREAT, 0o600)])))
+show("fa order: OPEN 5, DUP2 5->1, CLOSE 5", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "ls /proc/self/fd | tr '\\n' ' '"], file_actions=[(os.POSIX_SPAWN_OPEN, 5, "/dev/null", os.O_RDONLY, 0), (os.POSIX_SPAWN_CLOSE, 5)]))
+show("has CLOSEFROM", lambda: hasattr(os, "POSIX_SPAWN_CLOSEFROM"))
+print("== attributes")
+IDS = "echo sid_eq_pid=$(( $(cut -d' ' -f6 /proc/self/stat) == $$ )) pgrp_eq_pid=$(( $(cut -d' ' -f5 /proc/self/stat) == $$ )); grep -E 'Sig(Blk|Ign)' /proc/$$/status | tr '\\n\\t' '  '"
+show("child default (inherits SIGPIPE ignore? mask?)", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS]))
+show("setsid=True", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setsid=True))
+show("setsid=1", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setsid=1))
+show("setpgroup=0", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setpgroup=0))
+show("setpgroup=None", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setpgroup=None))
+show("setpgroup='x'", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setpgroup="x"))
+show("setpgroup=1 (EPERM)", lambda: os.posix_spawn("/bin/true", ["true"], env, setpgroup=1))
+show("resetids=True", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, resetids=True)))
+show("setsigdef [SIGPIPE]", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setsigdef=[signal.SIGPIPE]))
+show("setsigdef (SIGPIPE, SIGXFSZ) tuple", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setsigdef=(signal.SIGPIPE, signal.SIGXFSZ)))
+show("setsigmask [SIGUSR1, SIGUSR2]", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setsigmask=[signal.SIGUSR1, signal.SIGUSR2]))
+show("setsigmask set()", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS], setsigmask=set()))
+show("setsigmask [0]", lambda: os.posix_spawn("/bin/true", ["true"], env, setsigmask=[0]))
+show("setsigmask [65]", lambda: os.posix_spawn("/bin/true", ["true"], env, setsigmask=[65]))
+show("setsigmask ['x']", lambda: os.posix_spawn("/bin/true", ["true"], env, setsigmask=["x"]))
+show("setsigmask 5", lambda: os.posix_spawn("/bin/true", ["true"], env, setsigmask=5))
+show("setsigmask [SIGKILL] accepted", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, setsigmask=[9])))
+show("setsigdef [65]", lambda: os.posix_spawn("/bin/true", ["true"], env, setsigdef=[65]))
+show("setsigdef [9] SIGKILL", lambda: os.posix_spawn("/bin/true", ["true"], env, setsigdef=[9]))
+show("scheduler=None", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, scheduler=None)))
+show("scheduler=(None, sched_param(0))", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, scheduler=(None, os.sched_param(0)))))
+show("scheduler=(SCHED_OTHER, sched_param(0))", lambda: wait(os.posix_spawn("/bin/true", ["true"], env, scheduler=(os.SCHED_OTHER, os.sched_param(0)))))
+show("scheduler=5", lambda: os.posix_spawn("/bin/true", ["true"], env, scheduler=5))
+signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGUSR1])
+show("parent blocked USR1 -> child", lambda: run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", IDS]))
+show("parent blocked USR1, subprocess.run child", lambda: subprocess.run(["/bin/sh", "-c", IDS], capture_output=True).stdout)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGUSR1])
+print("== posix_spawnp")
+show("spawnp true", lambda: wait(os.posix_spawnp("true", ["true"], env)))
+show("spawnp missing", lambda: os.posix_spawnp("pyjvm-no-such-prog", ["x"], env))
+show("spawnp with slash missing", lambda: os.posix_spawnp("/no/such/prog", ["x"], env))
+show("spawnp uses parent's PATH, not env's", lambda: wait(os.posix_spawnp("true", ["true"], {"PATH": "/nonexistent"})))
+def spawnp_parent_path():
+    old = os.environ["PATH"]
+    os.environ["PATH"] = D
+    try: return run_out(os.posix_spawnp, "prog2", ["prog2", "a"], env)
+    finally: os.environ["PATH"] = old
+show("spawnp sees os.environ['PATH'] change (putenv)", spawnp_parent_path)
+show("spawnp noshebang via PATH-less", lambda: os.posix_spawnp(D + "/noshebang", ["x"], env))
+print("== inheritance through posix_spawn")
+def inh():
+    r, w = os.pipe(); r2, w2 = os.pipe(); os.set_inheritable(w2, True)
+    try: return run_out(os.posix_spawn, "/bin/sh", ["sh", "-c", "for f in %d %d %d %d; do test -e /proc/self/fd/$f && echo open || echo closed; done | tr '\\n' ' '" % (r, w, r2, w2)])
+    finally:
+        for f in (r, w, r2, w2): os.close(f)
+show("cloexec closed, inheritable open", inh)
+print("== cwd / chdir")
+os.chdir(D + "/sub")
+show("after os.chdir: child pwd", lambda: run_out(os.posix_spawn, "/bin/pwd", ["pwd"]))
+show("after os.chdir: relative exe ./prog", lambda: run_out(os.posix_spawn, "./prog", ["prog"]))
+show("after os.chdir: relative exe missing -> filename", lambda: os.posix_spawn("./nope", ["nope"], env))
+show("after os.chdir: subprocess relative exe", lambda: subprocess.run(["./prog"], capture_output=True).stdout.replace(D.encode(), b"<tmp>"))
+show("subprocess cwd relative '..' + relative exe", lambda: subprocess.run(["./prog2", "x"], cwd="..", capture_output=True).stdout)
+show("subprocess cwd abs + exe relative to new cwd", lambda: subprocess.run(["./prog"], cwd=D + "/sub", capture_output=True).stdout.replace(D.encode(), b"<tmp>"))
+os.chdir("/")
+
+print("== fork_exec direct")
+NARGS = 23 if sys.version_info[:2] == (3, 13) else 22
+def fe(args, exes, cwd=None, env_list=None, close_fds=True, keep=(), restore=True, setsid=False, pgid=-1, gid=None, groups=None, uid=None, umask=-1, preexec=None, stdio=(-1, -1, -1, -1, -1, -1)):
+    er, ew = os.pipe()
+    try:
+        a = [args, exes, close_fds, tuple(sorted(set(keep) | {ew})), cwd, env_list, *stdio, er, ew, restore, setsid, pgid, gid, groups, uid, umask, preexec]
+        if NARGS == 23: a.append(True)
+        pid = _posixsubprocess.fork_exec(*a)
+    finally:
+        os.close(ew)
+    data = b""
+    while True:
+        b = os.read(er, 50000)
+        if not b: break
+        data += b
+    os.close(er)
+    try: st = os.waitpid(pid, 0)[1]
+    except ChildProcessError: st = "ECHILD"
+    return type(pid).__name__, pid > 0, data, st
+show("fe true", lambda: fe([b"true"], (b"/bin/true",)))
+show("fe exit 3", lambda: fe(["sh", "-c", "exit 3"], (b"/bin/sh",)))
+show("fe missing", lambda: fe([b"x"], (b"/no/such/prog",)))
+show("fe noexec", lambda: fe([b"x"], (os.fsencode(D + "/noexec"),)))
+show("fe isdir", lambda: fe([b"x"], (os.fsencode(D),)))
+show("fe notdir", lambda: fe([b"x"], (os.fsencode(D + "/noexec/x"),)))
+show("fe noshebang", lambda: fe([b"x"], (os.fsencode(D + "/noshebang"),)))
+show("fe badinterp", lambda: fe([b"x"], (os.fsencode(D + "/badinterp"),)))
+show("fe list: missing, noexec, missing -> first non-ENOENT", lambda: fe([b"x"], (b"/no/such/a", os.fsencode(D + "/noexec"), b"/no/such/b")))
+show("fe list: noexec, noshebang -> first", lambda: fe([b"x"], (os.fsencode(D + "/noexec"), os.fsencode(D + "/noshebang"))))
+show("fe list: notdir, missing -> last errno", lambda: fe([b"x"], (os.fsencode(D + "/noexec/x"), b"/no/such/b")))
+show("fe list: missing, notdir -> last errno", lambda: fe([b"x"], (b"/no/such/b", os.fsencode(D + "/noexec/x"))))
+show("fe list: missing then true runs", lambda: fe([b"true"], (b"/no/such/a", b"/bin/true")))
+show("fe empty exe list", lambda: fe([b"x"], ()))
+show("fe cwd missing", lambda: fe([b"true"], (b"/bin/true",), cwd="/no/such/dir"))
+show("fe cwd notdir", lambda: fe([b"true"], (b"/bin/true",), cwd=D + "/noexec"))
+show("fe cwd noperm", lambda: fe([b"true"], (b"/bin/true",), cwd=D + "/noperm"))
+show("fe cwd empty str", lambda: fe([b"true"], (b"/bin/true",), cwd=""))
+show("fe cwd bytes", lambda: fe([b"true"], (b"/bin/true",), cwd=os.fsencode(D)))
+show("fe cwd bad AND exe missing -> chdir first", lambda: fe([b"x"], (b"/no/such/prog",), cwd="/no/such/dir"))
+show("fe bad stdio fd (dup2 fails)", lambda: fe([b"true"], (b"/bin/true",), stdio=(9999, -1, -1, -1, -1, -1)))
+show("fe setpgid EPERM (pgid=1)", lambda: fe([b"true"], (b"/bin/true",), pgid=1))
+show("fe args None", lambda: fe(None, (b"/bin/true",)))
+show("fe args empty", lambda: fe([], (b"/bin/true",)))
+show("fe args str items", lambda: fe(["true"], (b"/bin/true",)))
+show("fe args int item", lambda: fe([5], (b"/bin/true",)))
+show("fe exe list of str", lambda: fe([b"true"], ("/bin/true",)))
+show("fe exe not tuple (list)", lambda: fe([b"true"], [b"/bin/true"]))
+show("fe env_list", lambda: fe(["sh", "-c", "test \"$A\" = 1 && test -z \"$HOME\""], (b"/bin/sh",), env_list=[b"A=1"]))
+show("fe env_list str items", lambda: fe(["true"], (b"/bin/true",), env_list=["A=1"]))
+show("fe pass_fds not tuple", lambda: _posixsubprocess.fork_exec(*([[b"true"], (b"/bin/true",), True, [5], None, None, -1, -1, -1, -1, -1, -1, 3, 4, True, False, -1, None, None, None, -1, None] + ([True] if NARGS == 23 else []))))
+show("fe pass_fds negative", lambda: _posixsubprocess.fork_exec(*([[b"true"], (b"/bin/true",), True, (-5,), None, None, -1, -1, -1, -1, -1, -1, 3, 4, True, False, -1, None, None, None, -1, None] + ([True] if NARGS == 23 else []))))
+show("fe pass_fds unsorted", lambda: _posixsubprocess.fork_exec(*([[b"true"], (b"/bin/true",), True, (9, 5), None, None, -1, -1, -1, -1, -1, -1, 3, 4, True, False, -1, None, None, None, -1, None] + ([True] if NARGS == 23 else []))))
+show("fe close_fds with errpipe_write < 3", lambda: _posixsubprocess.fork_exec(*([[b"true"], (b"/bin/true",), True, (), None, None, -1, -1, -1, -1, -1, -1, 3, 2, True, False, -1, None, None, None, -1, None] + ([True] if NARGS == 23 else []))))
+show("fe wrong arg count", lambda: _posixsubprocess.fork_exec(1, 2, 3))
+show("fe preexec_fn not callable", lambda: fe([b"true"], (b"/bin/true",), preexec="x"))
+show("fe uid wrong type", lambda: fe([b"true"], (b"/bin/true",), uid="x"))
+show("fe gid wrong type", lambda: fe([b"true"], (b"/bin/true",), gid="x"))
+show("fe extra_groups wrong type", lambda: fe([b"true"], (b"/bin/true",), groups=5))
+show("fe umask 0o077 child", lambda: fe(["sh", "-c", "test $(umask) = 0077"], (b"/bin/sh",), umask=0o077))
+show("fe uid=own", lambda: fe([b"true"], (b"/bin/true",), uid=os.getuid()))
+show("fe gid=own", lambda: fe([b"true"], (b"/bin/true",), gid=os.getgid()))
+show("fe groups=[] (EPERM as non-root)", lambda: fe([b"true"], (b"/bin/true",), groups=()))
+show("fe preexec_fn runs", lambda: fe([b"true"], (b"/bin/true",), preexec=lambda: None))
+def fe_keep():
+    r, w = os.pipe(); r2, w2 = os.pipe()
+    try: return fe(["sh", "-c", "for f in %d %d %d %d; do test -e /proc/self/fd/$f || exit 9; done; exit 0" % (r, w, r2, w2)], (b"/bin/sh",), keep=(r, w, r2, w2))
+    finally:
+        for f in (r, w, r2, w2): os.close(f)
+show("fe keep 4 cloexec fds", fe_keep)
+def fe_fdlist(close_fds, keep_some):
+    r, w = os.pipe(); r2, w2 = os.pipe(); os.set_inheritable(r2, True)
+    o, ow = os.pipe()
+    try:
+        res = fe(["sh", "-c", "for f in %d %d %d %d; do test -e /proc/self/fd/$f && echo -n o || echo -n c; done" % (r, w, r2, w2)], (b"/bin/sh",), close_fds=close_fds, keep=(w,) if keep_some else (), stdio=(-1, -1, -1, ow, -1, -1))
+    finally:
+        os.close(ow)
+    out = os.read(o, 100); os.close(o)
+    for f in (r, w, r2, w2): os.close(f)
+    return res[3], out
+show("fds r(cloexec) w(kept) r2(inheritable) w2(cloexec): close_fds=True", lambda: fe_fdlist(True, True))
+show("same, close_fds=False", lambda: fe_fdlist(False, True))
+show("close_fds=False no keep", lambda: fe_fdlist(False, False))
+
+os.chmod(D + "/noperm", 0o755)
+shutil.rmtree(D)

@@ -1,0 +1,21 @@
+posix
+1 b'[<unset>]'
+2 b'[raw]' None False
+3 b'[<unset>]'
+4 b'[raw2]'
+5 b'[<unset>]'
+6 b'[map]' map
+6 b'[map2]'
+6 b'[<unset>]' False
+7 one b'[two]' b'[one]'
+8 b'[pop]'
+8 pop b'[<unset>]'
+8 sd b'[sd]'
+8 b'[up]' b'[up2]'
+9 b'[x]'
+9 b'[]'
+10 b'[bytes api]'
+10 b'[caf\xc3\xa9 \xe2\x82\xac]'
+10 b'[a=b c  d]'
+10 b'[<unset>]' mapped b'[mapped]'
+12 b'[again]' b'[again]'

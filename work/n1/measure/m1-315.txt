@@ -1,0 +1,311 @@
+version (3, 15)
+os.posix_spawn present builtin_function_or_method ($module, path, argv, env, /, *, file_actions=(),
+            setpgroup=None, resetids=False, setsid=False,
+            setsigmask=(), setsigdef=(), scheduler=None) 
+os.posix_spawnp present builtin_function_or_method ($module, path, argv, env, /, *, file_actions=(),
+             setpgroup=None, resetids=False, setsid=False,
+             setsigmask=(), setsigdef=(), scheduler=None) 
+os.POSIX_SPAWN_OPEN = 0
+os.POSIX_SPAWN_CLOSE = 1
+os.POSIX_SPAWN_DUP2 = 2
+os.POSIX_SPAWN_CLOSEFROM ABSENT
+os.waitpid present builtin_function_or_method ($module, pid, options, /) 
+os.wait present builtin_function_or_method ($module, /) 
+os.wait3 present builtin_function_or_method ($module, /, options) 
+os.wait4 present builtin_function_or_method ($module, /, pid, options) 
+os.waitid present builtin_function_or_method ($module, idtype, id, options, /) 
+os.waitid_result present type None 
+os.waitstatus_to_exitcode present builtin_function_or_method ($module, /, status) 
+os.WIFEXITED present builtin_function_or_method ($module, /, status) 
+os.WEXITSTATUS present builtin_function_or_method ($module, /, status) 
+os.WIFSIGNALED present builtin_function_or_method ($module, /, status) 
+os.WTERMSIG present builtin_function_or_method ($module, /, status) 
+os.WIFSTOPPED present builtin_function_or_method ($module, /, status) 
+os.WSTOPSIG present builtin_function_or_method ($module, /, status) 
+os.WIFCONTINUED present builtin_function_or_method ($module, /, status) 
+os.WCOREDUMP present builtin_function_or_method ($module, status, /) 
+os.WNOHANG = 1
+os.WUNTRACED = 2
+os.WCONTINUED = 8
+os.WEXITED = 4
+os.WSTOPPED = 2
+os.WNOWAIT = 16777216
+os.P_PID = 1
+os.P_PGID = 2
+os.P_ALL = 0
+os.P_PIDFD = 3
+os.CLD_EXITED = 1
+os.CLD_KILLED = 2
+os.CLD_DUMPED = 3
+os.CLD_TRAPPED = 4
+os.CLD_STOPPED = 5
+os.CLD_CONTINUED = 6
+os.kill present builtin_function_or_method ($module, pid, signal, /) 
+os.killpg present builtin_function_or_method ($module, pgid, signal, /) 
+os.sysconf present builtin_function_or_method ($module, name, /) 
+os.sysconf_names present dict None 
+os.confstr present builtin_function_or_method ($module, name, /) 
+os.confstr_names present dict None 
+os.pidfd_open present builtin_function_or_method ($module, /, pid, flags=0) 
+os.PIDFD_NONBLOCK ABSENT
+os.getpgid present builtin_function_or_method ($module, /, pid) 
+os.getpgrp present builtin_function_or_method ($module, /) 
+os.setpgid present builtin_function_or_method ($module, pid, pgrp, /) 
+os.getsid present builtin_function_or_method ($module, pid, /) 
+os.setsid present builtin_function_or_method ($module, /) 
+os.setpgrp present builtin_function_or_method ($module, /) 
+os.tcgetpgrp present builtin_function_or_method ($module, fd, /) 
+os.tcsetpgrp present builtin_function_or_method ($module, fd, pgid, /) 
+os.system present builtin_function_or_method ($module, /, command) 
+os.popen present function None | defined in os.py
+os.fork present builtin_function_or_method ($module, /) 
+os.forkpty present builtin_function_or_method ($module, /) 
+os.execv present builtin_function_or_method ($module, path, argv, /) 
+os.execve present builtin_function_or_method ($module, /, path, argv, env) 
+os.spawnv present function None | defined in os.py
+os.spawnve present function None | defined in os.py
+os.spawnl present function None | defined in os.py
+os.spawnlp present function None | defined in os.py
+os.spawnvp present function None | defined in os.py
+os.spawnvpe present function None | defined in os.py
+os.P_WAIT = 0
+os.P_NOWAIT = 1
+os.P_NOWAITO = 1
+os._exit present builtin_function_or_method ($module, /, status) 
+os.abort present builtin_function_or_method ($module, /) 
+os.EX_OK = 0
+os.EX_USAGE = 64
+os.EX_DATAERR = 65
+os.EX_NOINPUT = 66
+os.EX_NOUSER = 67
+os.EX_NOHOST = 68
+os.EX_UNAVAILABLE = 69
+os.EX_SOFTWARE = 70
+os.EX_OSERR = 71
+os.EX_OSFILE = 72
+os.EX_CANTCREAT = 73
+os.EX_IOERR = 74
+os.EX_TEMPFAIL = 75
+os.EX_PROTOCOL = 76
+os.EX_NOPERM = 77
+os.EX_CONFIG = 78
+os.EX_NOTFOUND ABSENT
+os.getpid present builtin_function_or_method ($module, /) 
+os.getppid present builtin_function_or_method ($module, /) 
+os.times present builtin_function_or_method ($module, /) 
+os.nice present builtin_function_or_method ($module, increment, /) 
+os.getpriority present builtin_function_or_method ($module, /, which, who) 
+os.setpriority present builtin_function_or_method ($module, /, which, who, priority) 
+os.cpu_count present builtin_function_or_method ($module, /) 
+os.process_cpu_count present function None | defined in os.py
+os.sched_getaffinity present builtin_function_or_method ($module, pid, /) 
+os.sched_setaffinity present builtin_function_or_method ($module, pid, mask, /) 
+os.sched_param present type (sched_priority) 
+os.sched_yield present builtin_function_or_method ($module, /) 
+os.getlogin present builtin_function_or_method ($module, /) 
+os.uname present builtin_function_or_method ($module, /) 
+os.ctermid present builtin_function_or_method ($module, /) 
+os.getgroups present builtin_function_or_method ($module, /) 
+os.getresuid present builtin_function_or_method ($module, /) 
+os.getresgid present builtin_function_or_method ($module, /) 
+os.setuid present builtin_function_or_method ($module, uid, /) 
+os.setgid present builtin_function_or_method ($module, gid, /) 
+os.seteuid present builtin_function_or_method ($module, euid, /) 
+os.setegid present builtin_function_or_method ($module, egid, /) 
+os.setreuid present builtin_function_or_method ($module, ruid, euid, /) 
+os.setregid present builtin_function_or_method ($module, rgid, egid, /) 
+os.setgroups present builtin_function_or_method ($module, groups, /) 
+os.initgroups present builtin_function_or_method ($module, username, gid, /) 
+os.getloadavg present builtin_function_or_method ($module, /) 
+os.register_at_fork present builtin_function_or_method ($module, /, *, before=<unrepresentable>,
+                 after_in_child=<unrepresentable>,
+                 after_in_parent=<unrepresentable>) 
+os.unshare present builtin_function_or_method ($module, /, flags) 
+os.setns present builtin_function_or_method ($module, /, fd, nstype=0) 
+os.SCHED_OTHER = 0
+os.SCHED_FIFO = 1
+os.SCHED_RR = 2
+os.SCHED_BATCH = 3
+os.SCHED_IDLE = 5
+os.SCHED_RESET_ON_FORK = 1073741824
+os.environ present _Environ None | defined in os.py
+os.environb present _Environ None | defined in os.py
+os.getenv present function None | defined in os.py
+os.getenvb present function None | defined in os.py
+os.putenv present builtin_function_or_method ($module, name, value, /) 
+os.unsetenv present builtin_function_or_method ($module, name, /) 
+os.get_exec_path present function None | defined in os.py
+posix-only names missing from above (process-ish): ['W_OK']
+_posixsubprocess dir ['fork_exec']
+fork_exec sig ($module, args, executable_list, close_fds, pass_fds, cwd,
+          env, p2cread, p2cwrite, c2pread, c2pwrite, errread, errwrite,
+          errpipe_read, errpipe_write, restore_signals, call_setsid,
+          pgid_to_set, gid, extra_groups, uid, child_umask, preexec_fn,
+          /)
+fork_exec doc "Spawn a fresh new child process.\n\nFork a child process, close parent file descriptors as appropriate in\nthe child and duplicate the few that are needed before calling exec() in\nthe child process.\n\nIf close_fds is True, close file descriptors 3 and higher, except those\nlisted in the sorted tuple pass_fds.\n\nThe preexec_fn, if supplied, will be called immediately before closing\nfile descriptors and exec.\n\nWARNING: preexec_fn is NOT SAFE if your application uses threads.\n         It may trigger infrequent, difficult to debug deadlocks.\n\nIf an error occurs in the child process before the exec, it is\nserialized and written to the errpipe_write fd per subprocess.py.\n\nReturns: the child process's PID.\n\nRaises: Only on an error in the parent process."
+subprocess flags True n/a False True
+sysconf_names count 134 confstr_names count 27
+SYSCONF_TABLE [["SC_2_CHAR_TERM", 95], ["SC_2_C_BIND", 47], ["SC_2_C_DEV", 48], ["SC_2_C_VERSION", 96], ["SC_2_FORT_DEV", 49], ["SC_2_FORT_RUN", 50], ["SC_2_LOCALEDEF", 52], ["SC_2_SW_DEV", 51], ["SC_2_UPE", 97], ["SC_2_VERSION", 46], ["SC_AIO_LISTIO_MAX", 23], ["SC_AIO_MAX", 24], ["SC_AIO_PRIO_DELTA_MAX", 25], ["SC_ARG_MAX", 0], ["SC_ASYNCHRONOUS_IO", 12], ["SC_ATEXIT_MAX", 87], ["SC_AVPHYS_PAGES", 86], ["SC_BC_BASE_MAX", 36], ["SC_BC_DIM_MAX", 37], ["SC_BC_SCALE_MAX", 38], ["SC_BC_STRING_MAX", 39], ["SC_CHARCLASS_NAME_MAX", 45], ["SC_CHAR_BIT", 101], ["SC_CHAR_MAX", 102], ["SC_CHAR_MIN", 103], ["SC_CHILD_MAX", 1], ["SC_CLK_TCK", 2], ["SC_COLL_WEIGHTS_MAX", 40], ["SC_DELAYTIMER_MAX", 26], ["SC_EQUIV_CLASS_MAX", 41], ["SC_EXPR_NEST_MAX", 42], ["SC_FSYNC", 15], ["SC_GETGR_R_SIZE_MAX", 69], ["SC_GETPW_R_SIZE_MAX", 70], ["SC_INT_MAX", 104], ["SC_INT_MIN", 105], ["SC_IOV_MAX", 60], ["SC_JOB_CONTROL", 7], ["SC_LINE_MAX", 43], ["SC_LOGIN_NAME_MAX", 71], ["SC_LONG_BIT", 106], ["SC_MAPPED_FILES", 16], ["SC_MB_LEN_MAX", 108], ["SC_MEMLOCK", 17], ["SC_MEMLOCK_RANGE", 18], ["SC_MEMORY_PROTECTION", 19], ["SC_MESSAGE_PASSING", 20], ["SC_MQ_OPEN_MAX", 27], ["SC_MQ_PRIO_MAX", 28], ["SC_NGROUPS_MAX", 3], ["SC_NL_ARGMAX", 119], ["SC_NL_LANGMAX", 120], ["SC_NL_MSGMAX", 121], ["SC_NL_NMAX", 122], ["SC_NL_SETMAX", 123], ["SC_NL_TEXTMAX", 124], ["SC_NPROCESSORS_CONF", 83], ["SC_NPROCESSORS_ONLN", 84], ["SC_NZERO", 109], ["SC_OPEN_MAX", 4], ["SC_PAGESIZE", 30], ["SC_PAGE_SIZE", 30], ["SC_PASS_MAX", 88], ["SC_PHYS_PAGES", 85], ["SC_PII", 53], ["SC_PII_INTERNET", 56], ["SC_PII_INTERNET_DGRAM", 62], ["SC_PII_INTERNET_STREAM", 61], ["SC_PII_OSI", 57], ["SC_PII_OSI_CLTS", 64], ["SC_PII_OSI_COTS", 63], ["SC_PII_OSI_M", 65], ["SC_PII_SOCKET", 55], ["SC_PII_XTI", 54], ["SC_POLL", 58], ["SC_PRIORITIZED_IO", 13], ["SC_PRIORITY_SCHEDULING", 10], ["SC_REALTIME_SIGNALS", 9], ["SC_RE_DUP_MAX", 44], ["SC_RTSIG_MAX", 31], ["SC_SAVED_IDS", 8], ["SC_SCHAR_MAX", 111], ["SC_SCHAR_MIN", 112], ["SC_SELECT", 59], ["SC_SEMAPHORES", 21], ["SC_SEM_NSEMS_MAX", 32], ["SC_SEM_VALUE_MAX", 33], ["SC_SHARED_MEMORY_OBJECTS", 22], ["SC_SHRT_MAX", 113], ["SC_SHRT_MIN", 114], ["SC_SIGQUEUE_MAX", 34], ["SC_SSIZE_MAX", 110], ["SC_STREAM_MAX", 5], ["SC_SYNCHRONIZED_IO", 14], ["SC_THREADS", 67], ["SC_THREAD_ATTR_STACKADDR", 77], ["SC_THREAD_ATTR_STACKSIZE", 78], ["SC_THREAD_DESTRUCTOR_ITERATIONS", 73], ["SC_THREAD_KEYS_MAX", 74], ["SC_THREAD_PRIORITY_SCHEDULING", 79], ["SC_THREAD_PRIO_INHERIT", 80], ["SC_THREAD_PRIO_PROTECT", 81], ["SC_THREAD_PROCESS_SHARED", 82], ["SC_THREAD_SAFE_FUNCTIONS", 68], ["SC_THREAD_STACK_MIN", 75], ["SC_THREAD_THREADS_MAX", 76], ["SC_TIMERS", 11], ["SC_TIMER_MAX", 35], ["SC_TTY_NAME_MAX", 72], ["SC_TZNAME_MAX", 6], ["SC_T_IOV_MAX", 66], ["SC_UCHAR_MAX", 115], ["SC_UINT_MAX", 116], ["SC_UIO_MAXIOV", 60], ["SC_ULONG_MAX", 117], ["SC_USHRT_MAX", 118], ["SC_VERSION", 29], ["SC_WORD_BIT", 107], ["SC_XBS5_ILP32_OFF32", 125], ["SC_XBS5_ILP32_OFFBIG", 126], ["SC_XBS5_LP64_OFF64", 127], ["SC_XBS5_LPBIG_OFFBIG", 128], ["SC_XOPEN_CRYPT", 92], ["SC_XOPEN_ENH_I18N", 93], ["SC_XOPEN_LEGACY", 129], ["SC_XOPEN_REALTIME", 130], ["SC_XOPEN_REALTIME_THREADS", 131], ["SC_XOPEN_SHM", 94], ["SC_XOPEN_UNIX", 91], ["SC_XOPEN_VERSION", 89], ["SC_XOPEN_XCU_VERSION", 90], ["SC_XOPEN_XPG2", 98], ["SC_XOPEN_XPG3", 99], ["SC_XOPEN_XPG4", 100]]
+CONFSTR_TABLE [["CS_GNU_LIBC_VERSION", 2], ["CS_GNU_LIBPTHREAD_VERSION", 3], ["CS_LFS64_CFLAGS", 1004], ["CS_LFS64_LDFLAGS", 1005], ["CS_LFS64_LIBS", 1006], ["CS_LFS64_LINTFLAGS", 1007], ["CS_LFS_CFLAGS", 1000], ["CS_LFS_LDFLAGS", 1001], ["CS_LFS_LIBS", 1002], ["CS_LFS_LINTFLAGS", 1003], ["CS_PATH", 0], ["CS_XBS5_ILP32_OFF32_CFLAGS", 1100], ["CS_XBS5_ILP32_OFF32_LDFLAGS", 1101], ["CS_XBS5_ILP32_OFF32_LIBS", 1102], ["CS_XBS5_ILP32_OFF32_LINTFLAGS", 1103], ["CS_XBS5_ILP32_OFFBIG_CFLAGS", 1104], ["CS_XBS5_ILP32_OFFBIG_LDFLAGS", 1105], ["CS_XBS5_ILP32_OFFBIG_LIBS", 1106], ["CS_XBS5_ILP32_OFFBIG_LINTFLAGS", 1107], ["CS_XBS5_LP64_OFF64_CFLAGS", 1108], ["CS_XBS5_LP64_OFF64_LDFLAGS", 1109], ["CS_XBS5_LP64_OFF64_LIBS", 1110], ["CS_XBS5_LP64_OFF64_LINTFLAGS", 1111], ["CS_XBS5_LPBIG_OFFBIG_CFLAGS", 1112], ["CS_XBS5_LPBIG_OFFBIG_LDFLAGS", 1113], ["CS_XBS5_LPBIG_OFFBIG_LIBS", 1114], ["CS_XBS5_LPBIG_OFFBIG_LINTFLAGS", 1115]]
+sysconf('SC_PAGESIZE') -> 4096
+sysconf('SC_PAGE_SIZE') -> 4096
+sysconf('SC_CLK_TCK') -> 100
+sysconf('SC_OPEN_MAX') -> 10240
+sysconf('SC_ARG_MAX') -> 2097152
+sysconf('SC_NPROCESSORS_ONLN') -> 32
+sysconf('SC_NPROCESSORS_CONF') -> 32
+sysconf('SC_GETPW_R_SIZE_MAX') -> 1024
+sysconf('SC_GETGR_R_SIZE_MAX') -> 1024
+sysconf('SC_SEM_NSEMS_MAX') -> -1
+sysconf('SC_MINSIGSTKSZ') -> 'NAME ABSENT'
+sysconf('SC_NGROUPS_MAX') -> 65536
+sysconf('SC_HOST_NAME_MAX') -> 'NAME ABSENT'
+sysconf('SC_LINE_MAX') -> 2048
+sysconf('SC_PHYS_PAGES') -> 8100383
+sysconf('SC_IOV_MAX') -> 1024
+sysconf(30) -> 4096
+sysconf('NOPE') -> EXC ValueError: unrecognized configuration name 
+sysconf(99999) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+sysconf(-5) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+sysconf(1.5) -> EXC TypeError: configuration names must be strings or integers 
+sysconf(None) -> EXC TypeError: configuration names must be strings or integers 
+sysconf(2**40) -> EXC OverflowError: Python int too large to convert to C int 
+sysconf(b'SC_PAGESIZE') -> EXC TypeError: configuration names must be strings or integers 
+sysconf() -> EXC TypeError: posix.sysconf() takes exactly one argument (0 given) 
+sysconf(name=30) -> EXC TypeError: posix.sysconf() takes no keyword arguments 
+sysconf SC_ unsupported -> -1? -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+sysconf names raising -> [('SC_EQUIV_CLASS_MAX', 41, 22)]
+confstr('CS_PATH') -> '/bin:/usr/bin'
+confstr('CS_GNU_LIBC_VERSION') -> 'glibc 2.39'
+confstr('CS_GNU_LIBPTHREAD_VERSION') -> 'NPTL 2.39'
+confstr(2) -> 'glibc 2.39'
+confstr('NOPE') -> EXC ValueError: unrecognized configuration name 
+confstr(99999) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+confstr(-1) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+confstr(1.5) -> EXC TypeError: configuration names must be strings or integers 
+confstr(2**40) -> EXC OverflowError: Python int too large to convert to C int 
+confstr all kinds -> [('CS_GNU_LIBC_VERSION', 2, 'str'), ('CS_GNU_LIBPTHREAD_VERSION', 3, 'str'), ('CS_LFS64_CFLAGS', 1004, 'str'), ('CS_LFS64_LDFLAGS', 1005, "''"), ('CS_LFS64_LIBS', 1006, "''"), ('CS_LFS64_LINTFLAGS', 1007, 'str'), ('CS_LFS_CFLAGS', 1000, "''"), ('CS_LFS_LDFLAGS', 1001, "''"), ('CS_LFS_LIBS', 1002, "''"), ('CS_LFS_LINTFLAGS', 1003, "''"), ('CS_PATH', 0, 'str'), ('CS_XBS5_ILP32_OFF32_CFLAGS', 1100, "''"), ('CS_XBS5_ILP32_OFF32_LDFLAGS', 1101, "''"), ('CS_XBS5_ILP32_OFF32_LIBS', 1102, "''"), ('CS_XBS5_ILP32_OFF32_LINTFLAGS', 1103, "''"), ('CS_XBS5_ILP32_OFFBIG_CFLAGS', 1104, "''"), ('CS_XBS5_ILP32_OFFBIG_LDFLAGS', 1105, "''"), ('CS_XBS5_ILP32_OFFBIG_LIBS', 1106, "''"), ('CS_XBS5_ILP32_OFFBIG_LINTFLAGS', 1107, "''"), ('CS_XBS5_LP64_OFF64_CFLAGS', 1108, 'str'), ('CS_XBS5_LP64_OFF64_LDFLAGS', 1109, 'str'), ('CS_XBS5_LP64_OFF64_LIBS', 1110, "''"), ('CS_XBS5_LP64_OFF64_LINTFLAGS', 1111, "''"), ('CS_XBS5_LPBIG_OFFBIG_CFLAGS', 1112, "''"), ('CS_XBS5_LPBIG_OFFBIG_LDFLAGS', 1113, "''"), ('CS_XBS5_LPBIG_OFFBIG_LIBS', 1114, "''"), ('CS_XBS5_LPBIG_OFFBIG_LINTFLAGS', 1115, "''")]
+sysconf_names type -> ('dict', 'dict')
+W*(0x0) -> (True, 0, False, 0, False, 0, False, False)
+waitstatus_to_exitcode(0x0) -> 0
+W*(0x100) -> (True, 1, False, 0, False, 1, False, False)
+waitstatus_to_exitcode(0x100) -> 1
+W*(0xff00) -> (True, 255, False, 0, False, 255, False, False)
+waitstatus_to_exitcode(0xff00) -> 255
+W*(0x9) -> (False, 0, True, 9, False, 0, False, False)
+waitstatus_to_exitcode(0x9) -> -9
+W*(0xf) -> (False, 0, True, 15, False, 0, False, False)
+waitstatus_to_exitcode(0xf) -> -15
+W*(0x8b) -> (False, 0, True, 11, False, 0, False, True)
+waitstatus_to_exitcode(0x8b) -> -11
+W*(0x7f) -> (False, 0, False, 127, True, 0, False, False)
+waitstatus_to_exitcode(0x7f) -> EXC ValueError: process stopped by delivery of signal 0 
+W*(0x137f) -> (False, 19, False, 127, True, 19, False, False)
+waitstatus_to_exitcode(0x137f) -> EXC ValueError: process stopped by delivery of signal 19 
+W*(0xffff) -> (False, 255, False, 127, False, 255, True, True)
+waitstatus_to_exitcode(0xffff) -> EXC ValueError: invalid wait status: 65535 
+W*(0x10000) -> (True, 0, False, 0, False, 0, False, False)
+waitstatus_to_exitcode(0x10000) -> 0
+W*(0x1ff00) -> (True, 255, False, 0, False, 255, False, False)
+waitstatus_to_exitcode(0x1ff00) -> 255
+W*(-0x1) -> (False, 255, False, 127, False, 255, False, True)
+waitstatus_to_exitcode(-0x1) -> EXC ValueError: invalid wait status: -1 
+W*(0x80000000) -> EXC OverflowError: Python int too large to convert to C int 
+waitstatus_to_exitcode(0x80000000) -> EXC OverflowError: Python int too large to convert to C int 
+W*(0x80) -> (True, 0, False, 0, False, 0, False, True)
+waitstatus_to_exitcode(0x80) -> 0
+waitstatus_to_exitcode('x') -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+waitstatus_to_exitcode(1.0) -> EXC TypeError: 'float' object cannot be interpreted as an integer 
+waitstatus_to_exitcode(2**40) -> EXC OverflowError: Python int too large to convert to C int 
+waitstatus_to_exitcode(status=0) -> 0
+WIFEXITED(2**40) -> EXC OverflowError: Python int too large to convert to C int 
+WIFEXITED('x') -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+WEXITSTATUS(status=256) -> 1
+waitpid no children -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+wait no children -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitpid(own pid) -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitpid(1, WNOHANG) -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitpid(0, WNOHANG) no children -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitpid(-1, 12345678) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+waitpid('x', 0) -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+waitpid(1.5, 0) -> EXC TypeError: 'float' object cannot be interpreted as an integer 
+waitpid(2**40, 0) -> EXC OverflowError: Python int too large to convert to C int 
+waitpid(1, 2**40) -> EXC OverflowError: Python int too large to convert to C int 
+waitpid(1) -> EXC TypeError: waitpid expected 2 arguments, got 1 
+waitpid(pid=1, options=0) -> EXC TypeError: posix.waitpid() takes no keyword arguments 
+wait(1) -> EXC TypeError: posix.wait() takes no arguments (1 given) 
+wait3(0) no children -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+wait4(-1, 0) no children -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+wait4(pid=-1, options=0) -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+wait3(options=0) -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitid(P_ALL, 0, WEXITED) no children -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitid(P_PID, me, WEXITED) -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitid(P_ALL, 0, 0) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+waitid(99, 0, WEXITED) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+waitid(idtype=P_ALL, id=0, options=WEXITED) -> EXC TypeError: posix.waitid() takes no keyword arguments 
+waitpid exit3 True 768 tuple 3
+waitpid again (reaped) -> EXC ChildProcessError: [Errno 10] No child processes  errno=10 filename=None filename2=None
+waitpid WNOHANG running (0, 0)
+waitid WNOHANG running -> None
+stopped True 0x137f True 19
+waitstatus_to_exitcode(stopped) -> EXC ValueError: process stopped by delivery of signal 19 
+continued True 0xffff True
+killed TERM True 15 True 15 -15
+killed SEGV status&0x7f, WCOREDUMP is bool 11 bool
+wait() True 1792 tuple
+wait3 3 True 1280 resource struct_rusage 16 float int True tuple
+wait4 3 True 1536 struct_rusage ['float', 'float', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int']
+wait3 WNOHANG running (0, 0) rusage all zero: True
+wait4 WNOHANG running (0, 0)
+waitid NOWAIT posix waitid_result 5 True True 17 4 1 posix.waitid_result(si_pid=PID, si_uid=UID, si_signo=17, si_status=4, si_code=1)
+waitid fields ['si_code', 'si_pid', 'si_signo', 'si_status', 'si_uid'] 5 5
+waitid reap 4 1
+waitid killed True 17 9 2
+pidfd_open True False True
+waitid P_PIDFD True 15 2
+pidfd_open(reaped pid) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+pidfd_open(-1) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+pidfd_open(me, 12345) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+pidfd_open sig -> '($module, /, pid, flags=0)'
+pidfd_open(pid=me, flags=0) works -> None
+kill(me, 0) -> None
+kill(999999999, 0) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+kill(1, 0) -> EXC PermissionError: [Errno 1] Operation not permitted  errno=1 filename=None filename2=None
+kill(me, 99) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+kill(me, -1) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+kill(me, 65) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+kill(me, 64) blocked? -> 'skipped'
+kill('x', 0) -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+kill(1.5, 0) -> EXC TypeError: 'float' object cannot be interpreted as an integer 
+kill(2**40, 0) -> EXC OverflowError: Python int too large to convert to C int 
+kill(me, 2**40) -> None
+kill(me) -> EXC TypeError: kill expected 2 arguments, got 1 
+kill(pid=me, signal=0) -> EXC TypeError: posix.kill() takes no keyword arguments 
+kill(me, signal.SIGCONT) enum -> None
+killpg(999999999, 0) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+killpg(os.getpgrp(), 0) -> None
+killpg(os.getpgrp(), 99) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+killpg('x', 0) -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+killpg(pgid=999999999, signal=0) -> EXC TypeError: posix.killpg() takes no keyword arguments 
+killpg(-5, 0) -> EXC OSError: [Errno 22] Invalid argument  errno=22 filename=None filename2=None
+killpg(0, 0) -> None
+getpgid(0)==getpgrp() -> True
+getpgid(me)==getpgrp() -> True
+getpgid(999999999) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+getpgid(pid=0) kw -> True
+getpgid('x') -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+getsid(0)==getsid(me) -> True
+getsid(999999999) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+getsid(pid=0) kw -> EXC TypeError: posix.getsid() takes no keyword arguments 
+getpgrp(1) -> EXC TypeError: posix.getpgrp() takes no arguments (1 given) 
+setpgid(999999999, 0) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+setpgid(child, child) after exec -> EXC PermissionError: [Errno 13] Permission denied  errno=13 filename=None filename2=None
+child own group True True
+killpg(child group, TERM) -> None
+after killpg -15
+killpg(dead group, 0) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+kill(zombie, 0) -> None
+kill(zombie, 15) -> None
+kill(reaped, 0) -> EXC ProcessLookupError: [Errno 3] No such process  errno=3 filename=None filename2=None
+handler ran synchronously after os.kill(me) [10]
+os.times type -> ('times_result', 5)

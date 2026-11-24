@@ -1,0 +1,18 @@
+posix True
+True
+True 0 [14]
+handler raises TimeoutError None None
+-9
+True 0 [14]
+True 0 [14]
+True True
+-9
+True False True
+[]
+[(True, 1)]
+True 15 2
+pidfd reaped ProcessLookupError 3 No such process
+pidfd -1 OSError 22 Invalid argument
+pidfd flags OSError 22 Invalid argument
+pidfd kw None
+left ChildProcessError 10 No child processes

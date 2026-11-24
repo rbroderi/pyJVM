@@ -1,0 +1,95 @@
+posix
+[('POSIX_SPAWN_OPEN', 0), ('POSIX_SPAWN_CLOSE', 1), ('POSIX_SPAWN_DUP2', 2), ('POSIX_SPAWN_CLOSEFROM', None)]
+int True 0
+exit3 3
+dup2 (0, b'hello\n')
+tuple (0, b't\n')
+mixed (0, b'/x/y z\n')
+pathlike (0, b'p\n')
+env (0, b'v1-\n')
+envb (0, b'vb\n')
+env{} (0, b'[]\n')
+environ (0, b'ok\n')
+env= (0, b'x=y z\n')
+argv0 (0, b'zzz\n')
+env None b'[raw]\n' 0
+missing FileNotFoundError 2 No such file or directory '/no/such/prog'
+missingb FileNotFoundError 2 No such file or directory b'/no/such/prog'
+missingp FileNotFoundError 2 No such file or directory '/no/such/prog'
+noexec PermissionError 13 Permission denied '<tmp>/noexec'
+isdir PermissionError 13 Permission denied '<tmp>'
+notdir NotADirectoryError 20 Not a directory '<tmp>/noexec/x'
+noshebang OSError 8 Exec format error '<tmp>/noshebang'
+badinterp FileNotFoundError 2 No such file or directory '<tmp>/badinterp'
+empty FileNotFoundError 2 No such file or directory ''
+bare FileNotFoundError 2 No such file or directory 'true'
+argv[] ValueError None posix_spawn: argv must not be empty None
+argv() ValueError None posix_spawn: argv must not be empty None
+argv[''] ValueError None posix_spawn: argv first element cannot be empty None
+argv5 TypeError None posix_spawn: argv must be a tuple or list None
+argvstr TypeError None posix_spawn: argv must be a tuple or list None
+argvint TypeError None expected str, bytes or os.PathLike object, not int None
+argvnul ValueError None embedded null byte None
+pathnul ValueError None posix_spawn: embedded null character in path None
+pathint TypeError None posix_spawn: path should be string, bytes or os.PathLike, not int None
+envlist AttributeError None 'list' object has no attribute 'keys' None
+envkey= ValueError None illegal environment variable name None
+envkey'' ValueError None illegal environment variable name None
+envint TypeError None expected str, bytes or os.PathLike object, not int None
+envnul ValueError None embedded null byte None
+few TypeError None posix_spawn() takes exactly 3 positional arguments (2 given) None
+envkw TypeError None posix_spawn() takes exactly 3 positional arguments (2 given) None
+bogus TypeError None posix_spawn() got an unexpected keyword argument 'bogus' None
+fapos TypeError None posix_spawn() takes exactly 3 positional arguments (4 given) None
+faNone 0
+fa() 0
+fa5 TypeError None file_actions must be a sequence or None None
+fa[5] TypeError None Each file_actions element must be a non-empty tuple None
+fa[()] TypeError None Each file_actions element must be a non-empty tuple None
+fa[[]] TypeError None Each file_actions element must be a non-empty tuple None
+fa99 TypeError None Unknown file_actions identifier None
+fastr TypeError None 'str' object cannot be interpreted as an integer None
+faC1 TypeError None A close file_action tuple must have 2 elements None
+faC3 TypeError None A close file_action tuple must have 2 elements None
+faD2 TypeError None A dup2 file_action tuple must have 3 elements None
+faO3 TypeError None A open file_action tuple must have 5 elements None
+faCstr TypeError None 'str' object cannot be interpreted as an integer None
+faC-1 OSError 9 Bad file descriptor None
+faDbad OSError 9 Bad file descriptor '/bin/true'
+faObad FileNotFoundError 2 No such file or directory '/bin/true'
+faCclosed 0
+faOpen (0, 'to file\n', '0o600')
+faOpenTypes 0
+faOrder (0, b'closed\nopen\n')
+ids (0, b'0 0\nSigBlk: 0000000000000000 ')
+setsid NotImplementedError None posix_spawn: setsid unavailable on this platform None
+setpgroup0 (0, b'0 1\nSigBlk: 0000000000000000 ')
+setpgroupNone (0, b'0 0\nSigBlk: 0000000000000000 ')
+setpgroupx TypeError None 'str' object cannot be interpreted as an integer None
+setpgroup1 PermissionError 1 Operation not permitted '/bin/true'
+resetids 0
+sigdef 0
+sigmask (0, b'0 0\nSigBlk: 0000000000000a00 ')
+sigmask{} (0, b'0 0\nSigBlk: 0000000000000000 ')
+sigmask0 ValueError None signal number 0 out of range [1; 64] None
+sigmask65 ValueError None signal number 65 out of range [1; 64] None
+sigmaskx TypeError None 'str' object cannot be interpreted as an integer None
+sigmask5 TypeError None 'int' object is not iterable None
+sigdef65 ValueError None signal number 65 out of range [1; 64] None
+schedNone 0
+sched5 TypeError None posix_spawn: scheduler must be a tuple or None None
+blocked (0, b'0 0\nSigBlk: 0000000000000200 ')
+p 0
+pmissing FileNotFoundError 2 No such file or directory 'pyjvm-no-such-prog'
+pslash FileNotFoundError 2 No such file or directory '/no/such/prog'
+pparentpath 0
+pputenv (0, b'prog2 a\n')
+pnoshebang OSError 8 Exec format error '<tmp>/noshebang'
+inherit (0, b'ccco')
+inheritdup (0, b'occc')
+cwd (0, b'<tmp>/sub\n')
+cwdrel (0, b'prog ran in <tmp>/sub\n')
+cwdrelmissing FileNotFoundError 2 No such file or directory './nope'
+cwdopen (0, 'rel\n')
+cwdp (0, b'prog ran in <tmp>\n')
+no children left 10

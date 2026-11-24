@@ -1,0 +1,21 @@
+posix
+FileNotFoundError 2 No such file or directory 'pyjvm-no-such-program-xyz' None
+FileNotFoundError 2 No such file or directory '/no/such/dir/prog' None
+FileNotFoundError 2 No such file or directory './relative-missing' None
+PermissionError 13 Permission denied '<tmp>/noexec' None
+PermissionError 13 Permission denied '<tmp>' None
+NotADirectoryError 20 Not a directory '<tmp>/noexec/x' None
+OSError 8 Exec format error '<tmp>/noshebang' None
+FileNotFoundError 2 No such file or directory '<tmp>/no-such-dir' None
+NotADirectoryError 20 Not a directory '<tmp>/noexec' None
+FileNotFoundError 2 No such file or directory '<tmp>/no-such-dir' None
+FileNotFoundError 2 No such file or directory 'pyjvm-no-such-program-xyz' None
+no error
+OSError 9 Bad file descriptor None None
+FileNotFoundError 2 No such file or directory '/no/such/shell' None
+IndexError
+FileNotFoundError 255 True True
+FileNotFoundError 255 True True
+FileNotFoundError None False True
+FileNotFoundError 255 True True
+no children 10

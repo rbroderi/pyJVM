@@ -1,0 +1,157 @@
+== os.posix_spawn basics
+spawn true -> 0
+spawn sh exit 3 -> 3
+returns int pid > 0 -> ('int', True, 0)
+stdout via DUP2 -> (0, b'hello\n')
+argv tuple -> (0, b't\n')
+argv bytes/pathlike mix -> (0, b'/x/y z\n')
+path PathLike -> (0, b'p\n')
+env passed -> (0, b'v1-\n')
+env bytes keys -> (0, b'vb\n')
+env empty dict -> (0, b'[]\n')
+env os.environ object -> (0, b'ok\n')
+argv[0] is free text -> (0, b'zzz\n')
+== os.posix_spawn errors
+missing -> EXC FileNotFoundError: [Errno 2] No such file or directory: '/no/such/prog'  errno=2 filename='/no/such/prog' filename2=None
+missing bytes path -> EXC FileNotFoundError: [Errno 2] No such file or directory: b'/no/such/prog'  errno=2 filename=b'/no/such/prog' filename2=None
+missing PathLike -> EXC FileNotFoundError: [Errno 2] No such file or directory: '/no/such/prog'  errno=2 filename='/no/such/prog' filename2=None
+noexec -> EXC PermissionError: [Errno 13] Permission denied: '<tmp>/noexec'  errno=13 filename='<tmp>/noexec' filename2=None
+isdir -> EXC PermissionError: [Errno 13] Permission denied: '<tmp>'  errno=13 filename='<tmp>' filename2=None
+notdir -> EXC NotADirectoryError: [Errno 20] Not a directory: '<tmp>/noexec/x'  errno=20 filename='<tmp>/noexec/x' filename2=None
+noshebang -> EXC OSError: [Errno 8] Exec format error: '<tmp>/noshebang'  errno=8 filename='<tmp>/noshebang' filename2=None
+badinterp -> EXC FileNotFoundError: [Errno 2] No such file or directory: '<tmp>/badinterp'  errno=2 filename='<tmp>/badinterp' filename2=None
+empty path -> EXC FileNotFoundError: [Errno 2] No such file or directory: ''  errno=2 filename='' filename2=None
+relative bare name (no PATH search) -> EXC FileNotFoundError: [Errno 2] No such file or directory: 'true'  errno=2 filename='true' filename2=None
+argv empty list -> EXC ValueError: posix_spawn: argv must not be empty 
+argv empty tuple -> EXC ValueError: posix_spawn: argv must not be empty 
+argv[0] empty str -> EXC ValueError: posix_spawn: argv first element cannot be empty 
+argv not sequence -> EXC TypeError: posix_spawn: argv must be a tuple or list 
+argv str -> EXC TypeError: posix_spawn: argv must be a tuple or list 
+argv item int -> EXC TypeError: expected str, bytes or os.PathLike object, not int 
+argv item NUL -> EXC ValueError: embedded null byte 
+path NUL -> EXC ValueError: posix_spawn: embedded null character in path 
+path int -> EXC TypeError: posix_spawn: path should be string, bytes or os.PathLike, not int 
+env None -> 926
+env list -> EXC AttributeError: 'list' object has no attribute 'keys' 
+env key with = -> EXC ValueError: illegal environment variable name 
+env key empty -> EXC ValueError: illegal environment variable name 
+env value int -> EXC TypeError: expected str, bytes or os.PathLike object, not int 
+env key NUL -> EXC ValueError: embedded null byte 
+env value with = ok -> (0, b'x=y z\n')
+too few args -> EXC TypeError: posix_spawn() takes exactly 3 positional arguments (2 given) 
+env as keyword -> EXC TypeError: posix_spawn() takes exactly 3 positional arguments (2 given) 
+unknown keyword -> EXC TypeError: posix_spawn() got an unexpected keyword argument 'bogus' 
+file_actions positional -> EXC TypeError: posix_spawn() takes exactly 3 positional arguments (4 given) 
+== file_actions
+fa None -> 0
+fa ()  -> 0
+fa int -> EXC TypeError: file_actions must be a sequence or None 
+fa [5] -> EXC TypeError: Each file_actions element must be a non-empty tuple 
+fa [()] -> EXC TypeError: Each file_actions element must be a non-empty tuple 
+fa [[CLOSE, 9]] list item -> EXC TypeError: Each file_actions element must be a non-empty tuple 
+fa unknown id -> EXC TypeError: Unknown file_actions identifier 
+fa id str -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+fa CLOSE wrong arity -> EXC TypeError: A close file_action tuple must have 2 elements 
+fa CLOSE extra -> EXC TypeError: A close file_action tuple must have 2 elements 
+fa DUP2 wrong arity -> EXC TypeError: A dup2 file_action tuple must have 3 elements 
+fa OPEN wrong arity -> EXC TypeError: A open file_action tuple must have 5 elements 
+fa CLOSE fd str -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+fa CLOSE not-open fd ok -> 0
+fa CLOSE -1 -> EXC OSError: [Errno 9] Bad file descriptor  errno=9 filename=None filename2=None
+fa DUP2 bad fd -> EXC OSError: [Errno 9] Bad file descriptor: '/bin/true'  errno=9 filename='/bin/true' filename2=None
+fa OPEN missing dir -> EXC FileNotFoundError: [Errno 2] No such file or directory: '/bin/true'  errno=2 filename='/bin/true' filename2=None
+fa OPEN creates file -> (0, 'to file\n', '0o600')
+fa OPEN path bytes/PathLike -> 0
+fa order: OPEN 5, DUP2 5->1, CLOSE 5 -> (0, b'0 1 2 3 7 ')
+has CLOSEFROM -> False
+== attributes
+child default (inherits SIGPIPE ignore? mask?) -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000000 SigIgn: 0000000001001000 ')
+setsid=True -> EXC NotImplementedError: posix_spawn: setsid unavailable on this platform 
+setsid=1 -> EXC NotImplementedError: posix_spawn: setsid unavailable on this platform 
+setpgroup=0 -> (0, b'sid_eq_pid=0 pgrp_eq_pid=1\nSigBlk: 0000000000000000 SigIgn: 0000000001001000 ')
+setpgroup=None -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000000 SigIgn: 0000000001001000 ')
+setpgroup='x' -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+setpgroup=1 (EPERM) -> EXC PermissionError: [Errno 1] Operation not permitted: '/bin/true'  errno=1 filename='/bin/true' filename2=None
+resetids=True -> 0
+setsigdef [SIGPIPE] -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000000 SigIgn: 0000000001000000 ')
+setsigdef (SIGPIPE, SIGXFSZ) tuple -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000000 SigIgn: 0000000000000000 ')
+setsigmask [SIGUSR1, SIGUSR2] -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000a00 SigIgn: 0000000001001000 ')
+setsigmask set() -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000000 SigIgn: 0000000001001000 ')
+setsigmask [0] -> EXC ValueError: signal number 0 out of range [1; 64] 
+setsigmask [65] -> EXC ValueError: signal number 65 out of range [1; 64] 
+setsigmask ['x'] -> EXC TypeError: 'str' object cannot be interpreted as an integer 
+setsigmask 5 -> EXC TypeError: 'int' object is not iterable 
+setsigmask [SIGKILL] accepted -> 0
+setsigdef [65] -> EXC ValueError: signal number 65 out of range [1; 64] 
+setsigdef [9] SIGKILL -> 976
+scheduler=None -> 0
+scheduler=(None, sched_param(0)) -> 0
+scheduler=(SCHED_OTHER, sched_param(0)) -> 0
+scheduler=5 -> EXC TypeError: posix_spawn: scheduler must be a tuple or None 
+parent blocked USR1 -> child -> (0, b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000200 SigIgn: 0000000001001000 ')
+parent blocked USR1, subprocess.run child -> b'sid_eq_pid=0 pgrp_eq_pid=0\nSigBlk: 0000000000000200 SigIgn: 0000000000000000 '
+== posix_spawnp
+spawnp true -> 0
+spawnp missing -> EXC FileNotFoundError: [Errno 2] No such file or directory: 'pyjvm-no-such-prog'  errno=2 filename='pyjvm-no-such-prog' filename2=None
+spawnp with slash missing -> EXC FileNotFoundError: [Errno 2] No such file or directory: '/no/such/prog'  errno=2 filename='/no/such/prog' filename2=None
+spawnp uses parent's PATH, not env's -> 0
+spawnp sees os.environ['PATH'] change (putenv) -> (0, b'prog2 a\n')
+spawnp noshebang via PATH-less -> EXC OSError: [Errno 8] Exec format error: '<tmp>/noshebang'  errno=8 filename='<tmp>/noshebang' filename2=None
+== inheritance through posix_spawn
+cloexec closed, inheritable open -> (0, b'closed closed closed open ')
+== cwd / chdir
+after os.chdir: child pwd -> (0, b'<tmp>/sub\n')
+after os.chdir: relative exe ./prog -> (0, b'prog ran in <tmp>/sub\n')
+after os.chdir: relative exe missing -> filename -> EXC FileNotFoundError: [Errno 2] No such file or directory: './nope'  errno=2 filename='./nope' filename2=None
+after os.chdir: subprocess relative exe -> b'prog ran in <tmp>/sub\n'
+subprocess cwd relative '..' + relative exe -> b'prog2 x\n'
+subprocess cwd abs + exe relative to new cwd -> b'prog ran in <tmp>/sub\n'
+== fork_exec direct
+fe true -> ('int', True, b'', 0)
+fe exit 3 -> ('int', True, b'', 768)
+fe missing -> ('int', True, b'OSError:2:', 65280)
+fe noexec -> ('int', True, b'OSError:d:', 65280)
+fe isdir -> ('int', True, b'OSError:d:', 65280)
+fe notdir -> ('int', True, b'OSError:14:', 65280)
+fe noshebang -> ('int', True, b'OSError:8:', 65280)
+fe badinterp -> ('int', True, b'OSError:2:', 65280)
+fe list: missing, noexec, missing -> first non-ENOENT -> ('int', True, b'OSError:d:', 65280)
+fe list: noexec, noshebang -> first -> ('int', True, b'OSError:d:', 65280)
+fe list: notdir, missing -> last errno -> ('int', True, b'OSError:2:', 65280)
+fe list: missing, notdir -> last errno -> ('int', True, b'OSError:14:', 65280)
+fe list: missing then true runs -> ('int', True, b'', 0)
+fe empty exe list -> ('int', True, b'SubprocessError:0:', 65280)
+fe cwd missing -> ('int', True, b'OSError:2:noexec:chdir', 65280)
+fe cwd notdir -> ('int', True, b'OSError:14:noexec:chdir', 65280)
+fe cwd noperm -> ('int', True, b'OSError:d:noexec:chdir', 65280)
+fe cwd empty str -> ('int', True, b'OSError:2:noexec:chdir', 65280)
+fe cwd bytes -> ('int', True, b'', 0)
+fe cwd bad AND exe missing -> chdir first -> ('int', True, b'OSError:2:noexec:chdir', 65280)
+fe bad stdio fd (dup2 fails) -> ('int', True, b'OSError:9:noexec', 65280)
+fe setpgid EPERM (pgid=1) -> ('int', True, b'OSError:1:noexec', 65280)
+fe args None -> ('int', True, b'', 0)
+fe args empty -> ('int', True, b'', 0)
+fe args str items -> ('int', True, b'', 0)
+fe args int item -> EXC TypeError: expected str, bytes or os.PathLike object, not int 
+fe exe list of str -> EXC TypeError: expected bytes, str found 
+fe exe not tuple (list) -> ('int', True, b'', 0)
+fe env_list -> ('int', True, b'', 0)
+fe env_list str items -> EXC TypeError: expected bytes, str found 
+fe pass_fds not tuple -> EXC TypeError: fork_exec() argument 4 must be tuple, not list 
+fe pass_fds negative -> EXC ValueError: bad value(s) in fds_to_keep 
+fe pass_fds unsorted -> EXC ValueError: bad value(s) in fds_to_keep 
+fe close_fds with errpipe_write < 3 -> EXC ValueError: errpipe_write must be >= 3 
+fe wrong arg count -> EXC TypeError: fork_exec expected 22 arguments, got 3 
+fe preexec_fn not callable -> ('int', True, b'SubprocessError:0:Exception occurred in preexec_fn.', 65280)
+fe uid wrong type -> EXC TypeError: uid should be integer, not str 
+fe gid wrong type -> EXC TypeError: gid should be integer, not str 
+fe extra_groups wrong type -> EXC TypeError: setgroups argument must be a list 
+fe umask 0o077 child -> ('int', True, b'', 0)
+fe uid=own -> ('int', True, b'', 0)
+fe gid=own -> ('int', True, b'', 0)
+fe groups=[] (EPERM as non-root) -> EXC TypeError: setgroups argument must be a list 
+fe preexec_fn runs -> ('int', True, b'', 0)
+fe keep 4 cloexec fds -> ('int', True, b'', 0)
+fds r(cloexec) w(kept) r2(inheritable) w2(cloexec): close_fds=True -> (0, b'cocc')
+same, close_fds=False -> (0, b'cooc')
+close_fds=False no keep -> (0, b'ccoc')

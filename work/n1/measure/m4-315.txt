@@ -1,0 +1,36 @@
+default b'SigBlk: 0000000000000200 SigIgn: 0000000001001000 '
+setsigmask=() b'SigBlk: 0000000000000000 SigIgn: 0000000001001000 '
+setsigmask=[] b'SigBlk: 0000000000000000 SigIgn: 0000000001001000 '
+setsigmask=[SIGUSR2] b'SigBlk: 0000000000000800 SigIgn: 0000000001001000 '
+setsigdef=() b'SigBlk: 0000000000000200 SigIgn: 0000000001001000 '
+env 5 -> EXC TypeError posix_spawn: environment must be a mapping object or None
+env str -> EXC AttributeError 'str' object has no attribute 'keys'
+env key =A -> 0
+path int + argv bad -> EXC TypeError posix_spawn: path should be string, bytes or os.PathLike, not int
+argv bad + env bad -> EXC TypeError posix_spawn: argv must be a tuple or list
+argv[0] empty + env bad -> EXC TypeError posix_spawn: environment must be a mapping object or None
+env bad + fa bad -> EXC TypeError posix_spawn: environment must be a mapping object or None
+fa bad + setsigmask bad -> EXC TypeError file_actions must be a sequence or None
+setpgroup bad + setsigmask bad -> EXC TypeError 'str' object cannot be interpreted as an integer
+setsid + sched bad -> EXC TypeError posix_spawn: scheduler must be a tuple or None
+setsid + setsigmask bad -> EXC NotImplementedError posix_spawn: setsid unavailable on this platform
+resetids='x' truthy -> 0
+killpg big -> EXC OverflowError Python int too large to convert to C int
+getpgid big -> EXC OverflowError Python int too large to convert to C int
+getsid big -> EXC OverflowError Python int too large to convert to C int
+setpgid big -> EXC OverflowError Python int too large to convert to C int
+waitid big -> EXC OverflowError Python int too large to convert to C int
+pidfd big -> EXC OverflowError Python int too large to convert to C int
+wait4 big -> EXC OverflowError Python int too large to convert to C int
+wait3 big -> EXC OverflowError Python int too large to convert to C int
+killpg 1arg -> EXC TypeError killpg expected 2 arguments, got 1
+waitid 2args -> EXC TypeError waitid expected 3 arguments, got 2
+setpgid 1arg -> EXC TypeError setpgid expected 2 arguments, got 1
+getsid noarg -> EXC TypeError posix.getsid() takes exactly one argument (0 given)
+kill True pid? -> None
+spawnp name -> EXC TypeError posix_spawnp: path should be string, bytes or os.PathLike, not int
+spawnp argv -> EXC ValueError posix_spawnp: argv must not be empty
+spawnp few -> EXC TypeError posix_spawnp() takes exactly 3 positional arguments (2 given)
+confstr noarg -> EXC TypeError posix.confstr() takes exactly one argument (0 given)
+confstr kw -> EXC TypeError posix.confstr() takes no keyword arguments
+sysconf True -> True
