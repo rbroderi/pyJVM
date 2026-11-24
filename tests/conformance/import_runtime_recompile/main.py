@@ -39,6 +39,9 @@ print(edited.VALUE, hasattr(edited, "EXTRA"))
 # a package whose submodule is rewritten
 write("rc_pkg/__init__.py", "from . import sub\nNAME = 'pkg'\n")
 write("rc_pkg/sub.py", "def who():\n    return 'first'\n")
+# a directory created at runtime: CPython's FileFinder caches the listing of root by mtime and can miss it otherwise.
+# Only root's finder is dropped (importlib.invalidate_caches() also reaches importlib.metadata, a separate gap).
+sys.path_importer_cache.pop(root, None)
 import rc_pkg
 print(rc_pkg.NAME, rc_pkg.sub.who())
 write("rc_pkg/sub.py", "def who():\n    return 'second, longer'\n")

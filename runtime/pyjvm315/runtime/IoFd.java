@@ -28,10 +28,10 @@ final class IoFd {
     private IoFd() {}
 
     /**
-     * POSIX descriptors are kernel descriptors ({@link PosixFds}) instead of this table. Opt-in with
-     * {@code PYJVM_POSIX_FDS=kernel}; always false on Windows (the variable is not even read there).
+     * POSIX descriptors are kernel descriptors ({@link PosixFds}) instead of this table. Default on POSIX;
+     * {@code PYJVM_POSIX_FDS=nio} is the rollback; always false on Windows (the variable is not even read there).
      */
-    static final boolean KERNEL = !ImportSupport.WINDOWS && "kernel".equals(System.getenv("PYJVM_POSIX_FDS"));
+    static final boolean KERNEL = !ImportSupport.WINDOWS && !"nio".equals(System.getenv("PYJVM_POSIX_FDS"));
 
     static { if (KERNEL) PosixNative.requireSupportedHost(); }
 

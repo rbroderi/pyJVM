@@ -127,6 +127,7 @@ $env:PYJVM_BUILD_CACHE='C:\Users\richa\workspace_local\pyjvm-work\bc-conf'; $env
 13. Investigate the probe's "regressed" reporting on Windows (see State of the branch).
 15. Finalizers do not run at interpreter exit (CPython finalizes module globals at shutdown); see JVM_BACKEND.md "Finalizers and reference-counting timing".
 14. `JAVA_HOME` optional: tools must keep working when it points at an older JDK.
+16. **Function `__builtins__` missing** (found 2026-11-23, N0 ticket 5). Functions have no `__builtins__` attribute (CPython: the builtins dict the function's globals resolve against, set at creation from `globals['__builtins__']`). On 3.15 `annotationlib.call_annotate_function` reads `annotate.__builtins__`, so anything that evaluates annotations via `typing` (`NamedTuple`/`TypedDict` class creation, `get_type_hints`) raises `AttributeError: function has no attribute '__builtins__'`. Seen through `importlib.invalidate_caches()` -> `MetadataPathFinder.invalidate_caches` -> `import importlib.metadata` -> `typing`. Fix: add a read-only `__builtins__` to functions (the builtins module's dict, or `globals['__builtins__']` when it is a dict, as CPython); add a conformance case calling `importlib.invalidate_caches()` and `annotationlib.call_annotate_function` on 3.14+/3.15, then drop the `sys.path_importer_cache.pop` workaround in `tests/conformance/import_runtime_recompile/main.py` for `importlib.invalidate_caches()`.
 
 ### Known Windows gaps
 - java.nio-backed `os` functions other than `stat` report errors errno-style (`[Errno 2] ...`) where CPython on Windows reports `[WinError N] ...`.
@@ -202,3 +203,33 @@ Each session appends dated entries here at key points (ticket start/finish, gate
 - **Follow-ups (low, recorded, not fixed):** `os.stat`/`os.lstat` in kernel mode ignore unknown keywords and extra positionals (CPython: TypeError; same as the shared lambdas before); an object with `__index__` is not accepted as an fd; a failing `os.stat(True)` names `1` not `True` as filename. Pre-existing gaps found while writing the case (not N0): no `os.makedev`; no `DirEntry.is_junction`, so `shutil.rmtree` fails on POSIX.
 - No before/after timing of the stat hot path yet; ticket 5 records cold-compile timing and ticket 12 measures performance.
 - **Next:** ticket 5 (flip the default to kernel mode; W-full and L-full against the baseline; the first full gates on this machine). Needs `~/cpython` in WSL for the strict lane/probe (not yet set up).
+- Committed as `eb841db` (local); WSL synced.
+
+### 2026-11-21: N0 ticket 5 started
+- WSL `~/cpython`: blobless sparse clone (Lib only) at `5b28ebd`, all 60 probe/strict manifest files present.
+- Sonnet subagent running: cold-compile timing before/after the flip (3 runs each, Linux), flip `IoFd.KERNEL` to default-on (`nio` = rollback), L-full (pytest, methodsize, conf 315/314/313, strict) and W-full, nio rollback L-min, name-by-name comparison with `work/n0/baseline.md`; any new failure is rerun in nio mode to separate host differences (this host is Ubuntu 24.04, the baseline was 22.04) from kernel-mode regressions.
+
+### 2026-11-21: N0 ticket 5 paused (low memory, then PC restart)
+- The ticket 5 subagent was stopped on request (system low on memory); the PC was then restarted. It left no report.
+- Uncommitted in `E:\pyjvm`: the flip (`IoFd.KERNEL = !WINDOWS && !"nio".equals(PYJVM_POSIX_FDS)`) and `tests/test_posix_fds.py` (explicit kernel setting dropped, new nio round-trip test). Not reviewed, no gates run on it from the Windows side; no run lock left behind.
+- Unknown: whether the cold-compile timing (before/after) or any Linux gate finished; check `~/pyjvm-work/logs` in WSL before rerunning. WSL `~/pyjvm-n0` may hold a partly applied patch: reset it to `eb841db` before resuming.
+- **Resume:** redo ticket 5 from step 1 (timing), with the existing diff as the flip.
+- WSL check after the restart (WSL `~/pyjvm-n0` has the same uncommitted flip, at `eb841db`; nothing running; no lock). The agent got through most of L-full on the flipped tree before it was stopped. Logs are in `~/pyjvm-work/logs/pyjvm-n0-eb841db/`:
+  - pytest 140 passed, 3 skipped (13m42s); methodsize 0 of 4791; strict 808 PASS, 0 FAIL (32 units).
+  - Conformance 3.15: 394/3 (`time_struct_time_and_strftime`, `zlib_streams`, and one directory `main.py`). 3.14: 381/1 (time only). 3.13: 371/2 (time, plus the same `main.py`).
+  - Known-failing per baseline: time (all lanes), `zlib_streams` (3.15). `threading_imports` (a 3.13 baseline failure) now passes.
+  - **New:** the directory case failing on 3.13 and 3.15 is almost certainly `import_runtime_recompile` (its output has `rc_mod.py rc_pkg`). CPython stops after `3 True`; pyJVM prints three more lines (`pkg first`, `second, longer`, `rc_mod.py rc_pkg`). 3.14 passes. It may be stat/mtime-related in kernel mode, or timing-flaky. Not yet rerun under `nio`.
+  - Cold-compile timing: the per-run numbers lived only in the agent's context and are lost (`coldtime/*/out.txt` has only output). Directory timestamps suggest about 5 min per unittest_basic cold run both before and after; rerun properly (3+3) before committing.
+- Not done: nio-rollback L-min, W-full, the per-case comparison write-up, review.
+
+### 2026-11-23: N0 ticket 5 resumed
+- The "new" failure was `import_runtime_recompile`, and it was the reference side: CPython fails it about half the time (`ModuleNotFoundError: No module named 'rc_pkg'`, 3.13 and 3.15) because FileFinder's cached listing of the temp root misses a directory created in the same mtime tick. Fixed in the test by dropping root's cached finder (`sys.path_importer_cache.pop(root, None)`) before `import rc_pkg`: CPython 10/10 on 3.13 and 3.15, pyJVM PASS on three lanes (kernel mode). `importlib.invalidate_caches()` was tried first, but fails on pyJVM 3.15 (functions lack `__builtins__`): logged as open item 16.
+- Cold-compile timing rerun (`work`-side script `E:\pyjvm-work\n0\t5_coldtime.sh`): unittest_basic on 3.15 with fresh caches, nio and kernel interleaved, 3 runs each; results in WSL `~/pyjvm-work/coldtime2/times.txt`.
+- Cold-compile timing (D1(b) check): unittest_basic 3.15, fresh caches, interleaved: nio 279.5 / 277.5 / 277.2 s, kernel 280.1 / 280.1 / 281.7 s: **+0.9%** (stop line +15%).
+- nio rollback L-min on Linux (`PYJVM_POSIX_FDS=nio`, L-min + `import_runtime_recompile`, three lanes): 29 PASS, 1 version-gated skip.
+- Review (fresh Opus): **approve with nits**, all three fixed: `_run_pyjvm` drops an inherited `PYJVM_POSIX_FDS` and the kernel round-trip test deletes it (a shell with `nio` exported no longer turns the kernel tests into nio tests); new `test_nio_rollback_is_really_nio` (under nio the `/dev/null` descriptor is not the kernel's, so the rollback is proven active, not just passing); the Windows class-load test comment now says any value but `nio` selects kernel on POSIX. Reviewer confirmed the recompile test fix is sufficient (the sub-package finder is created after `sub.py` exists; the reload relies on a size change, as `rc_mod` does). Linux `test_posix_fds.py` 7 passed, plain and with `PYJVM_POSIX_FDS=nio` exported.
+- The first W-full attempt died with the app restart at about 20:22 (stale lock removed after checking its PID was gone); relaunched through WMI so it is not in the app's process tree.
+- **W-full (Windows, flipped tree):** pytest 134 passed, 10 skipped, 0 failed (15:06; the 7 Linux-only `test_posix_fds` tests skip); methodsize 0 of 4791; conformance 3.15 397/0/3, 3.14 382/0/18, 3.13 373/0/27. Equals the Windows baseline (no failures). No hs_err files.
+- **Comparison by case name (Linux L-full vs `baseline.md`):** failing sets 3.15 {time_struct_time_and_strftime, zlib_streams}, 3.14 {time_struct_time_and_strftime}, 3.13 {time_struct_time_and_strftime}: each equal to or smaller than the baseline (`threading_imports` on 3.13 now passes; `import_runtime_recompile` was the flaky test, fixed). pytest 140 passed 3 skipped (the flaky cache test passed); strict 808/0. Host note: Ubuntu 24.04 here vs 22.04 at baseline.
+- **Ticket 5 done.** Kernel descriptors are now the default on Linux.
+- **Next:** ticket 6 (per plan).

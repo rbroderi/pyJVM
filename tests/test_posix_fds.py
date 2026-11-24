@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Kernel descriptors on Linux (PYJVM_POSIX_FDS=kernel): the numbers pyJVM hands out are the kernel's."""
+"""Kernel descriptors on Linux (the default; PYJVM_POSIX_FDS=nio is the rollback): the numbers pyJVM hands out are the kernel's."""
 from __future__ import annotations
 
 import os
@@ -30,12 +30,14 @@ def jvm_kit():
 
 
 def _run_pyjvm(kit, main: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Compile ``main`` and run it under pyJVM with ``env`` added to this process's environment."""
+    """Compile ``main`` and run it under pyJVM with ``env`` added to this process's environment (an inherited
+    PYJVM_POSIX_FDS is dropped: the mode is whatever ``env`` says, kernel by default)."""
     runtime, selfhosted = kit
     out = main.parent / "out"
     compile_file(main, out, "ConformanceMain")
     shutil.copytree(runtime / "pyjvm315", out / "pyjvm315", dirs_exist_ok=True)
     full = os.environ.copy()
+    full.pop("PYJVM_POSIX_FDS", None)
     full.update(env)
     full["PYJVM_LANG_VERSION"] = "%d.%d" % reference_version(sys.executable)
     full["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(sys.executable)
@@ -56,7 +58,7 @@ os.close(fd)
 def test_descriptor_is_the_kernels(jvm_kit, tmp_path):
     main = tmp_path / "main.py"
     main.write_text(DEV_NULL, encoding="utf-8")
-    proc = _run_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "kernel"})
+    proc = _run_pyjvm(jvm_kit, main, {})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == "/dev/null\n"
 
@@ -118,7 +120,25 @@ def test_round_trip_kernel_matches_cpython(jvm_kit, tmp_path, monkeypatch):
     runtime, selfhosted = jvm_kit
     main = tmp_path / "main.py"
     main.write_text(ROUND_TRIP, encoding="utf-8")
-    monkeypatch.setenv("PYJVM_POSIX_FDS", "kernel")
+    monkeypatch.delenv("PYJVM_POSIX_FDS", raising=False)   # the default, whatever the calling shell exported
+    result = compare_file(main, sys.executable, runtime_cache=runtime, selfhosted=selfhosted)
+    assert result.status == "PASS", result.detail
+
+
+def test_nio_rollback_is_really_nio(jvm_kit, tmp_path):
+    # under the rollback the numbers come from pyJVM's own table, not the kernel: the round trip below passing in
+    # both modes proves nothing about which mode ran, this does
+    main = tmp_path / "main.py"
+    main.write_text(DEV_NULL, encoding="utf-8")
+    proc = _run_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
+    assert not (proc.returncode == 0 and proc.stdout == "/dev/null\n"), (proc.stdout, proc.stderr)
+
+
+def test_round_trip_nio_rollback_matches_cpython(jvm_kit, tmp_path, monkeypatch):
+    runtime, selfhosted = jvm_kit
+    main = tmp_path / "main.py"
+    main.write_text(ROUND_TRIP, encoding="utf-8")
+    monkeypatch.setenv("PYJVM_POSIX_FDS", "nio")
     result = compare_file(main, sys.executable, runtime_cache=runtime, selfhosted=selfhosted)
     assert result.status == "PASS", result.detail
 
@@ -143,13 +163,13 @@ raise SystemExit("bye")
 def test_std_streams_flushed_at_exit(jvm_kit, tmp_path, script, code, out, err):
     main = tmp_path / "main.py"
     main.write_text(textwrap.dedent(script), encoding="utf-8")
-    proc = _run_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "kernel"})
+    proc = _run_pyjvm(jvm_kit, main, {})
     assert (proc.returncode, proc.stdout, proc.stderr) == (code, out, err)
 
 
 def test_std_streams_flushed_on_uncaught_exception(jvm_kit, tmp_path):
     main = tmp_path / "main.py"
     main.write_text('print("before", end="")\nraise ValueError("boom")\n', encoding="utf-8")
-    proc = _run_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "kernel"})
+    proc = _run_pyjvm(jvm_kit, main, {})
     assert proc.returncode == 1 and proc.stdout == "before"
     assert proc.stderr.startswith("Traceback (most recent call last):") and proc.stderr.endswith("ValueError: boom\n")
