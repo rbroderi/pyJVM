@@ -32,6 +32,7 @@ final class SelectModule {
             fn(m, "select", (a, k) -> select(a, k));
             return m;
         }
+        if (IoFd.KERNEL) return PosixSelectModule.create();
         String[] names = {"POLLIN", "POLLPRI", "POLLOUT", "POLLERR", "POLLHUP", "POLLNVAL", "POLLRDNORM", "POLLRDBAND", "POLLWRNORM",
             "POLLWRBAND", "POLLMSG", "POLLRDHUP", "PIPE_BUF"};
         long[] vals = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 8192, 4096};
@@ -66,7 +67,7 @@ final class SelectModule {
         return 3;
     }
 
-    private static long fdOf(Object o) {
+    static long fdOf(Object o) {
         long fd;
         if (o instanceof Long || o instanceof java.math.BigInteger || o instanceof Boolean) fd = IoUtil.asLong(o);
         else {
@@ -96,7 +97,7 @@ final class SelectModule {
 
     // ---------------------------------------------------------------- select()
 
-    private static List<Object> seq(Object o) {
+    static List<Object> seq(Object o) {
         try {
             List<Object> out = new ArrayList<>();
             for (Object x : PyRuntime.iterable(o)) out.add(x);
@@ -191,7 +192,7 @@ final class SelectModule {
     private static Poll poll(Object self) { return state(self, Poll.class, "select.poll"); }
 
     /** 3.15 names the offending type and says "real number". */
-    private static PyException timeoutType(Object got, String old) {
+    static PyException timeoutType(Object got, String old) {
         if (LangVersion.atLeast(3, 15)) return new PyException("TypeError", "timeout must be a real number or None, not " + PyRuntime.typeName(got));
         return new PyException("TypeError", "timeout must be " + old);
     }
