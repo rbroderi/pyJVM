@@ -146,6 +146,15 @@ def test_nio_rollback_has_no_pipe_api(jvm_kit, tmp_path):
     assert proc.stdout == "[False, False, False, False, False, False]\n"
 
 
+def test_nio_rollback_keeps_the_old_wait_lambdas(jvm_kit, tmp_path):
+    # the wait family of N1 is registered by the kernel layer only: under the rollback waitpid is still the old stub
+    main = tmp_path / "main.py"
+    main.write_text("import os\ntry:\n    os.waitpid(-1, 0)\nexcept ChildProcessError as e:\n    print('ChildProcessError', e)\n", encoding="utf-8")
+    proc = _run_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "ChildProcessError [Errno 10] No child processes\n"
+
+
 def test_nio_rollback_serves_the_old_select_module(jvm_kit, tmp_path):
     # the kernel select/poll module is behind IoFd.KERNEL: under the rollback the old emulation answers
     main = tmp_path / "main.py"

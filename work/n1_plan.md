@@ -51,7 +51,7 @@ N0 section 1.3 applies unchanged (handles through `PosixNative.fn`, errno captur
 
 ### 1.3 Errors
 - `PosixNative.osError(errno, filename)` as in N0. Functions of this phase that fail by errno have no filename, except `os.posix_spawn[p]` (the `path` argument as the caller passed it, bytes staying bytes; 3.6).
-- Integer arguments: `PosixOsProc.cInt(Object)` converts to a C int with CPython's texts: a non-integer -> `TypeError: '<type>' object cannot be interpreted as an integer`; out of the 32-bit range -> the lane's OverflowError (3.8). The signal argument of `kill`/`killpg` is the exception: it is taken as a 64-bit value and truncated to its low 32 bits (measured: `os.kill(pid, 2**40)` behaves as signal 0).
+- Integer arguments: `PosixOsProc.cInt(Object)` converts to a C int with CPython's texts: a non-integer -> `TypeError: '<type>' object cannot be interpreted as an integer`; out of the 32-bit range -> the lane's OverflowError (3.8). The signal argument of `kill` is the exception: it is taken as a 64-bit value and truncated to its low 32 bits (measured: `os.kill(pid, 2**40)` behaves as signal 0). The signal of `killpg` is range-checked as a C int like the other arguments (corrected at ticket 3 review, measured).
 - `sysconf`/`confstr` report "no value" by a return of -1/0 **without touching errno**, and an invalid name by EINVAL. A captured errno is stale after a call that did not set it (N0 7.2), so: write 0 through `__errno_location()` (handle without capture, result `reinterpret(4)`), then make the call; a failing return with captured errno 22 on **two consecutive attempts** is `OSError(22)`; anything else is "no value" (`sysconf` returns -1, `confstr` returns `None`). Reason for two attempts: JVM-internal code may change errno between the two downcalls; it cannot do so to exactly 22 twice in practice, and a real EINVAL always repeats.
 
 ### 1.4 The spawn core (`PosixSpawn`)
@@ -248,6 +248,7 @@ Every row was measured on all three lanes (no unknown lane this time).
 | --- | --- | --- | --- |
 | `fork_exec` argument count (and the number in its TypeError) | 23 (`allow_vfork` last) | 22 | 22 |
 | audit event `_posixsubprocess.fork_exec` | not raised | raised | raised |
+| C-int argument of the wait/kill/group functions that does not fit 64 bits (either sign; added at ticket 3 review) | `OverflowError: Python int too large to convert to C long` | `OverflowError: Python int too large to convert to C int` | as 3.14 |
 | `sysconf`/`confstr` argument (or table value) with only `__index__` (added at ticket 2 review) | TypeError `configuration names must be strings or integers` | accepted | accepted |
 | out-of-range pid/int for `waitpid`, `wait4`, `waitid`, `kill`, `killpg`, `getpgid`, `getsid`, `setpgid`, `pidfd_open` | `OverflowError: signed integer is greater than maximum` | `OverflowError: Python int too large to convert to C int` | as 3.14 |
 | wrong argument count for `waitpid`, `kill`, `killpg`, `waitid`, `setpgid` | `waitpid() takes exactly 2 arguments (1 given)` | `waitpid expected 2 arguments, got 1` | as 3.14 |
