@@ -248,6 +248,7 @@ Every row was measured on all three lanes (no unknown lane this time).
 | --- | --- | --- | --- |
 | `fork_exec` argument count (and the number in its TypeError) | 23 (`allow_vfork` last) | 22 | 22 |
 | audit event `_posixsubprocess.fork_exec` | not raised | raised | raised |
+| `sysconf`/`confstr` argument (or table value) with only `__index__` (added at ticket 2 review) | TypeError `configuration names must be strings or integers` | accepted | accepted |
 | out-of-range pid/int for `waitpid`, `wait4`, `waitid`, `kill`, `killpg`, `getpgid`, `getsid`, `setpgid`, `pidfd_open` | `OverflowError: signed integer is greater than maximum` | `OverflowError: Python int too large to convert to C int` | as 3.14 |
 | wrong argument count for `waitpid`, `kill`, `killpg`, `waitid`, `setpgid` | `waitpid() takes exactly 2 arguments (1 given)` | `waitpid expected 2 arguments, got 1` | as 3.14 |
 | `Popen.wait(timeout=...)` uses `os.pidfd_open` + `select.poll` | no | no | yes (Python code; nothing to gate in the runtime) |

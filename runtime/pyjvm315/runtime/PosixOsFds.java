@@ -63,6 +63,7 @@ final class PosixOsFds {
         fn(m, "stat", (a, k) -> stat(a, k));
         fn(m, "lstat", (a, k) -> lstat(a, k));
         installPipes(m);
+        PosixOsProc.install(m);
     }
 
     /** {@code open(2)} flags and {@code lseek} whence values the shared table (PosixFiles) does not define. */

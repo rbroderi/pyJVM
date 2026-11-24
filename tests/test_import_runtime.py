@@ -143,7 +143,10 @@ os.remove(p)
 os.rmdir(d)
 '''
 
-POSIX_FFM_CLASSES = ("PosixNative", "PosixFds", "PosixOsFds", "PosixSelect", "PosixSelectModule", "PosixErrnoText")
+POSIX_FFM_CLASSES = (
+    "PosixNative", "PosixFds", "PosixOsFds", "PosixSelect", "PosixSelectModule", "PosixErrnoText",
+    "PosixProc", "PosixSpawn", "PosixOsProc", "PosixSubprocessModule", "PosixConfNames", "PosixStructSeq",
+)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the POSIX FFM classes must never load on Windows")
