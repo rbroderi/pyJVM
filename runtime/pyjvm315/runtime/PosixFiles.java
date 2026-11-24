@@ -21,7 +21,8 @@ import java.util.TreeMap;
 import java.util.stream.Stream;
 
 /**
- * The part of {@code posix} beyond importlib's needs: file descriptors (backed by FileChannel), directory and file
+ * The part of {@code posix} beyond importlib's needs: file descriptors (through {@link IoFd}: kernel descriptors on
+ * POSIX, FileChannel-backed entries on Windows and under {@code PYJVM_POSIX_FDS=nio}), directory and file
  * manipulation, {@code scandir}, process identity and the {@code os.O_*} / {@code F_OK} constants. Process creation,
  * signals, ownership changes, symbolic-link creation and terminal control are not implemented (they are left out, so
  * os.py's {@code _exists(...)} probes report them as absent, as on a platform without them).
@@ -234,7 +235,8 @@ final class PosixFiles {
     }
 
     /**
-     * fchmod. IoFd descriptors are FileChannels, not OS descriptors, so only the process streams (0-2, real descriptors)
+     * fchmod (Windows and {@code PYJVM_POSIX_FDS=nio} only; kernel mode registers its own, {@link PosixOsFds}).
+     * IoFd descriptors are FileChannels, not OS descriptors, so only the process streams (0-2, real descriptors)
      * go to libc fchmod; the others change the mode of the path the descriptor was opened with, but only if that path
      * still names the same file (BasicFileAttributes.fileKey, dev+inode, recorded at open). Known divergence from
      * fchmod: if the file was renamed or unlinked, or the name now belongs to another file, nothing is changed and

@@ -548,7 +548,7 @@ Review checklist: for every deleted line, a grep shows no Windows caller; the Wi
 4. **Finalizer-driven closes on reused numbers** (1.7). The generation guard covers `FileIO` and epoll; N1/N3 must call `adopt`, or their descriptors are unguarded (they would behave as in nio mode, not worse).
 5. **Performance**: an FFM call plus a copy per read/write, plus one `poll` per main-thread read/write once `_signal` is imported. Measured in tickets 1, 5, 12 with a +15% stop line.
 6. **Lane 3.14** is unmeasured until ticket 0 (U1).
-7. **JVM-owned descriptors** can now really be closed from Python (`os.closerange`, `os.close`); accepted by decision.
+7. **JVM-owned descriptors** can now really be closed from Python (`os.closerange`, `os.close`); accepted by decision. *(Note 2026-11-24, ticket 12/13: superseded by the owner's revised answer to Q1. `os.closerange` closes only descriptors 0-2 and those pyJVM adopted and skips other numbers above 2, so JVM-owned and inherited descriptors survive it; only an explicit `os.close(fd)` can still close them. Inherited non-close-on-exec descriptors therefore survive `closerange` and leak into children (an N1 obligation). The ticket 13 checklist item "JVM-owned descriptors closable" is to be read the same way.)*
 8. **Path stat on the import hot path** (ticket 4b): `os.stat` is now an FFM call per probe; importlib calls it thousands of times at start-up. Covered by ticket 5's cold-compile timing and ticket 12's numbers. (The earlier risk that `os.fstat` and `os.stat` disagree is removed by ticket 4b.)
 
 ## 7. 3.14 measurements and spike notes (filled in by tickets 0 and 1)

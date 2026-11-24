@@ -218,6 +218,108 @@ returned and which of them were the source of an inheritable duplicate; while su
 the state CPython is in at that point. Closing a handle by any route (`CloseHandle`, `_close` of an `open_osfhandle`
 descriptor, `DUPLICATE_CLOSE_SOURCE`) clears its entry, so spawns without pipes do not collect.
 
+On POSIX the same timing has a visible consequence for pipes. A `FileIO` or file object that owns the write end of an
+`os.pipe()` and is merely unreachable still holds the real descriptor until a collection runs its `__del__`, so a reader
+of the other end does not see EOF in the meantime (CPython closes it at the last reference). `gc.collect()` runs the
+pending finalizers and closes it; code that needs EOF at a point should close the write end explicitly. The late close
+is guarded against reused descriptor numbers (see "POSIX native layer"). Child processes are not covered yet: `subprocess`
+on POSIX arrives with N1, which must check this timing for its pipes the way `_winapi` does above.
+
+## POSIX native layer (Linux x86-64, glibc)
+
+On Linux, descriptors are the kernel's. The number `os.open`, `os.pipe`, `os.dup` and `os.dup2` return is the real
+descriptor number, and there is no Java-side table behind it: access mode, `O_APPEND`, offsets, close-on-exec and
+non-blocking mode live in the kernel, and `os.fstat(fd)` reports what the kernel reports. The classes are `PosixNative`
+(FFM plumbing, errno, host check), `PosixFds` (descriptor system calls), `PosixOsFds` (the `os` functions that exist only
+with kernel descriptors: `pipe`, `pipe2`, `dup2`, `pread`, `pwrite`, `closerange`, `readinto`, `get/set_inheritable`,
+`get/set_blocking`, `stat`/`lstat`, ids, `umask`, the extra `O_*`/`SEEK_*` constants), `PosixSelect` and
+`PosixSelectModule` (`select`, `poll`, `epoll`) and `PosixErrnoText` (the generated `strerror` table, errno 0-133, so
+messages stay English whatever locale the JVM launcher set). They are never initialised on Windows. The plan, the
+measurements and the per-ticket results are in `work/n0_plan.md`, `work/n0/` and `HANDOFF.md`.
+
+`IoFd` keeps its old static API and dispatches to `PosixFds` when `IoFd.KERNEL` is true. `KERNEL` is true on POSIX unless
+the environment variable `PYJVM_POSIX_FDS` is `nio` (the rollback to the older `FileChannel` table; Windows never reads
+the variable). In `nio` mode the functions that need real descriptors are absent (`hasattr(os, "pipe")` is false), as
+before. The host (Linux x86-64 glibc) is checked once, when the kernel layer is first used. Path based calls other than
+`os.stat`/`lstat`/`DirEntry.stat` (`listdir`, `rename`, `mkdir`, ...) still go through java.nio.
+
+**FFM conventions.** Every handle is built by `PosixNative.fn` and captures `errno` (`captureCallState("errno")`); only
+functions that cannot fail (`malloc`, `free`, `getuid`, `umask`, ...) do not. Variadic functions (`open`, `fcntl`) use
+`firstVariadicArg`. `errno` is read only after a call has failed, because a successful call leaves the previous value in
+the call-state segment. Each thread has one call-state segment and one 64 KiB buffer (grown up to 1 MiB; larger
+transfers use `malloc` so that a big `read` is one `read(2)`); no `Linker.Option.critical`, since these calls block.
+Descriptor arguments that do not fit a C `int` raise `OverflowError`; negative numbers go to the kernel and come back as
+`EBADF`. Paths are encoded as UTF-8 with `surrogateescape`; error messages carry the string the caller passed.
+
+**Descriptors.** Every descriptor the runtime creates is created close-on-exec atomically (`O_CLOEXEC`,
+`pipe2(O_CLOEXEC)`, `F_DUPFD_CLOEXEC`, `dup3`, `EPOLL_CLOEXEC`). Only what Python asks for is inheritable:
+`os.dup2(..., inheritable=True)` (the default, as in CPython), `os.pipe2(flags)` without `O_CLOEXEC`,
+`os.set_inheritable(fd, True)`. Descriptors 0-2 are ordinary: `os.close(1)` closes the real descriptor 1. `close`,
+`dup2` and `dup3` are never retried on `EINTR`. A write to a pipe whose reader is gone raises `BrokenPipeError`; the JVM
+survives `SIGPIPE`.
+
+**Descriptor lifetime and the generation guard.** `_io` objects close their descriptor from `__del__`, which runs after a
+collection, later than in CPython (see "Finalizers and reference-counting timing"). With real descriptors that late close
+could hit a number that was closed and reused meanwhile. `PosixFds` therefore keeps a generation per descriptor number it
+handed out: `adopt(fd)` after every successful descriptor-creating call (`open`, `dup`, `pipe`/`pipe2`, `epoll_create1`, the target of
+`dup2`) stores a fresh generation, `forget(fd)` runs before `close(2)`, and `gen(fd)` is 0 for an unknown number. A
+`FileIO` records the generation when it is initialised; a close reached from a finalizer (`GcFinalizable.inDel()`) that
+finds a different generation skips the `close(2)`. An explicit close always closes. The map is not a descriptor table;
+nothing reads it for I/O. `select.epoll` objects close their descriptor from a cleaner under the same rule. Limits (found
+in review, not fixed): only `close(2)` is guarded, so a buffered writer dropped after its descriptor was closed and
+reused flushes its pending bytes into the new descriptor when it is finalized; a number that was never adopted
+(generation 0: inherited, or opened by the JVM) is not guarded; after `os.dup2(g, f.fileno())` a finalizer-driven close
+of `f` leaves the target open. Code that creates descriptors (the N1 and N3 phases) must call `PosixFds.adopt`, or its
+descriptors are unguarded.
+
+**`os.closerange` and JVM-owned descriptors.** The JVM holds descriptors of its own (class path jars and others it
+opened), and a shell may pass more down. `os.closerange(low, high)` closes the numbers 0-2 and the numbers pyJVM
+adopted; it skips numbers above 2 that were never adopted, so JVM-internal and inherited descriptors survive
+`os.closerange(3, 1024)` (CPython would close them; its interpreter holds almost none, and closing the JVM's own
+descriptors crashed the JVM in a test). It walks 0-2 and the generation table, never the int range or `/proc`; above 2 a number is closed only if this call removed it from the table. An explicit
+`os.close(fd)` still closes any number, so a JVM-owned descriptor can still be closed by naming it, with the risk that
+implies. The consequence for child processes: an inherited descriptor that is not close-on-exec survives `closerange`
+and would be inherited by a spawned child, so process creation must not rely on `os.closerange` to close descriptors.
+
+**Signals and blocking calls.** Python handlers run only on the main thread, at the points that call
+`SignalModule.dispatchPending()`: before and between the slices of a blocking `read`/`write` on a descriptor, in
+`select`/`poll`/`epoll` waits, in `time.sleep` and `signal.pause`, and in `signal.signal`, `raise_signal` and
+`pthread_sigmask`. They do not run between bytecodes, so a pure-Python loop that does none of these never runs one. The
+OS may deliver a signal to any JVM thread, so a main thread parked in `read(2)` is generally not interrupted. Once
+`_signal` has been imported, a `read` or `write` on the main thread therefore first waits for readiness with `poll`: a
+0 ms probe (so ready and non-blocking descriptors cost one extra `poll`), then 50 ms slices, running pending handlers
+between slices. `select`, `poll` and `epoll` waits on the main thread use the same slices; other threads make one call
+with the full timeout. `EINTR` from `open`, `read`, `write`, `pread`, `pwrite`, `fsync`, `ftruncate`, `fstat`, `select`,
+`poll` and `epoll_wait` runs the pending handlers and retries (PEP 475), recomputing the remaining timeout from a
+`System.nanoTime()` deadline. A handler that raises propagates out of the call before any byte was transferred. No
+handler runs between a system call and the copy-out of its result, so a handler may itself use `os.read`/`os.write`.
+`signal.set_wakeup_fd` works on POSIX; a failed wakeup write is reported on stderr with the lane's header. Limits:
+- a handler can run up to about 50 ms late while the main thread is blocked in a read, write or wait;
+- handlers run only at the points above, not at bytecode boundaries;
+- a blocking `write` of more than the pipe capacity cannot be interrupted once it is inside `write(2)` (the pre-wait
+  only guarantees the pipe is writable when the write starts), and an `EINTR` retry does not repeat the pre-wait;
+- other threads never slice;
+- an inherited `SIGINT` set to `SIG_IGN` (a background job of a non-interactive shell) is kept, as in CPython; in that
+  case a later `signal.signal(SIGINT, handler)` updates `getsignal` but HotSpot never installs an OS handler, so a real
+  Ctrl-C or an outside `kill -INT` does not run the handler (signals raised inside the process, such as
+  `os.kill(os.getpid(), ...)` and `raise_signal`, do). The `nio` rollback installs `default_int_handler` over the
+  inherited `SIG_IGN`;
+- there is no `fork`; processes arrive with N1 (`posix_spawn`).
+
+**Non-blocking descriptors and re-entrancy in `_io`.** With real descriptors `os.set_blocking(fd, False)` and
+`O_NONBLOCK` work: `FileIO` and the buffered classes return `None` or raise `BlockingIOError` (with
+`characters_written`) as CPython does (case `io_nonblocking`). A buffered object's methods hold a lock like CPython's
+`ENTER_BUFFERED`: a signal handler that calls into the same buffered object on the same thread while it is inside a
+blocking read or write gets `RuntimeError: reentrant call inside <...>`, and another thread waits. This is in the shared
+`_io` code, so Windows has it too. `TextIOWrapper.read()` on an empty non-blocking pipe raises the 3.13 `TypeError` on
+every lane (3.14+ raises `BlockingIOError`): a known gap.
+
+**Emulated working directory.** The JVM cannot `chdir(2)` (its own relative class-path entries would break), so
+`os.chdir` sets `PosixModule.cwd` and relative paths are resolved by string join (`cwd + "/" + path`, no
+normalisation, so `..` is resolved by the kernel through symlinks). The process's real working directory does not
+change. Anything that hands a relative path or the working directory to the kernel or to a child process must account
+for this; `posix_spawn` (N1) has to add a chdir file action for the emulated directory whenever it is set.
+
 ## Windows overlapped I/O (`_overlapped`, `_socket`, asyncio's ProactorEventLoop)
 
 `WindowsIocp` (kernel32) and `WindowsSockets` (ws2_32) are Foreign Function and Memory API layers; every call captures

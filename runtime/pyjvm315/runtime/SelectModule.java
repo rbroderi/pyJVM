@@ -9,11 +9,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A minimal {@code select} module: {@code select()} and {@code poll()} over the descriptors this runtime has (regular
- * files and directories, which POSIX always reports ready, and the standard streams, where stdin is readable when the
- * JVM reports buffered input). There are no pipes or sockets here, so there is no {@code epoll}/{@code kqueue}. A wait
- * with nothing ready runs signal handlers as signals arrive. On Windows only {@code select()} exists, over real Winsock
- * sockets ({@link WindowsSockets#select}); anything that is not a socket fails with the system's error, as in CPython.
+ * The {@code select} module. On POSIX in kernel mode ({@link IoFd#KERNEL}, the default) {@link #create} returns
+ * {@link PosixSelectModule}: {@code select()}, {@code poll()} and {@code epoll} over real kernel descriptors (pipes,
+ * files, ttys), with the wait sliced so signal handlers run. The code below is the older emulation, used under
+ * {@code PYJVM_POSIX_FDS=nio} on POSIX: {@code select()} and {@code poll()} over the descriptors that table has
+ * (regular files and directories, which POSIX always reports ready, and the standard streams, where stdin is readable
+ * when the JVM reports buffered input), with no pipes, sockets or {@code epoll}/{@code kqueue}. On Windows only
+ * {@code select()} exists, over real Winsock sockets ({@link WindowsSockets#select}); anything that is not a socket
+ * fails with the system's error, as in CPython.
  */
 final class SelectModule {
     private SelectModule() {}

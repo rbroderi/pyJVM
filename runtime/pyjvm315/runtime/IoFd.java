@@ -20,9 +20,12 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * The file-descriptor table behind {@code posix.open/read/write/...} and {@code _io.FileIO}. Descriptors 0-2 are the
- * process streams; every other descriptor is a FileChannel (or a directory). {@code dup} shares the entry, so the
- * offset is shared as on a real descriptor.
+ * The file-descriptor layer behind {@code posix.open/read/write/...} and {@code _io.FileIO}. On POSIX (the default,
+ * {@link #KERNEL}) every call goes to {@link PosixFds} and the Python-visible number is the kernel's descriptor, so
+ * pipes, {@code dup2}, inheritance flags and non-blocking mode are real; this class only dispatches. On Windows, and on
+ * POSIX with {@code PYJVM_POSIX_FDS=nio}, the table below is used: descriptors 0-2 are the process streams; every other
+ * descriptor is a FileChannel (or a directory, or a HANDLE-backed pipe end on Windows). {@code dup} shares the entry, so
+ * the offset is shared as on a real descriptor.
  */
 final class IoFd {
     private IoFd() {}
