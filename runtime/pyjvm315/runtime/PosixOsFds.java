@@ -62,6 +62,103 @@ final class PosixOsFds {
         fn(m, "get_terminal_size", (a, k) -> terminalSize(m, a));
         fn(m, "stat", (a, k) -> stat(a, k));
         fn(m, "lstat", (a, k) -> lstat(a, k));
+        installPipes(m);
+    }
+
+    /** {@code open(2)} flags and {@code lseek} whence values the shared table (PosixFiles) does not define. */
+    private static final String[] EXTRA_CONSTANT_NAMES = {"O_ACCMODE", "O_ASYNC", "O_DIRECT", "O_NOATIME", "O_PATH", "O_TMPFILE",
+        "O_RSYNC", "O_FSYNC", "O_LARGEFILE", "SEEK_DATA", "SEEK_HOLE"};
+    private static final long[] EXTRA_CONSTANT_VALUES = {3, 8192, 16384, 262144, 2097152, 4259840, 1052672, 1052672, 0, 3, 4};
+
+    /** pipe, pipe2, dup2, pread, pwrite, closerange, readinto (3.14+) and their constants, with CPython's argument errors. */
+    private static void installPipes(PyModule m) {
+        for (int i = 0; i < EXTRA_CONSTANT_NAMES.length; i++) m.attrs.put(EXTRA_CONSTANT_NAMES[i], EXTRA_CONSTANT_VALUES[i]);
+        fn(m, "pipe", (a, k) -> {
+            noKeywords("posix.pipe", k);
+            if (!a.isEmpty()) throw new PyException("TypeError", "posix.pipe() takes no arguments (" + a.size() + " given)");
+            long[] p = PosixFds.pipe(PosixFds.O_CLOEXEC);
+            return tuple(p[0], p[1]);
+        });
+        fn(m, "pipe2", (a, k) -> {
+            noKeywords("posix.pipe2", k);
+            if (a.size() != 1) throw new PyException("TypeError", "posix.pipe2() takes exactly one argument (" + a.size() + " given)");
+            long[] p = PosixFds.pipe(PosixFds.cfd(PosixFiles.fd(a.get(0))));       // flags verbatim: the kernel rejects bad ones
+            return tuple(p[0], p[1]);
+        });
+        fn(m, "dup2", (a, k) -> dup2(a, k));
+        fn(m, "pread", (a, k) -> {
+            positional("pread", a, k, 3);
+            long fd = PosixFds.cfd(PosixFiles.fd(a.get(0)));
+            long len = IoUtil.asLong(a.get(1)), off = offset(a.get(2));
+            if (len < 0) throw PosixNative.osError(22, null);
+            return new PyBytes(PosixFds.pread(fd, (int) Math.min(len, 1 << 30), off));
+        });
+        fn(m, "pwrite", (a, k) -> {
+            positional("pwrite", a, k, 3);
+            long fd = PosixFds.cfd(PosixFiles.fd(a.get(0)));
+            byte[] b = IoUtil.bytesLike(a.get(1));
+            return (long) PosixFds.pwrite(fd, b, 0, b.length, offset(a.get(2)));
+        });
+        fn(m, "closerange", (a, k) -> {
+            positional("closerange", a, k, 2);
+            int low = PosixFds.cfd(PosixFiles.fd(a.get(0))), high = PosixFds.cfd(PosixFiles.fd(a.get(1)));
+            PosixFds.closeRange(low, high);
+            return null;
+        });
+        if (LangVersion.atLeast(3, 14)) fn(m, "readinto", (a, k) -> readinto(a, k));
+    }
+
+    private static void noKeywords(String qualified, Map<Object, Object> k) {
+        if (!k.isEmpty()) throw new PyException("TypeError", qualified + "() takes no keyword arguments");
+    }
+
+    /** The argument check of a positional-only function with a fixed count. */
+    private static void positional(String name, List<Object> a, Map<Object, Object> k, int n) {
+        noKeywords("posix." + name, k);
+        if (a.size() != n) throw new PyException("TypeError", name + " expected " + n + " arguments, got " + a.size());
+    }
+
+    /** An {@code off_t}: out of the 64-bit range is OverflowError "C long" (not the ssize_t text of {@code IoUtil.asLong}). */
+    private static long offset(Object o) {
+        java.math.BigInteger b = BuiltinsExtra.rangeIndex(o);
+        if (b.bitLength() > 63) throw new PyException("OverflowError", "Python int too large to convert to C long");
+        return b.longValue();
+    }
+
+    private static final String[] DUP2_NAMES = {"fd", "fd2", "inheritable"};
+
+    /** {@code os.dup2(fd, fd2, inheritable=True)}: all three by position or keyword, in Argument Clinic's order of checks. */
+    private static Object dup2(List<Object> a, Map<Object, Object> k) {
+        int given = a.size() + k.size();                  // Argument Clinic counts keywords too ("keyword " when none is positional)
+        if (given > 3) throw new PyException("TypeError", "dup2() takes at most 3 " + (a.isEmpty() ? "keyword " : "") + "arguments (" + given + " given)");
+        Object[] v = new Object[3];
+        boolean[] have = new boolean[3];
+        for (int i = 0; i < a.size(); i++) { v[i] = a.get(i); have[i] = true; }
+        int positionalCount = a.size();
+        for (int i = positionalCount; i < 3; i++) {
+            if (k.containsKey(DUP2_NAMES[i])) { v[i] = k.get(DUP2_NAMES[i]); have[i] = true; }
+            else if (i < 2) throw new PyException("TypeError", "dup2() missing required argument '" + DUP2_NAMES[i] + "' (pos " + (i + 1) + ")");
+        }
+        for (Object key : k.keySet()) {                  // what is left over: a name that does not exist, or one given twice
+            int i = java.util.Arrays.asList(DUP2_NAMES).indexOf(key);
+            if (i < 0) throw new PyException("TypeError", "dup2() got an unexpected keyword argument '" + key + "'");
+            if (i < positionalCount) throw new PyException("TypeError", "argument for dup2() given by name ('" + DUP2_NAMES[i] + "') and position (" + (i + 1) + ")");
+        }
+        long fd = PosixFds.cfd(PosixFiles.fd(v[0])), fd2 = PosixFds.cfd(PosixFiles.fd(v[1]));
+        return PosixFds.dup2(fd, fd2, !have[2] || PyRuntime.truth(v[2]));
+    }
+
+    /** {@code os.readinto(fd, buffer)}: one read of up to len(buffer) bytes into a writable buffer; returns the count. */
+    private static Object readinto(List<Object> a, Map<Object, Object> k) {
+        positional("readinto", a, k, 2);
+        long fd = PosixFds.cfd(PosixFiles.fd(a.get(0)));
+        Object target = NativeSubclass.unwrap(a.get(1));
+        boolean ok = target instanceof PyByteArray || (target instanceof PyMemoryView v && !v.readonly() && v.contiguous()) || ArrayModule.asArray(target) != null;
+        if (!ok) throw new PyException("TypeError", "readinto() argument 2 must be read-write bytes-like object, not "
+            + (target == null ? "None" : PyRuntime.typeName(a.get(1))));
+        byte[] got = PosixFds.read(fd, Math.min(IoUtil.bufferSize(target), 1 << 30));
+        IoUtil.fill(target, got, 0, got.length);
+        return (long) got.length;
     }
 
     // ---- stat, lstat -------------------------------------------------------------------------------------------

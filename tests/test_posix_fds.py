@@ -134,6 +134,15 @@ def test_nio_rollback_is_really_nio(jvm_kit, tmp_path):
     assert not (proc.returncode == 0 and proc.stdout == "/dev/null\n"), (proc.stdout, proc.stderr)
 
 
+def test_nio_rollback_has_no_pipe_api(jvm_kit, tmp_path):
+    # the new descriptor functions exist only on kernel descriptors: nothing is half-registered under the rollback
+    main = tmp_path / "main.py"
+    main.write_text('import os\nprint([hasattr(os, n) for n in ("pipe", "pipe2", "dup2", "pread", "pwrite", "closerange")])\n', encoding="utf-8")
+    proc = _run_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[False, False, False, False, False, False]\n"
+
+
 def test_round_trip_nio_rollback_matches_cpython(jvm_kit, tmp_path, monkeypatch):
     runtime, selfhosted = jvm_kit
     main = tmp_path / "main.py"

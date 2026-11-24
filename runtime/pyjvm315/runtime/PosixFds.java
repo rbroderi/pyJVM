@@ -50,6 +50,11 @@ final class PosixFds {
     private static final MethodHandle CLOSE = PosixNative.fn("close", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
     private static final MethodHandle READ = PosixNative.fn("read", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
     private static final MethodHandle WRITE = PosixNative.fn("write", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
+    private static final MethodHandle PREAD = PosixNative.fn("pread", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG));
+    private static final MethodHandle PWRITE = PosixNative.fn("pwrite", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG));
+    private static final MethodHandle PIPE2 = PosixNative.fn("pipe2", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+    private static final MethodHandle DUP2 = PosixNative.fn("dup2", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
+    private static final MethodHandle DUP3 = PosixNative.fn("dup3", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
     private static final MethodHandle LSEEK = PosixNative.fn("lseek", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_INT));
     private static final MethodHandle FSTAT = PosixNative.fn("fstat", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS));
     private static final MethodHandle FSTATAT = PosixNative.fn("fstatat", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
@@ -186,11 +191,70 @@ final class PosixFds {
         return r;
     }
 
+    /** {@code pipe2(2)} with the caller's flags verbatim (CPython's {@code os.pipe} passes O_CLOEXEC); both ends are adopted. */
+    static long[] pipe(int flags) {
+        PosixNative.Tl t = PosixNative.tl();
+        MemorySegment p = t.buf;
+        int r;
+        try { r = (int) PIPE2.invokeExact(t.cs, p, flags); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+        if (r != 0) throw PosixNative.osError(PosixNative.errno(t.cs), null);
+        int rd = p.get(JAVA_INT, 0), wr = p.get(JAVA_INT, 4);     // read before anything can reuse the buffer
+        adopt(rd);
+        adopt(wr);
+        return new long[]{rd, wr};
+    }
+
+    /**
+     * {@code os.dup2}: {@code dup2(2)} when inheritable, else {@code dup3(2)} with O_CLOEXEC (atomic). Never retried on
+     * EINTR. Returns {@code fd2}; a new generation is recorded for it unless {@code fd == fd2} (nothing changed then).
+     */
+    static long dup2(long fd, long fd2, boolean inheritable) {
+        int f = cfd(fd), g = cfd(fd2);
+        MemorySegment cs = PosixNative.tl().cs;
+        int r;
+        try {
+            r = inheritable ? (int) DUP2.invokeExact(cs, f, g) : (int) DUP3.invokeExact(cs, f, g, O_CLOEXEC);
+        } catch (Throwable x) { throw PosixNative.rethrow(x); }
+        if (r < 0) throw PosixNative.osError(PosixNative.errno(cs), null);
+        if (f != g) adopt(r);
+        return r;
+    }
+
+    /**
+     * {@code os.closerange(low, high)}: closes the open descriptors in {@code [max(low, 0), high)}, errors ignored. Only
+     * the numbers listed in /proc/self/fd are visited (never a loop over the int range). The directory listing itself
+     * holds a descriptor that is already closed when the numbers are visited; closing it again is a harmless EBADF.
+     */
+    static void closeRange(int low, int high) {
+        String[] names = new java.io.File("/proc/self/fd").list();
+        if (names == null) throw new PyException("OSError", "closerange: cannot list /proc/self/fd");
+        int from = Math.max(low, 0);
+        MemorySegment cs = PosixNative.tl().cs;
+        for (String s : names) {
+            int fd;
+            try { fd = Integer.parseInt(s); } catch (NumberFormatException e) { continue; }
+            if (fd < from || fd >= high) continue;
+            forget(fd);
+            try { int ignored = (int) CLOSE.invokeExact(cs, fd); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+        }
+    }
+
     /** One {@code read(2)} of up to {@code n} bytes; a short read is returned as is, an empty array at end of file. */
     static byte[] read(long fd, int n) {
         int f = cfd(fd);
         if (n < 0) return new byte[0];
         if (n > 0) awaitReady(f, POLLIN);       // n == 0 still reaches read(2), so a bad descriptor raises EBADF as in CPython
+        return readCore(f, n, false, 0);
+    }
+
+    /** {@code pread(2)}: as {@link #read} without the signal pre-wait (positional reads are for seekable files); the offset is not moved. */
+    static byte[] pread(long fd, int n, long offset) {
+        int f = cfd(fd);
+        if (n < 0) return new byte[0];
+        return readCore(f, n, true, offset);
+    }
+
+    private static byte[] readCore(int f, int n, boolean at, long offset) {
         PosixNative.Tl t = PosixNative.tl();
         boolean big = n > BUF_MAX;
         MemorySegment own = big ? PosixNative.nativeAlloc(n) : null;
@@ -198,7 +262,10 @@ final class PosixFds {
             while (true) {
                 MemorySegment buf = big ? own : ioBuf(t, n);
                 long r;
-                try { r = (long) READ.invokeExact(t.cs, f, buf, (long) n); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+                try {
+                    if (at) r = (long) PREAD.invokeExact(t.cs, f, buf, (long) n, offset);
+                    else r = (long) READ.invokeExact(t.cs, f, buf, (long) n);
+                } catch (Throwable x) { throw PosixNative.rethrow(x); }
                 if (r >= 0) {
                     byte[] out = new byte[(int) r];
                     MemorySegment.copy(buf, JAVA_BYTE, 0, out, 0, (int) r);
@@ -217,6 +284,13 @@ final class PosixFds {
     static int write(long fd, byte[] b, int off, int len) {
         int f = cfd(fd);
         if (len > 0) awaitReady(f, POLLOUT);
+        return writeCore(f, b, off, len, false, 0);
+    }
+
+    /** {@code pwrite(2)}: as {@link #write} without the signal pre-wait; the offset is not moved. */
+    static int pwrite(long fd, byte[] b, int off, int len, long offset) { return writeCore(cfd(fd), b, off, len, true, offset); }
+
+    private static int writeCore(int f, byte[] b, int off, int len, boolean at, long offset) {
         PosixNative.Tl t = PosixNative.tl();
         boolean big = len > BUF_MAX;
         MemorySegment own = big ? PosixNative.nativeAlloc(len) : null;
@@ -225,7 +299,10 @@ final class PosixFds {
                 MemorySegment buf = big ? own : ioBuf(t, len);
                 MemorySegment.copy(b, off, buf, JAVA_BYTE, 0, len);     // (again) after handlers ran: they may reuse buf
                 long r;
-                try { r = (long) WRITE.invokeExact(t.cs, f, buf, (long) len); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+                try {
+                    if (at) r = (long) PWRITE.invokeExact(t.cs, f, buf, (long) len, offset);
+                    else r = (long) WRITE.invokeExact(t.cs, f, buf, (long) len);
+                } catch (Throwable x) { throw PosixNative.rethrow(x); }
                 if (r >= 0) return (int) r;
                 int e = PosixNative.errno(t.cs);
                 if (e != EINTR) throw PosixNative.osError(e, null);
