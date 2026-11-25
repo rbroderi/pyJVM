@@ -314,7 +314,7 @@ def no_child():
         return False
     except ChildProcessError:
         return True
-subprocess.run(["true"])                  # warm-up: lazily opened JDK descriptors
+subprocess.run(["true"], timeout=30)                  # warm-up: lazily opened JDK descriptors
 before = count()
 def show(label, f):
     try:
@@ -323,12 +323,12 @@ def show(label, f):
     except Exception as e:
         print(label, type(e).__name__, e)
     print(label, count() == before, no_child())
-show("preexec_fn", lambda: subprocess.run(["true"], preexec_fn=lambda: None))
-show("umask", lambda: subprocess.run(["true"], umask=0o77))
+show("preexec_fn", lambda: subprocess.run(["true"], timeout=30, preexec_fn=lambda: None))
+show("umask", lambda: subprocess.run(["true"], timeout=30, umask=0o77))
 # subprocess itself rejects these before fork_exec (pyJVM has no os.setreuid/setregid/setgroups)
-show("user", lambda: subprocess.run(["true"], user=os.getuid()))
-show("group", lambda: subprocess.run(["true"], group=os.getgid()))
-show("extra_groups", lambda: subprocess.run(["true"], extra_groups=[]))
+show("user", lambda: subprocess.run(["true"], timeout=30, user=os.getuid()))
+show("group", lambda: subprocess.run(["true"], timeout=30, group=os.getgid()))
+show("extra_groups", lambda: subprocess.run(["true"], timeout=30, extra_groups=[]))
 # fork_exec called directly: the four NotImplementedError texts
 def direct(gid=None, extra=None, uid=None, umask=-1, preexec=None):
     r, w = os.pipe()
@@ -394,7 +394,7 @@ child = ["sh", "-c", os.environ["CHILD_FDS"]]
 for label, kw in (("nokeep", dict(close_fds=False)), ("default", dict()),
                   ("closefds", dict(close_fds=True, pass_fds=(w,)))):
     sys.stdout.flush()
-    code = subprocess.run(child, **kw).returncode
+    code = subprocess.run(child, timeout=30, **kw).returncode
     print("done", label, code)
     sys.stdout.flush()
 print("fds", inherited, w, private)
@@ -427,3 +427,87 @@ def test_fork_exec_children_do_not_inherit_the_jvms_descriptors(jvm_kit, tmp_pat
             blocks[label] = sorted(current)
             current = []
     assert blocks == {"nokeep": sorted([inherited, w]), "default": [], "closefds": [w]}, proc.stdout
+
+
+# N1 ticket 7: failed starts. (h) every failure returns a stand-in child that subprocess reaps, so nothing is left to
+# wait for and no descriptor leaks; (i) the audit events of subprocess.run (lane-dependent: _posixsubprocess.fork_exec
+# from 3.14 on), compared with CPython. No signal is sent; every child exits on its own.
+
+FAILED_STARTS_SCRIPT = '''
+import os, subprocess
+def count():
+    return len(os.listdir("/proc/self/fd"))
+try:
+    subprocess.run(["/no/such"], timeout=30)    # warm-up: lazily opened descriptors
+except FileNotFoundError:
+    pass
+before = count()
+errors = set()
+for i in range(100):
+    try:
+        subprocess.run(["/no/such"], timeout=30)
+    except OSError as e:
+        errors.add((type(e).__name__, e.errno, e.filename))
+print(sorted(errors))
+try:
+    os.waitpid(-1, os.WNOHANG)
+    print("child left")
+except ChildProcessError as e:
+    print("no children", e.errno)
+print(count() == before)
+'''
+
+
+def test_failed_starts_leave_no_child(jvm_kit, tmp_path, monkeypatch):
+    _compare(jvm_kit, tmp_path, monkeypatch, FAILED_STARTS_SCRIPT)
+
+
+AUDIT_SCRIPT = '''
+import os, subprocess, sys, _posixsubprocess
+names = ("subprocess.Popen", "_posixsubprocess.fork_exec", "os.posix_spawn")
+seen = []
+def hook(ev, args):
+    if ev in names:
+        seen.append((ev, args))
+sys.addaudithook(hook)
+subprocess.run(["true"], timeout=30)
+subprocess.run(["true"], close_fds=False, timeout=30)         # bare name: still fork_exec (plan 3.7)
+subprocess.run(["/bin/true"], close_fds=False, timeout=30)    # os.posix_spawn
+try:
+    subprocess.run(["/no/such"], timeout=30)
+except FileNotFoundError:
+    pass
+for ev, args in seen:
+    print(ev, args)
+# fork_exec called directly: no event when one of CPython's checks fails first
+NARGS = 23 if sys.version_info[:2] == (3, 13) else 22
+def direct(args, exes, keep, env_list=None, pre=None):
+    seen.clear()
+    r, w = os.pipe()
+    try:
+        a = [args, exes, True, keep, None, env_list, -1, -1, -1, -1, -1, -1, r, w, True, False, -1, None, None, None, -1, pre]
+        _posixsubprocess.fork_exec(*(a + [True] * (NARGS - 22)))
+    except Exception as e:
+        print(type(e).__name__, e, len(seen))
+    finally:
+        os.close(r)
+        os.close(w)
+direct([b"true"], (b"/bin/true",), [3])
+direct([b"true"], (b"/bin/true",), (-1,))
+direct([5], (b"/bin/true",), ())
+direct([b"true"], ("/bin/true",), ())
+direct([b"true"], (b"/bin/true",), (), ["A=1"])
+direct([5], (b"/bin/true",), (), pre=lambda: None)          # CPython's error wins over preexec_fn
+direct([b"true"], (b"/bin/true",), (-1,), pre=lambda: None)
+# args None: a NULL argv in CPython (an empty one for the kernel); /bin/true still runs
+r, w = os.pipe()
+a = [None, (b"/bin/true",), True, (w,), None, None, -1, -1, -1, -1, -1, -1, r, w, True, False, -1, None, None, None, -1, None]
+pid = _posixsubprocess.fork_exec(*(a + [True] * (NARGS - 22)))
+os.close(w)
+print("args None", os.read(r, 100), os.waitpid(pid, 0)[1])
+os.close(r)
+'''
+
+
+def test_fork_exec_audit_events(jvm_kit, tmp_path, monkeypatch):
+    _compare(jvm_kit, tmp_path, monkeypatch, AUDIT_SCRIPT)

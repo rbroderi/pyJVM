@@ -553,6 +553,26 @@ final class PosixFds {
         } catch (Throwable x) { throw PosixNative.rethrow(x); }
     }
 
+    /**
+     * {@code fstatat(AT_FDCWD, path, ..., 0)} of a NUL-free byte path taken as it is (no emulated-cwd join): the
+     * {@code st_mode}, or {@code -errno}; never raises for an OS error, EINTR retried without running handlers. For the
+     * parent-side chdir diagnosis of {@code fork_exec} (N1 plan 1.7 step 6).
+     */
+    static int statModeOrNeg(byte[] path) {
+        PosixNative.Tl t = PosixNative.tl();
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment p = a.allocate(path.length + 1L);      // zero-filled: the last byte is the NUL
+            MemorySegment.copy(path, 0, p, JAVA_BYTE, 0, path.length);
+            MemorySegment st = a.allocate(STAT_SIZE, 8);
+            while (true) {
+                int r = (int) FSTATAT.invokeExact(t.cs, AT_FDCWD, p, st, 0);
+                if (r == 0) return st.get(JAVA_INT, 24);
+                int e = PosixNative.errno(t.cs);
+                if (e != EINTR) return -e;
+            }
+        } catch (Throwable x) { throw PosixNative.rethrow(x); }
+    }
+
     /** {@code fcntl(fd, cmd, 0)} for a getter; -1 is an error (never a flag set). */
     private static int fcntlGet(int fd, int cmd) {
         MemorySegment cs = PosixNative.tl().cs;

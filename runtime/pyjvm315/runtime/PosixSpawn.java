@@ -84,7 +84,7 @@ final class PosixSpawn {
     static final class Plan {
         /** The program (no NUL inside; the caller checks). */
         byte[] path;
-        /** The argument vector; null passes a NULL {@code argv} pointer. */
+        /** The argument vector; null is an empty vector (glibc counts {@code argv}, so a NULL pointer would crash it). */
         byte[][] argv;
         /** {@code NAME=value} entries; null passes libc's live {@code environ}, read at call time. */
         byte[][] envp;
@@ -138,7 +138,7 @@ final class PosixSpawn {
         try (Arena a = Arena.ofConfined()) {
             // every buffer first: nothing below allocates or encodes once the libc objects are initialised
             MemorySegment path = cString(a, p.path);
-            MemorySegment argv = p.argv == null ? MemorySegment.NULL : strArray(a, p.argv);
+            MemorySegment argv = strArray(a, p.argv == null ? new byte[0][] : p.argv);
             MemorySegment envp = p.envp == null ? MemorySegment.NULL : strArray(a, p.envp);
             MemorySegment[] actionPaths = new MemorySegment[actions.size()];
             for (int i = 0; i < actionPaths.length; i++) {

@@ -35,6 +35,8 @@ final class PosixProc {
     private static final MethodHandle SETPGID = PosixNative.fn("setpgid", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
     private static final MethodHandle GETPGRP = PosixNative.fnNoCapture("getpgrp", FunctionDescriptor.of(JAVA_INT));
     private static final MethodHandle GETPID = PosixNative.fnNoCapture("getpid", FunctionDescriptor.of(JAVA_INT));
+    private static final MethodHandle FACCESSAT = PosixNative.fn("faccessat", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
+    private static final int AT_FDCWD = -100;
 
     private static final MethodHandle POLL = PosixNative.fn("poll", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT));
     private static final MethodHandle SYSCALL_PIDFD = PosixNative.fn("syscall", FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT),
@@ -273,6 +275,20 @@ final class PosixProc {
 
     static int getpid() {
         try { return (int) GETPID.invokeExact(); } catch (Throwable t) { throw PosixNative.rethrow(t); }
+    }
+
+    /**
+     * {@code faccessat(AT_FDCWD, path, mode, flags)} of a NUL-free byte path taken as it is: 0, or {@code -errno}
+     * (no exception). For the chdir diagnosis of {@code fork_exec} (plan 1.7 step 6).
+     */
+    static int faccessat(byte[] path, int mode, int flags) {
+        MemorySegment cs = PosixNative.tl().cs;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment p = a.allocate(path.length + 1L);      // zero-filled: the last byte is the NUL
+            MemorySegment.copy(path, 0, p, JAVA_BYTE, 0, path.length);
+            int r = (int) FACCESSAT.invokeExact(cs, AT_FDCWD, p, mode, flags);
+            return r == 0 ? 0 : -PosixNative.errno(cs);
+        } catch (Throwable t) { throw PosixNative.rethrow(t); }
     }
 
     private static int call1(MethodHandle h, int a) {
