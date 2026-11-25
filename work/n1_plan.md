@@ -252,6 +252,7 @@ Every row was measured on all three lanes (no unknown lane this time).
 | `sysconf`/`confstr` argument (or table value) with only `__index__` (added at ticket 2 review) | TypeError `configuration names must be strings or integers` | accepted | accepted |
 | out-of-range pid/int for `waitpid`, `wait4`, `waitid`, `kill`, `killpg`, `getpgid`, `getsid`, `setpgid`, `pidfd_open` | `OverflowError: signed integer is greater than maximum` | `OverflowError: Python int too large to convert to C int` | as 3.14 |
 | wrong argument count for `waitpid`, `kill`, `killpg`, `waitid`, `setpgid` | `waitpid() takes exactly 2 arguments (1 given)` | `waitpid expected 2 arguments, got 1` | as 3.14 |
+| `pidfd_open` `flags` (C unsigned int; added at ticket 5, measured): non-int / negative / above 32 bits / above 64 bits | `an integer is required` / `ValueError: value must be positive` / `Python int too large for C unsigned int` / `... to convert to C unsigned long` | `'<type>' object cannot be interpreted as an integer` / `ValueError: Cannot convert negative int` / `Python int too large for C unsigned int` (both) | as 3.14 |
 | `Popen.wait(timeout=...)` uses `os.pidfd_open` + `select.poll` | no | no | yes (Python code; nothing to gate in the runtime) |
 Gate the first four with `LangVersion.atLeast(3, 14)`. `wait3(2**40)`, the W* macros, `sysconf` and `confstr` use the "C int" text on every lane. Nothing else may be guessed: an item not in this table is lane-independent as measured.
 

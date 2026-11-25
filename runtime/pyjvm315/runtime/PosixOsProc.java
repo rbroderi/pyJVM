@@ -393,6 +393,35 @@ final class PosixOsProc {
             if (r < 0) throw osErr(r);
             return null;
         });
+        fn(m, "pidfd_open", (a, k) -> {
+            Object[] v = NativeArgs.parse("pidfd_open", a, k, new String[]{"pid", "flags"}, 1, 0);
+            int pid = cArg(v[0]);
+            int flags = v[1] == NativeArgs.MISSING ? 0 : uintArg(v[1]);
+            long fd = PosixProc.pidfdOpen(pid, flags);
+            if (fd < 0) throw osErr(fd);
+            PosixFds.adopt((int) fd);
+            return fd;
+        });
+    }
+
+    /**
+     * A C {@code unsigned int} argument ({@code pidfd_open}'s flags) with the lane's texts (measured): 3.13 TypeError
+     * "an integer is required", ValueError "value must be positive", OverflowError "... for C unsigned int" (beyond 64 bits
+     * "... to convert to C unsigned long"); 3.14+ the integer TypeError, "Cannot convert negative int", and "Python int too
+     * large for C unsigned int" for every value above the range.
+     */
+    private static int uintArg(Object o) {
+        Object u = NativeSubclass.unwrap(o);
+        boolean v314 = LangVersion.atLeast(3, 14);
+        if (!v314 && !PyRuntime.isIntLike(u)) throw new PyException("TypeError", "an integer is required");
+        java.math.BigInteger n;
+        if (u instanceof java.math.BigInteger b) n = b;
+        else if (PyRuntime.isIntLike(u)) n = java.math.BigInteger.valueOf(PosixFiles.fd(o));
+        else n = BuiltinsExtra.rangeIndex(u);   // __index__ (3.14+): a huge result is the OverflowError below, not a TypeError
+        if (n.signum() < 0) throw new PyException("ValueError", v314 ? "Cannot convert negative int" : "value must be positive");
+        if (n.bitLength() > 32) throw new PyException("OverflowError", !v314 && n.bitLength() > 64
+            ? "Python int too large to convert to C unsigned long" : "Python int too large for C unsigned int");
+        return (int) n.longValue();
     }
 
     /** A plain dict, new on every module creation, built from the generated arrays. */

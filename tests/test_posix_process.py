@@ -2,7 +2,8 @@
 """Process creation on Linux (N1): os.posix_spawn[p] through glibc's posix_spawn, the emulated cwd, the live C
 environment, no leaked descriptors or children, and the JVM's own inheritable descriptors kept out of children.
 
-SAFETY (n1_plan 2.3): nothing here sends a signal; every child is waited for by the script that started it."""
+SAFETY (n1_plan 2.3): every child is waited for by the script that started it; the only signal sent is SIGKILL to such a
+child by pid (test_waits_on_two_threads, only if its waiting thread is still blocked after 30 s)."""
 from __future__ import annotations
 
 import os
@@ -226,3 +227,74 @@ def test_children_do_not_inherit_the_jvms_descriptors(jvm_kit, tmp_path):
         seen = sorted(int(line.split()[1]) for line in block)
         assert str(seen) == expect, proc.stdout
         assert any(line.endswith(str(shared)) for line in block), proc.stdout
+
+
+# N1 ticket 5: blocking waits on the main thread with Python signal handlers active (plan 1.5). Every child is started
+# by the script, exits on its own within 1 s and is waited for; the only signal is SIGKILL to the script's own child if
+# the waiting thread is still blocked after 30 s (it then gets the child's status).
+
+def test_waits_on_two_threads(jvm_kit, tmp_path, monkeypatch):
+    # (e) a second thread blocked in waitpid(child, 0) while the main thread spawns and waits for 50 other children
+    _compare(jvm_kit, tmp_path, monkeypatch, '''
+import os, signal, threading
+signal.signal(signal.SIGUSR1, lambda s, f: None)
+env = dict(os.environ)
+slow = os.posix_spawn("/bin/sh", ["sh", "-c", "sleep 1; exit 7"], env)
+res = []
+t = threading.Thread(target=lambda: res.append(os.waitpid(slow, 0)), daemon=True)
+t.start()
+codes = []
+for i in range(50):
+    p = os.posix_spawn("/bin/sh", ["sh", "-c", "exit %d" % (i % 5)], env)
+    r = os.waitpid(p, 0)
+    codes.append((r[0] == p, os.waitstatus_to_exitcode(r[1])))
+print(codes == [(True, i % 5) for i in range(50)])
+t.join(30)
+if t.is_alive():
+    os.kill(slow, signal.SIGKILL)
+    t.join(30)
+print(not t.is_alive(), res[0][0] == slow, os.waitstatus_to_exitcode(res[0][1]))
+''')
+
+
+def test_main_thread_waits_close_their_pidfds(jvm_kit, tmp_path, monkeypatch):
+    # (f) 200 blocking main-thread waits (each child still running when the wait starts) leave no descriptor behind
+    _compare(jvm_kit, tmp_path, monkeypatch, '''
+import os, signal
+signal.signal(signal.SIGUSR1, lambda s, f: None)
+env = dict(os.environ)
+def count():
+    return len(os.listdir("/proc/self/fd"))
+os.waitpid(os.posix_spawn("/bin/true", ["true"], env), 0)   # warm-up: lazily opened JDK descriptors
+before = count()
+codes = set()
+for i in range(200):
+    p = os.posix_spawn("/bin/sleep", ["sleep", "0.01"], env)
+    codes.add(os.waitstatus_to_exitcode(os.waitpid(p, 0)[1]))
+for i in range(5):
+    p = os.posix_spawn("/bin/sleep", ["sleep", "0.01"], env)
+    r = os.waitid(os.P_PID, p, os.WEXITED)
+    codes.add(r.si_status)
+print(codes, count() == before)
+try:
+    os.waitpid(-1, os.WNOHANG)
+except ChildProcessError as e:
+    print("no children", e.errno)
+''')
+
+
+def test_main_thread_wait_any_child_latency(jvm_kit, tmp_path, monkeypatch):
+    # (g) os.wait() on the main thread (back-off, no pidfd) returns the first child within 0.15 s of its exit
+    _compare(jvm_kit, tmp_path, monkeypatch, '''
+import os, signal, time
+signal.signal(signal.SIGUSR1, lambda s, f: None)
+env = dict(os.environ)
+a = os.posix_spawn("/bin/sleep", ["sleep", "0.3"], env)
+t0 = time.monotonic()
+b = os.posix_spawn("/bin/sleep", ["sleep", "0.5"], env)
+r = os.wait()
+took = time.monotonic() - t0
+print(r[0] == a, os.waitstatus_to_exitcode(r[1]), 0.29 <= took < 0.3 + 0.15)
+r = os.wait()
+print(r[0] == b, os.waitstatus_to_exitcode(r[1]))
+''')
