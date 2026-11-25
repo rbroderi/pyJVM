@@ -98,7 +98,7 @@ final class PosixOsProc {
     }
 
     /** {@code PyUnicode_FSConverter}: str (UTF-8, surrogateescape), bytes or a PathLike, without an embedded NUL. */
-    private static byte[] fsArg(Object o) {
+    static byte[] fsArg(Object o) {
         Object u = NativeSubclass.unwrap(o);
         Object f = u instanceof String || u instanceof PyBytes ? u : PosixModule.fspath(o);
         byte[] b = f instanceof PyBytes pb ? pb.data : Codecs.encode((String) f, "utf-8", "surrogateescape");

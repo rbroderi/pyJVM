@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Process creation on Linux (N1): os.posix_spawn[p] through glibc's posix_spawn, the emulated cwd, the live C
-environment, no leaked descriptors or children, and the JVM's own inheritable descriptors kept out of children.
+"""Process creation on Linux (N1): os.posix_spawn[p] and _posixsubprocess.fork_exec through glibc's posix_spawn, the
+emulated cwd, the live C environment, no leaked descriptors or children, and the JVM's own inheritable descriptors kept
+out of children.
 
 SAFETY (n1_plan 2.3): every child is waited for by the script that started it; the only signal sent is SIGKILL to such a
 child by pid (test_waits_on_two_threads, only if its waiting thread is still blocked after 30 s)."""
@@ -298,3 +299,131 @@ print(r[0] == a, os.waitstatus_to_exitcode(r[1]), 0.29 <= took < 0.3 + 0.15)
 r = os.wait()
 print(r[0] == b, os.waitstatus_to_exitcode(r[1]))
 ''')
+
+
+# N1 ticket 6: _posixsubprocess.fork_exec on posix_spawn (plan 1.7). The texts below are pyJVM's own (no fork), so they
+# are compared with fixed strings, not with CPython. Every child exits on its own and is waited for; no signal is sent.
+
+UNSUPPORTED_SCRIPT = '''
+import os, subprocess, sys, _posixsubprocess
+def count():
+    return len(os.listdir("/proc/self/fd"))
+def no_child():
+    try:
+        os.waitpid(-1, os.WNOHANG)
+        return False
+    except ChildProcessError:
+        return True
+subprocess.run(["true"])                  # warm-up: lazily opened JDK descriptors
+before = count()
+def show(label, f):
+    try:
+        f()
+        print(label, "no error")
+    except Exception as e:
+        print(label, type(e).__name__, e)
+    print(label, count() == before, no_child())
+show("preexec_fn", lambda: subprocess.run(["true"], preexec_fn=lambda: None))
+show("umask", lambda: subprocess.run(["true"], umask=0o77))
+# subprocess itself rejects these before fork_exec (pyJVM has no os.setreuid/setregid/setgroups)
+show("user", lambda: subprocess.run(["true"], user=os.getuid()))
+show("group", lambda: subprocess.run(["true"], group=os.getgid()))
+show("extra_groups", lambda: subprocess.run(["true"], extra_groups=[]))
+# fork_exec called directly: the four NotImplementedError texts
+def direct(gid=None, extra=None, uid=None, umask=-1, preexec=None):
+    r, w = os.pipe()
+    try:
+        extra_args = [True] if sys.version_info < (3, 14) else []       # 3.13: allow_vfork
+        _posixsubprocess.fork_exec([b"/bin/true"], [b"/bin/true"], True, (w,), None, None, -1, -1, -1, -1, -1, -1,
+                                   r, w, True, False, -1, gid, extra, uid, umask, preexec, *extra_args)
+    finally:
+        os.close(r)
+        os.close(w)
+show("direct uid", lambda: direct(uid=os.getuid()))
+show("direct gid", lambda: direct(gid=os.getgid()))
+show("direct extra_groups", lambda: direct(extra=()))
+show("direct umask", lambda: direct(umask=0o22))
+show("direct preexec_fn", lambda: direct(preexec=lambda: None))
+show("direct uid+umask", lambda: direct(uid=0, umask=0))
+'''
+
+UNSUPPORTED_OUT = '''\
+preexec_fn RuntimeError preexec_fn is not supported by pyJVM: there is no fork, so no Python code can run in the child
+preexec_fn True True
+umask NotImplementedError subprocess: umask is not supported by pyJVM (posix_spawn cannot change the umask)
+umask True True
+user ValueError The 'user' parameter is not supported on the current platform
+user True True
+group ValueError The 'group' parameter is not supported on the current platform
+group True True
+extra_groups ValueError The 'extra_groups' parameter is not supported on the current platform
+extra_groups True True
+direct uid NotImplementedError subprocess: user is not supported by pyJVM (posix_spawn cannot change the user id)
+direct uid True True
+direct gid NotImplementedError subprocess: group is not supported by pyJVM (posix_spawn cannot change the group id)
+direct gid True True
+direct extra_groups NotImplementedError subprocess: extra_groups is not supported by pyJVM (posix_spawn cannot change the supplementary groups)
+direct extra_groups True True
+direct umask NotImplementedError subprocess: umask is not supported by pyJVM (posix_spawn cannot change the umask)
+direct umask True True
+direct preexec_fn RuntimeError preexec_fn is not supported by pyJVM: there is no fork, so no Python code can run in the child
+direct preexec_fn True True
+direct uid+umask NotImplementedError subprocess: user is not supported by pyJVM (posix_spawn cannot change the user id)
+direct uid+umask True True
+'''
+
+
+def test_fork_exec_unsupported_arguments(jvm_kit, tmp_path):
+    main = tmp_path / "main.py"
+    main.write_text(UNSUPPORTED_SCRIPT, encoding="utf-8")
+    proc = _run_pyjvm(jvm_kit, main, {})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == UNSUPPORTED_OUT
+
+
+# fork_exec's children (a bare program name takes the fork_exec path even with close_fds=False, plan 3.7): with
+# close_fds=False the JVM's own inheritable descriptors are still closed by PosixSpawn (plan 1.8); with close_fds=True
+# only pass_fds survive.
+FORK_EXEC_FDS_SCRIPT = '''
+import os, subprocess, sys
+inherited = int(os.environ["INHERITED_FD"])
+r, w = os.pipe()
+os.set_inheritable(w, True)
+private = os.open("/dev/null", os.O_RDONLY)
+child = ["sh", "-c", os.environ["CHILD_FDS"]]
+for label, kw in (("nokeep", dict(close_fds=False)), ("default", dict()),
+                  ("closefds", dict(close_fds=True, pass_fds=(w,)))):
+    sys.stdout.flush()
+    code = subprocess.run(child, **kw).returncode
+    print("done", label, code)
+    sys.stdout.flush()
+print("fds", inherited, w, private)
+for f in (r, w, private):
+    os.close(f)
+'''
+
+
+def test_fork_exec_children_do_not_inherit_the_jvms_descriptors(jvm_kit, tmp_path):
+    main = tmp_path / "main.py"
+    main.write_text(FORK_EXEC_FDS_SCRIPT, encoding="utf-8")
+    shared = tmp_path / "inherited.txt"
+    shared.write_text("passed in", encoding="utf-8")
+    fd = os.open(shared, os.O_RDONLY)
+    try:
+        assert fd > 2
+        proc = _run_pyjvm(jvm_kit, main, {"INHERITED_FD": str(fd), "CHILD_FDS": CHILD_FDS}, pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.splitlines()
+    inherited, w, private = (int(x) for x in next(line for line in lines if line.startswith("fds ")).split()[1:])
+    blocks, current = {}, []
+    for line in lines:
+        if line.startswith("child "):
+            current.append(int(line.split()[1]))
+        elif line.startswith("done "):
+            _, label, code = line.split()
+            assert code == "0", proc.stdout
+            blocks[label] = sorted(current)
+            current = []
+    assert blocks == {"nokeep": sorted([inherited, w]), "default": [], "closefds": [w]}, proc.stdout

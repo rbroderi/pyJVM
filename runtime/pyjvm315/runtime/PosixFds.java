@@ -227,6 +227,20 @@ final class PosixFds {
         return r;
     }
 
+    /**
+     * {@code fcntl(fd, F_DUPFD_CLOEXEC, min)}: a copy of {@code fd} at the lowest free number {@code >= min},
+     * close-on-exec and adopted; or {@code -errno} (no exception). For the temporaries of {@code fork_exec} (N1 plan 1.7
+     * step 1), which the caller closes in {@code finally}.
+     */
+    static int dupAbove(int fd, int min) {
+        MemorySegment cs = PosixNative.tl().cs;
+        int r;
+        try { r = (int) FCNTL.invokeExact(cs, fd, F_DUPFD_CLOEXEC, min); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+        if (r < 0) return -PosixNative.errno(cs);
+        adopt(r);
+        return r;
+    }
+
     /** {@code pipe2(2)} with the caller's flags verbatim (CPython's {@code os.pipe} passes O_CLOEXEC); both ends are adopted. */
     static long[] pipe(int flags) {
         PosixNative.Tl t = PosixNative.tl();
