@@ -41,6 +41,9 @@ final class PosixNative {
         return LINKER.downcallHandle(LINKER.defaultLookup().findOrThrow(name), d);
     }
 
+    /** The address of a libc symbol (function or variable, such as {@code environ}), or null when libc has no such symbol. */
+    static MemorySegment symbol(String name) { return LINKER.defaultLookup().find(name).orElse(null); }
+
     private static final MethodHandle SETENV = fn("setenv", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     private static final MethodHandle UNSETENV = fn("unsetenv", FunctionDescriptor.of(JAVA_INT, ADDRESS));
     private static final MethodHandle FCHMOD = fn("fchmod", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
@@ -107,18 +110,32 @@ final class PosixNative {
         return seg;
     }
 
+    /**
+     * Serialises every change of libc's environment ({@code setenv}/{@code unsetenv}, the only writers in the runtime)
+     * with the spawns that read it ({@code PosixSpawn}: {@code envp == null} passes {@code environ}, and
+     * {@code posix_spawnp} searches PATH in the vfork-style child, which shares memory with the parent until it execs).
+     * glibc may reallocate or free the array in {@code setenv} while such a child still reads it; CPython has the GIL.
+     */
+    static final Object ENV_LOCK = new Object();
+
     /** {@code setenv(name, value, 1)}; raises OSError with the captured errno on failure. */
     static void setenv(byte[] name, byte[] value) {
         MemorySegment cs = tl().cs;
         try (Arena a = Arena.ofConfined()) {
-            if ((int) SETENV.invokeExact(cs, cString(a, name), cString(a, value), 1) != 0) throw osError(errno(cs), null);
+            MemorySegment n = cString(a, name), v = cString(a, value);
+            int r;
+            synchronized (ENV_LOCK) { r = (int) SETENV.invokeExact(cs, n, v, 1); }
+            if (r != 0) throw osError(errno(cs), null);
         } catch (Throwable t) { throw rethrow(t); }
     }
 
     static void unsetenv(byte[] name) {
         MemorySegment cs = tl().cs;
         try (Arena a = Arena.ofConfined()) {
-            if ((int) UNSETENV.invokeExact(cs, cString(a, name)) != 0) throw osError(errno(cs), null);
+            MemorySegment n = cString(a, name);
+            int r;
+            synchronized (ENV_LOCK) { r = (int) UNSETENV.invokeExact(cs, n); }
+            if (r != 0) throw osError(errno(cs), null);
         } catch (Throwable t) { throw rethrow(t); }
     }
 

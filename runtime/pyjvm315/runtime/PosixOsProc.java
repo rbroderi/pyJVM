@@ -3,6 +3,7 @@ package pyjvm315.runtime;
 
 import static pyjvm315.runtime.NativeTypes.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -26,6 +27,226 @@ final class PosixOsProc {
         });
         installWait(m);
         installSignals(m);
+        m.attrs.put("POSIX_SPAWN_OPEN", 0L);
+        m.attrs.put("POSIX_SPAWN_CLOSE", 1L);
+        m.attrs.put("POSIX_SPAWN_DUP2", 2L);
+        fn(m, "posix_spawn", (a, k) -> posixSpawn("posix_spawn", false, a, k));
+        fn(m, "posix_spawnp", (a, k) -> posixSpawn("posix_spawnp", true, a, k));
+    }
+
+    // ---------------------------------------------------------------- posix_spawn, posix_spawnp
+
+    private static final String[] SPAWN_KW = {"file_actions", "setpgroup", "resetids", "setsid", "setsigmask", "setsigdef", "scheduler"};
+    private static final int KW_FA = 0, KW_PGROUP = 1, KW_RESETIDS = 2, KW_SETSID = 3, KW_SIGMASK = 4, KW_SIGDEF = 5, KW_SCHED = 6;
+
+    /**
+     * {@code os.posix_spawn(path, argv, env, /, *, file_actions=(), setpgroup=None, resetids=False, setsid=False,
+     * setsigmask=(), setsigdef=(), scheduler=None)} and {@code posix_spawnp}: CPython's argument checks in its order
+     * (plan 3.6), then one call of {@link PosixSpawn#spawn}. The emulated cwd becomes the first action; the signal mask
+     * is the {@code setsigmask} argument when given (even empty), else the Python-level blocked set.
+     */
+    private static Object posixSpawn(String name, boolean usePath, List<Object> a, Map<Object, Object> k) {
+        if (a.size() != 3) throw new PyException("TypeError", name + "() takes exactly 3 positional arguments (" + a.size() + " given)");
+        Object[] kw = new Object[SPAWN_KW.length];
+        java.util.Arrays.fill(kw, NativeArgs.MISSING);
+        for (Map.Entry<Object, Object> e : k.entrySet()) {
+            int idx = e.getKey() instanceof String s ? List.of(SPAWN_KW).indexOf(s) : -1;
+            if (idx < 0) throw new PyException("TypeError", name + "() got an unexpected keyword argument '" + PyRuntime.pyStr(e.getKey()) + "'");
+            kw[idx] = e.getValue();
+        }
+        PosixSpawn.Plan p = new PosixSpawn.Plan();
+        p.usePath = usePath;
+        Object pathObj = spawnPath(name, a.get(0));
+        Object pathU = NativeSubclass.unwrap(pathObj);
+        p.path = pathU instanceof PyBytes b ? b.data : Codecs.encode((String) pathU, "utf-8", "surrogateescape");
+        for (byte x : p.path) if (x == 0) throw new PyException("ValueError", name + ": embedded null character in path");
+        // clinic order: the bool converters of resetids and setsid run before the scheduler type check (measured)
+        boolean resetids = kw[KW_RESETIDS] != NativeArgs.MISSING && PyRuntime.truth(kw[KW_RESETIDS]);
+        boolean setsid = kw[KW_SETSID] != NativeArgs.MISSING && PyRuntime.truth(kw[KW_SETSID]);
+        Object sched = kw[KW_SCHED];
+        boolean hasSched = sched != NativeArgs.MISSING && sched != null;
+        if (hasSched && !(NativeSubclass.unwrap(sched) instanceof PyTuple)) throw new PyException("TypeError", name + ": scheduler must be a tuple or None");
+        Object argv = a.get(1), env = a.get(2);
+        Object argvU = NativeSubclass.unwrap(argv);
+        if (!(argvU instanceof List || argvU instanceof PyTuple)) throw new PyException("TypeError", name + ": argv must be a tuple or list");
+        List<?> items = argvU instanceof PyTuple t ? t.items : (List<?>) argvU;
+        if (items.isEmpty()) throw new PyException("ValueError", name + ": argv must not be empty");
+        if (env != null && !isMapping(env)) throw new PyException("TypeError", name + ": environment must be a mapping object or None");
+        p.argv = new byte[items.size()][];
+        for (int i = 0; i < p.argv.length; i++) p.argv[i] = fsArg(items.get(i));
+        if (p.argv[0].length == 0) throw new PyException("ValueError", name + ": argv first element cannot be empty");
+        p.envp = env == null ? null : envList(env);
+        Object fa = kw[KW_FA];
+        List<PosixSpawn.Action> actions = fa == NativeArgs.MISSING || fa == null ? List.of() : fileActions(fa);
+        spawnAttributes(name, p, kw, resetids, setsid, hasSched);
+        if (SysExtras.auditing()) SysExtras.audit("os.posix_spawn", pathObj, argv, env);
+        PosixSpawn.Action cwd = PosixSpawn.cwdAction();
+        if (cwd != null) p.actions.add(cwd);
+        p.actions.addAll(actions);
+        long r = PosixSpawn.spawn(p);
+        if (r > 0) return r;
+        PyException err = PosixNative.osError((int) -r, null);
+        throw p.failedAtAdd ? err : PosixFds.withFilename(err, pathObj);
+    }
+
+    /** {@code path_converter} for {@code posix_spawn}: str or bytes as given, a PathLike's {@code __fspath__} result; the object is the error's filename. */
+    private static Object spawnPath(String name, Object o) {
+        Object u = NativeSubclass.unwrap(o);
+        if (u instanceof String || u instanceof PyBytes) return o;
+        if (o instanceof PyInstance i && i.cls.lookupMethod("__fspath__") != null) return PosixModule.fspath(o);
+        throw new PyException("TypeError", name + ": path should be string, bytes or os.PathLike, not " + PyRuntime.typeName(o));
+    }
+
+    /** {@code PyUnicode_FSConverter}: str (UTF-8, surrogateescape), bytes or a PathLike, without an embedded NUL. */
+    private static byte[] fsArg(Object o) {
+        Object u = NativeSubclass.unwrap(o);
+        Object f = u instanceof String || u instanceof PyBytes ? u : PosixModule.fspath(o);
+        byte[] b = f instanceof PyBytes pb ? pb.data : Codecs.encode((String) f, "utf-8", "surrogateescape");
+        for (byte x : b) if (x == 0) throw new PyException("ValueError", "embedded null byte");
+        return b;
+    }
+
+    /** {@code PyMapping_Check}: the type supports subscription (dict, list, tuple, str, bytes, or a class with {@code __getitem__}). */
+    private static boolean isMapping(Object o) {
+        Object u = NativeSubclass.unwrap(o);
+        if (u instanceof Map || u instanceof List || u instanceof PyTuple || u instanceof String || u instanceof PyBytes
+            || u instanceof PyByteArray || u instanceof PyMemoryView || u instanceof PyRange) return true;
+        return o instanceof PyInstance i && (i.cls.lookupMethod("__getitem__") != null || i.cls.lookupAttr("__getitem__") != PyRuntime.MISSING);
+    }
+
+    /** {@code parse_envlist}: {@code keys()} and {@code values()} of the mapping, each pair as {@code KEY=value}. */
+    private static byte[][] envList(Object env) {
+        List<Object> keys = asList(PyRuntime.callMethod(env, "keys", new Object[0]));
+        List<Object> vals = asList(PyRuntime.callMethod(env, "values", new Object[0]));
+        byte[][] out = new byte[keys.size()][];
+        for (int i = 0; i < out.length; i++) {
+            if (i >= vals.size()) throw new PyException("IndexError", "list index out of range");
+            byte[] key = fsArg(keys.get(i)), val = fsArg(vals.get(i));
+            boolean bad = key.length == 0;
+            for (int j = 1; j < key.length && !bad; j++) bad = key[j] == '=';
+            if (bad) throw new PyException("ValueError", "illegal environment variable name");
+            byte[] kv = java.util.Arrays.copyOf(key, key.length + 1 + val.length);
+            kv[key.length] = '=';
+            System.arraycopy(val, 0, kv, key.length + 1, val.length);
+            out[i] = kv;
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> asList(Object o) { return (List<Object>) PyRuntime.listFrom(o); }
+
+    /** {@code parse_file_actions}: a sequence of non-empty tuples {@code (OPEN, fd, path, flags, mode)}, {@code (CLOSE, fd)}, {@code (DUP2, fd, newfd)}. */
+    private static List<PosixSpawn.Action> fileActions(Object fa) {
+        List<Object> seq;
+        try { seq = asList(fa); }
+        catch (PyException e) {
+            if (!e.typeName.equals("TypeError")) throw e;
+            throw new PyException("TypeError", "file_actions must be a sequence or None");
+        }
+        List<PosixSpawn.Action> out = new ArrayList<>();
+        long[] table = {-1};                        // getdtablesize(), read on first use
+        for (Object item : seq) {
+            if (!(NativeSubclass.unwrap(item) instanceof PyTuple t) || t.items.isEmpty())
+                throw new PyException("TypeError", "Each file_actions element must be a non-empty tuple");
+            List<Object> v = t.items;
+            long tag = cLong(v.get(0));
+            if (tag == 0) {
+                if (v.size() != 5) throw new PyException("TypeError", "A open file_action tuple must have 5 elements");
+                int fd = argInt(v.get(1));
+                byte[] path = fsArg(v.get(2));
+                int oflag = argInt(v.get(3));
+                Object modeU = NativeSubclass.unwrap(v.get(4));
+                if (!PyRuntime.isIntLike(modeU)) throw new PyException("TypeError", "A open file_action tuple must have 5 elements");
+                int mode = openMode(modeU);
+                validFd(table, fd);
+                out.add(new PosixSpawn.Action(PosixSpawn.OPEN, fd, oflag, mode, path));
+            } else if (tag == 1) {
+                if (v.size() != 2) throw new PyException("TypeError", "A close file_action tuple must have 2 elements");
+                int fd = argInt(v.get(1));
+                validFd(table, fd);
+                out.add(new PosixSpawn.Action(PosixSpawn.CLOSE, fd, 0, 0, null));
+            } else if (tag == 2) {
+                if (v.size() != 3) throw new PyException("TypeError", "A dup2 file_action tuple must have 3 elements");
+                int fd = argInt(v.get(1)), fd2 = argInt(v.get(2));
+                validFd(table, fd);
+                validFd(table, fd2);
+                out.add(new PosixSpawn.Action(PosixSpawn.DUP2, fd, fd2, 0, null));
+            } else {
+                throw new PyException("TypeError", "Unknown file_actions identifier");
+            }
+        }
+        return out;
+    }
+
+    /**
+     * glibc's {@code __spawn_valid_fd}, checked as each action is parsed: CPython adds every action while it parses
+     * {@code file_actions}, so the add function's EBADF (no filename) wins over every later argument error and comes
+     * before the audit event. Invalid is {@code fd < 0 || fd >= getdtablesize()} (= {@code sysconf(_SC_OPEN_MAX)}).
+     * Other add failures (ENOMEM) still surface from {@link PosixSpawn#spawn} through {@code failedAtAdd}.
+     */
+    private static void validFd(long[] table, int fd) {
+        if (fd >= 0) {
+            if (table[0] < 0) table[0] = PosixProc.sysconf(4);
+            if (fd < table[0]) return;
+        }
+        throw PosixNative.osError(9, null);
+    }
+
+    /**
+     * The {@code k} format (unsigned long bit field) of the OPEN mode, cast to {@code mode_t}: any int, masked. 3.15
+     * warns {@code DeprecationWarning: integer value out of range} outside {@code [LONG_MIN, ULONG_MAX]}.
+     */
+    private static int openMode(Object modeU) {
+        if (!(modeU instanceof java.math.BigInteger bi)) return (int) PosixFiles.fd(modeU);
+        if (LangVersion.atLeast(3, 15) && (bi.bitLength() > 64 || bi.signum() < 0 && bi.bitLength() > 63))
+            PyRuntime.callMethod(ImportSupport.importBuiltin(new ArrayList<Object>(List.of("warnings")), new java.util.LinkedHashMap<Object, Object>()), "warn",
+                new Object[]{"integer value out of range", PyRuntime.builtinType("DeprecationWarning"), 2L});   // through Python, so catch_warnings sees it
+        return bi.intValue();
+    }
+
+    /** {@code PyLong_AsLong}: the integer TypeError, or OverflowError beyond 64 bits. */
+    private static long cLong(Object o) {
+        if (NativeSubclass.unwrap(o) instanceof java.math.BigInteger) throw new PyException("OverflowError", "Python int too large to convert to C long");
+        return PosixFiles.fd(o);
+    }
+
+    /** The {@code i} format of {@code PyArg_ParseTuple}: a C int with its overflow texts (lane-independent). */
+    private static int argInt(Object o) {
+        long v = cLong(o);
+        if (v > Integer.MAX_VALUE) throw new PyException("OverflowError", "signed integer is greater than maximum");
+        if (v < Integer.MIN_VALUE) throw new PyException("OverflowError", "signed integer is less than minimum");
+        return (int) v;
+    }
+
+    /** {@code parse_posix_spawn_flags}, in signature order: setpgroup, resetids, setsid, setsigmask, setsigdef, scheduler. */
+    private static void spawnAttributes(String name, PosixSpawn.Plan p, Object[] kw, boolean resetids, boolean setsid, boolean hasSched) {
+        Object pg = kw[KW_PGROUP];
+        if (pg != NativeArgs.MISSING && pg != null) {
+            p.pgroup = cInt(pg);
+            p.flags |= PosixSpawn.SETPGROUP;
+        }
+        if (resetids) p.flags |= PosixSpawn.RESETIDS;
+        // the reference CPython builds have no POSIX_SPAWN_SETSID support (plan U3, owner decision): never set from here
+        if (setsid) throw new PyException("NotImplementedError", name + ": setsid unavailable on this platform");
+        p.sigmask = kw[KW_SIGMASK] != NativeArgs.MISSING ? sigset(kw[KW_SIGMASK]) : SignalModule.blockedMask();
+        if (kw[KW_SIGDEF] != NativeArgs.MISSING) {
+            p.sigdefault = sigset(kw[KW_SIGDEF]);
+            p.flags |= PosixSpawn.SETSIGDEF;
+        }
+        if (hasSched) throw new PyException("NotImplementedError", name + ": scheduler is not supported by pyJVM");
+    }
+
+    /** {@code _Py_Sigset_Converter}: an iterable of signal numbers 1..64 as bits {@code 1L << (sig - 1)}. */
+    private static long sigset(Object o) {
+        long m = 0;
+        for (Object item : PyRuntime.iterable(o)) {
+            Object u = NativeSubclass.unwrap(item);
+            long s = u instanceof java.math.BigInteger ? -1 : PosixFiles.fd(item);
+            if (s <= 0 || s > 64) throw new PyException("ValueError", "signal number " + s + " out of range [1; 64]");
+            m |= 1L << (s - 1);
+        }
+        return m;
     }
 
     // ---------------------------------------------------------------- argument conversion

@@ -411,7 +411,7 @@ final class PosixFds {
     }
 
     /** The same OSError with {@code filename} replaced (any object: {@code os.stat(9999)} names the int). */
-    private static PyException withFilename(PyException base, Object filename) {
+    static PyException withFilename(PyException base, Object filename) {
         PyExcArgs a = (PyExcArgs) base.value;
         java.util.LinkedHashMap<String,Object> attrs = new java.util.LinkedHashMap<>(a.attrs);
         attrs.put("filename", filename);
@@ -560,6 +560,33 @@ final class PosixFds {
         int old = fcntlGet(fd, getCmd);
         int nw = on ? old | bit : old & ~bit;
         if (nw != old) fcntlSet(fd, setCmd, nw);
+    }
+
+    /** {@code fcntl(fd, F_GETFD)}: the descriptor flags, or -1 when {@code fd} is not open (no exception). */
+    static int fdFlagsOrNeg(int fd) {
+        try { return (int) FCNTL.invokeExact(PosixNative.tl().cs, fd, F_GETFD, 0); } catch (Throwable x) { throw PosixNative.rethrow(x); }
+    }
+
+    /**
+     * The descriptors open in this process, ascending, read from {@code /proc/self/fd} (for building a child's
+     * {@code CLOSE} actions only, plan 1.8; nothing else iterates "all descriptors"). The directory stream is closed
+     * before this returns, so its own descriptor (which the JDK holds without close-on-exec while open) is listed but
+     * is no longer open when the caller looks at it.
+     */
+    static int[] listFds() {
+        int[] out = new int[64];
+        int n = 0;
+        try (java.nio.file.DirectoryStream<Path> ds = java.nio.file.Files.newDirectoryStream(Path.of("/proc/self/fd"))) {
+            for (Path p : ds) {
+                if (n == out.length) out = java.util.Arrays.copyOf(out, n * 2);
+                out[n++] = Integer.parseInt(p.getFileName().toString());
+            }
+        } catch (java.io.IOException e) {
+            throw PosixModule.osError(e, "/proc/self/fd");
+        }
+        out = java.util.Arrays.copyOf(out, n);
+        java.util.Arrays.sort(out);
+        return out;
     }
 
     static boolean getInheritable(long fd) { return (fcntlGet(cfd(fd), F_GETFD) & FD_CLOEXEC) == 0; }

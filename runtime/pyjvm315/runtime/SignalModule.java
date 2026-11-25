@@ -454,6 +454,13 @@ final class SignalModule {
         return old;
     }
 
+    /** The Python-level blocked set ({@code pthread_sigmask}) as a 64-bit mask, signal {@code n} at bit {@code n - 1}; for spawned children. */
+    static long blockedMask() {
+        long m = 0;
+        synchronized (LOCK) { for (int i = 1; i < NSIG && i <= 64; i++) if (blocked[i]) m |= 1L << (i - 1); }
+        return m;
+    }
+
     private static boolean anyPendingBlocked() {
         for (int i = 1; i < NSIG; i++) if (pending[i]) return true;
         return false;
