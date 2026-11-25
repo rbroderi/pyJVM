@@ -27,6 +27,7 @@ final class PosixProc {
     private static final MethodHandle ERRNO_LOCATION = PosixNative.fnNoCapture("__errno_location", FunctionDescriptor.of(ADDRESS));
 
     private static final MethodHandle WAITPID = PosixNative.fn("waitpid", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
+    private static final MethodHandle WAIT4 = PosixNative.fn("wait4", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
     private static final MethodHandle WAITID = PosixNative.fn("waitid", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
     private static final MethodHandle KILL = PosixNative.fn("kill", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
     private static final MethodHandle KILLPG = PosixNative.fn("killpg", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
@@ -131,6 +132,29 @@ final class PosixProc {
         int callerFd = idtype == P_PIDFD && exitOnly ? id : -1;
         long r = await(o -> waitidOnce(idtype, id, o, out), options, pid, callerFd);
         return r < 0 ? (int) r : 0;
+    }
+
+    /**
+     * {@code wait4(pid, options, rusage)}: as {@link #waitpid} (same packed result, same {@link #await} rule); {@code rusage}
+     * is the caller's 144-byte native buffer, zeroed before every underlying call, so "nothing ready" leaves it all zero and
+     * a result is never mixed with an earlier probe. {@code wait3(options)} is {@code wait4(-1, options, rusage)}.
+     */
+    static long wait4(int pid, int options, MemorySegment rusage) {
+        boolean single = pid > 0 && (options & (WUNTRACED | WCONTINUED)) == 0;
+        return await(o -> wait4Once(pid, o, rusage), options, single ? pid : 0, -1);
+    }
+
+    /** One {@code wait4(2)}: the packed pid and status, 0 when nothing was ready, or {@code -errno} (also -EINTR). */
+    private static long wait4Once(int pid, int options, MemorySegment rusage) {
+        MemorySegment cs = PosixNative.tl().cs;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment st = a.allocate(4, 4);
+            rusage.fill((byte) 0);
+            int r = (int) WAIT4.invokeExact(cs, pid, st, options, rusage);
+            if (r > 0) return ((long) r << 32) | (st.get(JAVA_INT, 0L) & 0xffffffffL);
+            if (r == 0) return 0;
+        } catch (Throwable t) { throw PosixNative.rethrow(t); }
+        return -PosixNative.errno(cs);
     }
 
     /** One {@code waitpid(2)}: the packed pid and status, 0 when nothing was ready, or {@code -errno} (also -EINTR). */

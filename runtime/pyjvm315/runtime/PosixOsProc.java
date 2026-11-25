@@ -3,6 +3,9 @@ package pyjvm315.runtime;
 
 import static pyjvm315.runtime.NativeTypes.*;
 
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
+
+import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -298,6 +301,35 @@ final class PosixOsProc {
     private static final long[] WAIT_CONST_VALUES = {0, 1, 2, 3, 1, 2, 2, 4, 8, 16777216, 1, 2, 3, 4, 5, 6, 0,
         64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78};
 
+    private static final String[] RUSAGE_FIELDS = {"ru_utime", "ru_stime", "ru_maxrss", "ru_ixrss", "ru_idrss", "ru_isrss", "ru_minflt",
+        "ru_majflt", "ru_nswap", "ru_inblock", "ru_oublock", "ru_msgsnd", "ru_msgrcv", "ru_nsignals", "ru_nvcsw", "ru_nivcsw"};
+    private static PyClass rusageClass;
+
+    /** {@code resource.struct_rusage}: one class object, created on first use (plan 3.6). */
+    static synchronized PyClass rusageClass() {
+        if (rusageClass == null) rusageClass = PosixStructSeq.define("resource", "struct_rusage", RUSAGE_FIELDS);
+        return rusageClass;
+    }
+
+    /** A {@code struct_rusage} from a 144-byte native {@code struct rusage} (layout of plan 3.2). No wait logic here. */
+    static PyInstance rusage(MemorySegment ru) {
+        Object[] v = new Object[16];
+        v[0] = ru.get(JAVA_LONG, 0L) + ru.get(JAVA_LONG, 8L) * 1e-6;   // CPython doubletime: tv_sec + tv_usec * 0.000001 (bit-exact)
+        v[1] = ru.get(JAVA_LONG, 16L) + ru.get(JAVA_LONG, 24L) * 1e-6;
+        for (int i = 2; i < 16; i++) v[i] = ru.get(JAVA_LONG, 32L + 8L * (i - 2));
+        return PosixStructSeq.make(rusageClass(), v);
+    }
+
+    /** {@code (pid, status, rusage)} for {@code wait3}/{@code wait4}; nothing ready gives {@code (0, 0, <zero rusage>)}. */
+    private static Object wait4Result(int pid, int options) {
+        try (java.lang.foreign.Arena ar = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment ru = ar.allocate(144, 8);
+            long r = PosixProc.wait4(pid, options, ru);
+            if (r < 0) throw osErr(r);
+            return tuple(r >>> 32, (long) (int) r, rusage(ru));
+        }
+    }
+
     private static void installWait(PyModule m) {
         for (int i = 0; i < WAIT_CONST_NAMES.length; i++) m.attrs.put(WAIT_CONST_NAMES[i], WAIT_CONST_VALUES[i]);
         PyClass widResult = PosixStructSeq.define("posix", "waitid_result", WAITID_FIELDS);
@@ -310,6 +342,15 @@ final class PosixOsProc {
         fn(m, "wait", (a, k) -> {
             none("wait", a, k);
             return waitResult(PosixProc.waitpid(-1, 0));
+        });
+        fn(m, "wait3", (a, k) -> {
+            Object[] p = NativeArgs.parse("wait3", a, k, new String[]{"options"}, 1, 0);
+            return wait4Result(-1, cInt(p[0]));   // "C int" text on every lane (measured)
+        });
+        fn(m, "wait4", (a, k) -> {
+            Object[] p = NativeArgs.parse("wait4", a, k, new String[]{"pid", "options"}, 2, 0);
+            int pid = cArg(p[0]);
+            return wait4Result(pid, cArg(p[1]));
         });
         fn(m, "waitid", (a, k) -> {
             fixed("waitid", a, k, 3);

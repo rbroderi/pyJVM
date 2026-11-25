@@ -40,6 +40,7 @@ final class StubModules {
         NativeTypes.fn(m, "setrlimit", (a, k) -> null);
         NativeTypes.fn(m, "getpagesize", (a, k) -> 4096L);
         unsupported(m, "getrusage");
+        if (IoFd.KERNEL) m.attrs.put("struct_rusage", PosixOsProc.rusageClass());
         m.attrs.put("error", PyRuntime.builtinType("OSError"));
         return m;
     }
