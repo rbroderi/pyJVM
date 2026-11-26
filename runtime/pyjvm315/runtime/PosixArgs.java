@@ -5,9 +5,10 @@ import java.math.BigInteger;
 
 /**
  * Argument converters shared by the N2 POSIX modules ({@code fcntl}, {@code termios}; buffer helpers are added by the
- * ticket that needs them: the third argument of {@code fcntl}/{@code ioctl} below). No FFM here. {@link #fd} is CPython's {@code PyObject_AsFileDescriptor}; its texts are
- * measured on the three lanes (n2_plan 1.3, 3.8). The {@code os} functions of the terminal ticket take a plain C int
- * ({@code PosixOsProc.cInt}) instead.
+ * ticket that needs them: the third argument of {@code fcntl}/{@code ioctl} below). No FFM here. {@link #fd} is
+ * CPython's {@code PyObject_AsFileDescriptor}; its texts are measured on the three lanes (n2_plan 1.3, 3.8). Of the
+ * {@code os} terminal functions, {@code grantpt}, {@code unlockpt} and {@code ptsname} use {@link #fd} too (CPython
+ * converts them with it); {@code ttyname} and {@code posix_openpt} take a plain C int ({@code PosixOsProc.cInt}).
  */
 final class PosixArgs {
     private PosixArgs() {}

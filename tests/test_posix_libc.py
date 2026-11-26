@@ -576,3 +576,184 @@ def test_fcntl_nio_mode_is_a_shell(jvm_kit, tmp_path):
     proc = _t4_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == "NotImplementedError fcntl.fcntl is not supported by pyJVM\n2\n"
+
+
+# ---- ticket 6: the os pty functions (PosixOsTty) ---------------------------------------------------------------------
+# SAFETY (n2_plan 2.3 A): every terminal call is on a pty the script opened itself; the JVM runs in its own session
+# (start_new_session=True: it is the session leader, the case that matters for O_NOCTTY), stdin /dev/null, under a timeout.
+
+
+def _pty_run(kit, main: Path, script: str, java_options: str = "") -> subprocess.CompletedProcess[str]:
+    import os
+    import shutil
+
+    from pyjvm315.driver import compile_file
+    from pyjvm315.hostver import reference_stdlib, reference_version
+
+    runtime, selfhosted = kit
+    main.write_text(script, encoding="utf-8")
+    out = main.parent / "out"
+    compile_file(main, out, "ConformanceMain")
+    shutil.copytree(runtime / "pyjvm315", out / "pyjvm315", dirs_exist_ok=True)
+    full = os.environ.copy()
+    full.pop("PYJVM_POSIX_FDS", None)
+    if java_options:
+        full["JAVA_TOOL_OPTIONS"] = java_options
+    full["PYJVM_LANG_VERSION"] = "%d.%d" % reference_version(sys.executable)
+    full["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(sys.executable)
+    full.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = ["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+           "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
+    return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full, timeout=300,
+                          start_new_session=True, stdin=subprocess.DEVNULL)
+
+
+PTY_NO_CTTY = '''
+import os
+def stat_fields():
+    with open("/proc/self/stat") as f:
+        return f.read().rsplit(")", 1)[1].split()
+before = stat_fields()
+print("leader", int(before[3]) == os.getpid(), "tty_nr before", before[4])
+m, s = os.openpty()
+try:
+    print("tty_nr after openpty", stat_fields()[4])
+    os.write(s, b"x")
+    os.read(m, 10)
+    print("tty_nr after io", stat_fields()[4])
+finally:
+    os.close(m)
+    os.close(s)
+print("tty_nr after close", stat_fields()[4])
+pm = os.posix_openpt(os.O_RDWR | os.O_NOCTTY)
+os.grantpt(pm)
+os.unlockpt(pm)
+sl = os.open(os.ptsname(pm), os.O_RDWR | os.O_NOCTTY)
+os.close(sl)
+os.close(pm)
+print("tty_nr end", stat_fields()[4])
+'''
+
+
+def test_openpty_never_gives_the_session_leader_a_controlling_terminal(jvm_kit, tmp_path):
+    """(a) The JVM is a session leader (own session) and still has tty_nr 0 after openpty, I/O, close."""
+    proc = _pty_run(jvm_kit, tmp_path / "main.py", PTY_NO_CTTY)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ("leader True tty_nr before 0\ntty_nr after openpty 0\ntty_nr after io 0\n"
+                           "tty_nr after close 0\ntty_nr end 0\n")
+
+
+PTY_FDS = '''
+import os
+def links():
+    out = {}
+    for n in os.listdir("/proc/self/fd"):
+        try:
+            out[int(n)] = os.readlink("/proc/self/fd/" + n)
+        except OSError:
+            pass
+    return out
+def settle():
+    m, s = os.openpty()
+    os.close(m)
+    os.close(s)
+settle()
+base = links()
+m, s = os.openpty()
+now = links()
+new = sorted(set(now) - set(base))
+print("two new", len(new), m in new and s in new, now.get(m), now.get(s, "").startswith("/dev/pts/"))
+print("inheritable", os.get_inheritable(m), os.get_inheritable(s))
+os.close(m)
+os.close(s)
+after = links()
+print("gone", m not in after and s not in after, len(after) == len(base))
+for _ in range(200):
+    a, b = os.openpty()
+    os.close(a)
+    os.close(b)
+print("200 rounds", len(links()) == len(base))
+pm = os.posix_openpt(os.O_RDWR | os.O_NOCTTY)
+print("posix_openpt", os.get_inheritable(pm), links().get(pm))
+os.close(pm)
+print("posix_openpt closed", pm not in links())
+# every failing step of openpty must close what was opened: an unusable descriptor table entry cannot be forced here, so
+# the failure path is covered by the ptsname_r growth test; ttyname/ptsname on a bad number must not leak either
+for bad in (os.ttyname, os.ptsname, os.grantpt, os.unlockpt):
+    try:
+        bad(9999)
+    except OSError as e:
+        pass
+print("no leak on errors", len(links()) == len(base))
+'''
+
+
+def test_openpty_descriptors_are_adopted_cloexec_and_closed(jvm_kit, tmp_path):
+    """(b) both ends appear in /proc/self/fd, are non-inheritable, vanish on close, and 200 rounds leave the count unchanged."""
+    proc = _pty_run(jvm_kit, tmp_path / "main.py", PTY_FDS)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ("two new 2 True /dev/ptmx True\ninheritable False False\ngone True True\n200 rounds True\n"
+                           "posix_openpt False /dev/ptmx\nposix_openpt closed True\nno leak on errors True\n")
+
+
+PTY_CHILD = '''
+import os, subprocess
+LIST = 'for f in /proc/self/fd/*; do echo "${f##*/} $(readlink $f)"; done'
+def pty_links():
+    out = set()
+    for n in os.listdir("/proc/self/fd"):
+        try:
+            link = os.readlink("/proc/self/fd/" + n)
+        except OSError:
+            continue
+        if link.startswith("/dev/p"):
+            out.add((n, link))
+    return out
+# pty descriptors present before openpty (under WSL the launcher passes /dev/ptmx as fd 7): the only ones a child may see
+base = pty_links()
+m, s = os.openpty()
+try:
+    r = subprocess.run(["sh", "-c", "readlink /proc/self/fd/%d; echo --; readlink /proc/self/fd/%d" % (m, s)],
+                       stdout=subprocess.PIPE, timeout=60, close_fds=False)
+    mine, theirs = r.stdout.decode().split("--")
+    print("child sees master", mine.strip() == "/dev/ptmx", "child sees slave", theirs.strip().startswith("/dev/pts/"))
+    out = subprocess.run(["sh", "-c", LIST], stdout=subprocess.PIPE, timeout=60, close_fds=False).stdout.decode()
+    seen = {tuple(l.split(" ", 1)) for l in out.splitlines() if " /dev/p" in l}
+    print("child pty set within baseline", seen <= base, "no pts", not any(l.startswith("/dev/pts/") for _, l in seen))
+    r = subprocess.run(["sh", "-c", "tty; test -t 0 && echo yes"], stdin=s, stdout=subprocess.PIPE, timeout=60)
+    out = r.stdout.decode()
+    print("stdin=slave", r.returncode, out.startswith("/dev/pts/"), out.rstrip().endswith("yes"))
+finally:
+    os.close(m)
+    os.close(s)
+'''
+
+
+def test_openpty_is_close_on_exec_for_children(jvm_kit, tmp_path):
+    """(c) a close_fds=False child does not see either end; a child given the slave as stdin sees a terminal."""
+    proc = _pty_run(jvm_kit, tmp_path / "main.py", PTY_CHILD)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ("child sees master False child sees slave False\n"
+                           "child pty set within baseline True no pts True\nstdin=slave 0 True True\n")
+
+
+PTY_NAMES = '''
+import os
+m, s = os.openpty()
+try:
+    print(os.ptsname(m) == os.ttyname(s), os.ttyname(m))
+    print(os.ptsname(m).startswith("/dev/pts/"))
+finally:
+    os.close(m)
+    os.close(s)
+'''
+
+
+def test_pty_names_grow_the_buffer(jvm_kit, tmp_path):
+    """A 1-byte first buffer (test hook pyjvm.test.ptsbuf) makes ptsname_r/ttyname_r answer ERANGE; openpty still succeeds."""
+    proc = _pty_run(jvm_kit, tmp_path / "main.py", PTY_NAMES, "-Dpyjvm.test.ptsbuf=1")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "True /dev/ptmx\nTrue\n"
+    plain = _pty_run(jvm_kit, tmp_path / "main.py", PTY_NAMES)
+    assert plain.returncode == 0, plain.stderr
+    assert plain.stdout == proc.stdout

@@ -36,6 +36,7 @@ final class PosixOsProc {
         fn(m, "posix_spawn", (a, k) -> posixSpawn("posix_spawn", false, a, k));
         fn(m, "posix_spawnp", (a, k) -> posixSpawn("posix_spawnp", true, a, k));
         fn(m, "system", PosixOsProc::system);
+        PosixOsTty.install(m);
     }
 
     // ---------------------------------------------------------------- system
