@@ -237,9 +237,7 @@ final class PosixProc {
                     if (n >= 0) { wasReady = n > 0; continue; }
                     usePoll = false;             // poll itself failed (not EINTR): back off from now on
                 }
-                if (Thread.interrupted()) throw new PyException("KeyboardInterrupt", null);   // _thread.interrupt_main(): never spin
-                SignalModule.sleep(delay * 1_000_000L);
-                delay = Math.min(delay * 2, 50);
+                delay = backOff(delay);
             }
         } finally {
             // A reaped status must reach the caller and a handler's exception must not be replaced: a failed close (another
@@ -248,6 +246,17 @@ final class PosixProc {
                 try { PosixFds.close(pidfd); } catch (PyException ignored) { }
             }
         }
+    }
+
+    /**
+     * One back-off step of a polled main-thread wait ({@link #await}, and {@code PosixFcntlModule.lockWait}): a pending
+     * {@code _thread.interrupt_main()} (the interrupt flag) is KeyboardInterrupt, so the loop never spins on it; otherwise
+     * sleep {@code delayMs} with signal handlers running as they arrive; the next delay doubles up to 50 ms.
+     */
+    static long backOff(long delayMs) {
+        if (Thread.interrupted()) throw new PyException("KeyboardInterrupt", null);   // _thread.interrupt_main(): never spin
+        SignalModule.sleep(delayMs * 1_000_000L);
+        return Math.min(delayMs * 2, 50);
     }
 
     /** {@code pidfd_open(pid, 0)} adopted, or -2 when it failed for any reason. */

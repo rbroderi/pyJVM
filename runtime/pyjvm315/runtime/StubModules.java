@@ -5,11 +5,12 @@ package pyjvm315.runtime;
  * Importable shells of the POSIX extension modules that {@code subprocess}, {@code tempfile} and the test suite import:
  * {@code fcntl}, {@code pwd} and {@code grp}, and {@code _posixsubprocess} only where it has no real implementation
  * (under {@code PYJVM_POSIX_FDS=nio}; with kernel descriptors on POSIX it is {@code PosixSubprocessModule}, built on
- * {@code posix_spawn}, so it is no longer a shell there). Importing succeeds; the operations that need descriptor
- * control or the account database raise {@code NotImplementedError} or {@code KeyError}. {@code pwd} and {@code grp}
- * are shells only under {@code PYJVM_POSIX_FDS=nio} (with kernel descriptors they are {@code PosixAccounts}, built on
- * libc); there the lookups raise KeyError and {@code getpwall}/{@code getgrall} raise NotImplementedError instead of
- * returning an empty list.
+ * {@code posix_spawn}, so it is no longer a shell there). {@code fcntl} likewise is a shell only under
+ * {@code PYJVM_POSIX_FDS=nio}: with kernel descriptors it is {@code PosixFcntlModule}. Importing succeeds; the
+ * operations that need descriptor control or the account database raise {@code NotImplementedError} or
+ * {@code KeyError}. {@code pwd} and {@code grp} are shells only under {@code PYJVM_POSIX_FDS=nio} (with kernel
+ * descriptors they are {@code PosixAccounts}, built on libc); there the lookups raise KeyError and
+ * {@code getpwall}/{@code getgrall} raise NotImplementedError instead of returning an empty list.
  */
 final class StubModules {
     private StubModules() {}

@@ -293,3 +293,286 @@ def test_account_enumeration_not_implemented_under_nio(jvm_kit, tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == ("NotImplementedError ('pwd.getpwall is not supported by pyJVM',)\n"
                            "NotImplementedError ('grp.getgrall is not supported by pyJVM',)\n")
+
+
+# ---- N2 ticket 4: fcntl (fcntl, flock, lockf) and the lock-wait rule -------------------------------------------------
+# SAFETY (n2_plan 2.3 C, D): locks only on temporary files the scripts create; every waiter has a holder that releases
+# within two seconds (the flock holder keeps its lock 2 s, so the 0.1 s timer and its handler always fire first, even
+# on a loaded host); threads are joined with timeouts; the only signal is SIGALRM to the own process through setitimer,
+# reset in `finally`; every subprocess has a timeout. stdout is compared (CPython reports the stale file object's failed
+# close on stderr, as in test_posix_fds).
+
+def _t4_pyjvm(kit, main: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """``main`` compiled and run under pyJVM with ``env`` added (an inherited PYJVM_POSIX_FDS is dropped first)."""
+    import os
+    import shutil
+
+    from pyjvm315.driver import compile_file
+    from pyjvm315.hostver import reference_stdlib, reference_version
+
+    runtime, selfhosted = kit
+    out = main.parent / "out"
+    compile_file(main, out, "ConformanceMain")
+    shutil.copytree(runtime / "pyjvm315", out / "pyjvm315", dirs_exist_ok=True)
+    full = os.environ.copy()
+    full.pop("PYJVM_POSIX_FDS", None)
+    full.update(env)
+    full["PYJVM_LANG_VERSION"] = "%d.%d" % reference_version(sys.executable)
+    full["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(sys.executable)
+    full.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = ["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+           "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
+    return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full,
+                          timeout=600, stdin=subprocess.DEVNULL)
+
+
+def _t4_same_stdout(kit, tmp_path: Path, script: str, expected: str) -> None:
+    """``script`` prints ``expected`` under the reference CPython and under pyJVM (kernel descriptors)."""
+    main = tmp_path / "main.py"
+    main.write_text(script, encoding="utf-8")
+    ref = subprocess.run([sys.executable, str(main)], capture_output=True, encoding="utf-8", timeout=120,
+                         stdin=subprocess.DEVNULL, cwd=tmp_path)
+    assert (ref.returncode, ref.stdout) == (0, expected), ref.stderr
+    proc = _t4_pyjvm(kit, main, {})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected, proc.stderr
+
+
+T4_DUPFD = '''
+import fcntl, gc, os, tempfile
+d = tempfile.mkdtemp()
+p1, p2 = os.path.join(d, "one"), os.path.join(d, "two")
+for p, data in ((p1, b"first"), (p2, b"second")):
+    with open(p, "wb") as w:
+        w.write(data)
+base = os.open(p1, os.O_RDONLY)
+for cmd in (fcntl.F_DUPFD, fcntl.F_DUPFD_CLOEXEC):
+    nd = fcntl.fcntl(base, cmd, 50)
+    print("listed", nd >= 50, str(nd) in os.listdir("/proc/self/fd"), os.readlink("/proc/self/fd/%d" % nd) == os.path.realpath(p1))
+    os.closerange(nd, nd + 1)          # pyJVM's closerange skips numbers it never adopted
+    try:
+        os.fstat(nd)
+        print("closerange left it open")
+    except OSError as e:
+        print("closed by closerange", e.errno)
+for cmd in (fcntl.F_DUPFD, fcntl.F_DUPFD_CLOEXEC):
+    nd = fcntl.fcntl(base, cmd, 50)
+    f = os.fdopen(nd, "rb")
+    os.close(nd)
+    del f                              # stale file object: its late close must not hit the reused number
+    src = os.open(p2, os.O_RDONLY)
+    os.dup2(src, nd)
+    os.close(src)
+    for _ in range(3):
+        gc.collect()
+    os.lseek(nd, 0, 0)
+    print("reused number intact", os.read(nd, 100))
+    os.close(nd)
+os.close(base)
+for p in (p1, p2):
+    os.remove(p)
+os.rmdir(d)
+'''
+
+
+def test_fcntl_dupfd_descriptors_are_adopted(jvm_kit, tmp_path):
+    """(a) F_DUPFD / F_DUPFD_CLOEXEC results are adopted: listed, closed by closerange, guarded by their generation."""
+    _t4_same_stdout(jvm_kit, tmp_path, T4_DUPFD,
+                    "listed True True True\nclosed by closerange 9\n" * 2 + "reused number intact b'second'\n" * 2)
+
+
+T4_LOCK_WAIT = '''
+import fcntl, os, signal, struct, tempfile, threading, time
+d = tempfile.mkdtemp()
+p = os.path.join(d, "f")
+fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
+fd2 = os.open(p, os.O_RDWR)
+fd3 = os.open(p, os.O_RDWR)
+state = {"released": False}
+log = []
+
+
+class Boom(Exception):
+    pass
+
+
+def holder(got, hold):
+    fcntl.flock(fd, fcntl.LOCK_EX)     # not the main thread: one blocking call (the lock is free)
+    got.set()
+    time.sleep(hold)
+    state["released"] = True
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def note(signum, frame):
+    log.append(("alarm", state["released"]))
+
+
+def boom(signum, frame):
+    log.append(("alarm", state["released"]))
+    raise Boom()
+
+
+def main_thread_wait(label, handler):
+    # (b) a handler runs while the main thread waits in flock; (c) a raising handler propagates, the lock not taken
+    state["released"] = False
+    got = threading.Event()
+    th = threading.Thread(target=holder, args=(got, 2.0))
+    th.start()
+    try:
+        assert got.wait(10)
+        signal.signal(signal.SIGALRM, handler)
+        signal.setitimer(signal.ITIMER_REAL, 0.1)
+        try:
+            fcntl.flock(fd2, fcntl.LOCK_EX)
+            log.append(("acquired", state["released"]))
+            fcntl.flock(fd2, fcntl.LOCK_UN)
+        except Boom:
+            log.append(("raised", state["released"]))
+            try:
+                fcntl.flock(fd2, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                log.append("nb acquired")
+                fcntl.flock(fd2, fcntl.LOCK_UN)
+            except BlockingIOError as e:
+                log.append(("nb conflict", e.errno, state["released"]))
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    finally:
+        th.join(10)
+    print(label, log, th.is_alive())
+    del log[:]
+
+
+main_thread_wait("handler", note)
+main_thread_wait("raising handler", boom)
+
+# (d) the same wait on a thread that is not the main thread acquires the lock
+res = []
+
+
+def waiter():
+    fcntl.flock(fd2, fcntl.LOCK_EX)
+    res.append(("thread acquired", state["released"]))
+    fcntl.flock(fd2, fcntl.LOCK_UN)
+
+
+state["released"] = False
+fcntl.flock(fd, fcntl.LOCK_EX)
+w = threading.Thread(target=waiter)
+w.start()
+time.sleep(0.3)
+state["released"] = True
+fcntl.flock(fd, fcntl.LOCK_UN)
+w.join(10)
+print(res, w.is_alive())
+
+# (e) lockf / F_SETLKW / F_OFD_SETLKW waiting on the main thread against an OFD lock that a thread releases after 0.3 s
+F_OFD_SETLK, F_OFD_SETLKW = 37, 38
+WR = struct.pack("hhqqi4x", fcntl.F_WRLCK, 0, 0, 0, 0)
+UN = struct.pack("hhqqi4x", fcntl.F_UNLCK, 0, 0, 0, 0)
+
+
+def releaser():
+    time.sleep(0.3)
+    state["released"] = True
+    fcntl.fcntl(fd2, F_OFD_SETLK, UN)
+
+
+def blocked_by_ofd(label, take, give):
+    state["released"] = False
+    fcntl.fcntl(fd2, F_OFD_SETLK, WR)
+    th = threading.Thread(target=releaser)
+    th.start()
+    try:
+        r = take()
+        print(label, "acquired", state["released"], repr(r))
+        give()
+    finally:
+        th.join(10)
+    print(label, "releaser done", not th.is_alive())
+
+
+blocked_by_ofd("lockf", lambda: fcntl.lockf(fd, fcntl.LOCK_EX), lambda: fcntl.lockf(fd, fcntl.LOCK_UN))
+blocked_by_ofd("F_SETLKW", lambda: fcntl.fcntl(fd, fcntl.F_SETLKW, WR), lambda: fcntl.fcntl(fd, fcntl.F_SETLK, UN))
+blocked_by_ofd("F_OFD_SETLKW", lambda: fcntl.fcntl(fd3, F_OFD_SETLKW, WR), lambda: fcntl.fcntl(fd3, F_OFD_SETLK, UN))
+
+
+# (f) no descriptor is used up by integer or buffer calls
+def count():
+    return len(os.listdir("/proc/self/fd"))
+
+
+fcntl.fcntl(fd, fcntl.F_GETFD)
+fcntl.fcntl(fd, fcntl.F_GETLK, WR)
+before = count()
+for _ in range(1000):
+    fcntl.fcntl(fd, fcntl.F_GETFD)
+for _ in range(100):
+    fcntl.fcntl(fd, fcntl.F_GETLK, WR)
+print("descriptors unchanged", count() == before)
+for x in (fd, fd2, fd3):
+    os.close(x)
+os.remove(p)
+os.rmdir(d)
+'''
+
+T4_LOCK_WAIT_EXPECTED = (
+    "handler [('alarm', False), ('acquired', True)] False\n"
+    "raising handler [('alarm', False), ('raised', False), ('nb conflict', 11, False)] False\n"
+    "[('thread acquired', True)] False\n"
+    "lockf acquired True None\nlockf releaser done True\n"
+    "F_SETLKW acquired True %r\nF_SETLKW releaser done True\n"
+    "F_OFD_SETLKW acquired True %r\nF_OFD_SETLKW releaser done True\n"
+    "descriptors unchanged True\n" % (b"\x01" + b"\0" * 31, b"\x01" + b"\0" * 31))
+
+
+def test_fcntl_lock_waits(jvm_kit, tmp_path):
+    """(b)-(f): handlers run during a polled main-thread wait, a raising handler propagates, other threads block, lockf
+    and the two SETLKW commands wait for a release, and no descriptor leaks (all compared with CPython)."""
+    _t4_same_stdout(jvm_kit, tmp_path, T4_LOCK_WAIT, T4_LOCK_WAIT_EXPECTED)
+
+
+T4_INDEX_SUBCLASSES = '''
+import fcntl, os, tempfile
+
+
+class B(bytes):
+    def __index__(self): return 1
+
+
+class BA(bytearray):
+    def __index__(self): return 1
+
+
+class S(str):
+    def __index__(self): return 1
+
+
+d = tempfile.mkdtemp()
+p = os.path.join(d, "f")
+fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
+for name, v in (("bytes sub", B(b"ab")), ("bytearray sub", BA(b"ab")), ("str sub", S("ab"))):
+    try:
+        print(name, "->", repr(fcntl.fcntl(fd, fcntl.F_GETFD, v)))
+    except Exception as e:
+        print(name, "!!", type(e).__name__, e.args)
+os.close(fd)
+os.unlink(p)
+os.rmdir(d)
+'''
+
+
+def test_fcntl_buffer_subclass_with_index(jvm_kit, tmp_path, monkeypatch):
+    """A bytes/bytearray/str subclass defining __index__: 3.14+ takes the integer form, 3.13 tries the buffer first."""
+    _compare(jvm_kit, tmp_path, monkeypatch, T4_INDEX_SUBCLASSES)
+
+
+def test_fcntl_nio_mode_is_a_shell(jvm_kit, tmp_path):
+    """Under PYJVM_POSIX_FDS=nio the module stays the StubModules shell: import works, fcntl.fcntl is unsupported."""
+    main = tmp_path / "main.py"
+    main.write_text('import fcntl\ntry:\n    fcntl.fcntl(5, fcntl.F_GETFD)\nexcept NotImplementedError as e:\n'
+                    '    print("NotImplementedError", e)\nprint(fcntl.LOCK_EX)\n', encoding="utf-8")
+    proc = _t4_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "NotImplementedError fcntl.fcntl is not supported by pyJVM\n2\n"
