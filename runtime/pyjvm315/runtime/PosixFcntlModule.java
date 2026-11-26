@@ -40,7 +40,8 @@ import java.util.function.IntSupplier;
  * Known consequences, CPython semantics, no guard: Python can change flags of JVM-owned descriptors by number; POSIX
  * record locks ({@code lockf}, {@code F_SETLK}) belong to the process and are dropped when any descriptor of that file is
  * closed in the process, including opens and closes the JDK makes on its own. {@code flock} and OFD locks are per open
- * file description and unaffected. {@code ioctl} is added by N2 ticket 5.
+ * file description and unaffected. {@code ioctl} (ticket 5): see {@link #ioctl}; no request is special-cased and a
+ * blocked call is not sliced (limit: a handler does not run while the main thread is inside the kernel).
  */
 final class PosixFcntlModule {
     private PosixFcntlModule() {}
@@ -55,6 +56,14 @@ final class PosixFcntlModule {
     /** {@code fcntl(fd, cmd, void *)}: the buffer form. */
     private static final MethodHandle FCNTL_PTR = PosixNative.fn("fcntl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS), VARIADIC2);
     private static final MethodHandle FLOCK = PosixNative.fn("flock", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
+    /** {@code ioctl(fd, request, long)}: the integer form; the request is passed zero-extended (n2_plan 1.4), the argument as {@code fcntl}'s. */
+    private static final MethodHandle IOCTL_INT = PosixNative.fn("ioctl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG), VARIADIC2);
+    /** {@code ioctl(fd, request, void *)}: the buffer form. */
+    private static final MethodHandle IOCTL_PTR = PosixNative.fn("ioctl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, ADDRESS), VARIADIC2);
+    /** Fills the native buffer beyond the data on 3.14+ so that a kernel write past the caller's length is noticed (CPython's SystemError). */
+    private static final byte SENTINEL = (byte) 0xA5;
+    /** CPython 3.14+: 8 guard bytes at buf[len]; guard[0] is NUL, the rest the sentinel. Equals {@code SLACK}. */
+    private static final int GUARD = 8;
 
     private static final int EINTR = 4, EAGAIN = 11, EACCES = 13;
     private static final int F_DUPFD = 0, F_SETLK = 6, F_SETLKW = 7, F_DUPFD_CLOEXEC = 1030, F_OFD_SETLK = 37, F_OFD_SETLKW = 38;
@@ -69,6 +78,7 @@ final class PosixFcntlModule {
         fn(m, "fcntl", PosixFcntlModule::fcntl);
         fn(m, "flock", PosixFcntlModule::flock);
         fn(m, "lockf", PosixFcntlModule::lockf);
+        fn(m, "ioctl", PosixFcntlModule::ioctl);
         return m;
     }
 
@@ -187,6 +197,116 @@ final class PosixFcntlModule {
         return v.longValue();
     }
 
+    // ---------------------------------------------------------------- fcntl.ioctl
+
+    /**
+     * {@code ioctl(fd, request, arg=0, mutate_flag=True, /)} (n2_plan 1.4, 3.8; every rule below measured on the three
+     * lanes, {@code work/n2/measure/ioctl_probe*.py} and {@code ioctl_probe*-31x.txt}). Order: fd, request (an unsigned 32-bit mask: any int; 3.14+ only ints
+     * and {@code __index__} objects, else {@code ioctl() argument 2 must be int}; 3.15 warns beyond [-2**63, 2**64-1]),
+     * the audit event {@code (fd, request, arg or None)}, then the third argument:
+     * <ul>
+     * <li>an int ({@code i} format: 32-bit signed, {@code OverflowError} outside, unlike {@code fcntl}): the call's result;</li>
+     * <li>a writable buffer (bytearray, array, writable memoryview) with {@code mutate_flag} true, of any length: copied
+     * into a native buffer, called, the first {@code len} bytes copied back into the object, the int result returned;</li>
+     * <li>any other buffer or str, or a writable one with {@code mutate_flag} false: bytes of the same length returned,
+     * the object untouched; the 1024-byte limit of 3.13/3.14 applies ({@link PosixArgs#checkBufferLength}).</li>
+     * </ul>
+     * 3.14+ checks 8 guard bytes starting at {@code buf[len]} (CPython's canary): guard[0] is NUL and must stay NUL,
+     * guard[1..7] hold a sentinel and must stay unchanged, else {@code SystemError} (raised after the write-back); the
+     * native buffer is always at least 1024 bytes plus slack. Only bytearray, array and memoryview-over-bytearray take
+     * the mutable path (see HANDOFF, ticket 5).
+     */
+    private static Object ioctl(List<Object> a, Map<Object, Object> k) {
+        positional("ioctl", a, k, 2, 4);
+        int fd = PosixArgs.fd(a.get(0));
+        long req = ioctlRequest(a.get(1));
+        Object arg = a.size() > 2 ? a.get(2) : null;
+        boolean mutate = a.size() < 4 || PyRuntime.truth(a.get(3));   // the clinic bool converter runs before the audit event
+        if (SysExtras.auditing()) SysExtras.audit("fcntl.ioctl", (long) fd, req, arg);
+        if (a.size() < 3) return ioctlInt(fd, req, 0);
+        boolean v314 = LangVersion.atLeast(3, 14);
+        if (v314 && PosixArgs.isIndex(arg)) return ioctlInt(fd, req, signedInt(arg));
+        Object u = NativeSubclass.unwrap(arg);
+        if (u instanceof PyMemoryView mv && !mv.contiguous()) {
+            if (v314) throw new PyException("BufferError", "memoryview: underlying buffer is not C-contiguous");
+            return ioctlInt(fd, req, signedInt(arg));   // 3.13: not a buffer, so the integer conversion reports it
+        }
+        if (u instanceof PyByteArray || (u instanceof PyMemoryView m2 && !m2.readonly()) || ArrayModule.asArray(u) != null) {
+            byte[] b = IoUtil.bytesLike(u);
+            if (!mutate) PosixArgs.checkBufferLength(b.length, "ioctl");
+            return ioctlBuffer(fd, req, b, mutate ? u : null);
+        }
+        byte[] b;
+        if (v314) b = PosixArgs.readBuffer(arg);
+        else if (u instanceof String s) {
+            try { b = Codecs.encode(s, "utf-8", "strict"); }
+            catch (PyException e) { if ("UnicodeEncodeError".equals(e.typeName)) b = null; else throw e; }
+        } else b = u instanceof PyBytes || u instanceof PyByteSequence ? IoUtil.bytesLike(u) : null;   // 3.13 "s*": any bytes-like
+        if (b != null) {
+            PosixArgs.checkBufferLength(b.length, "ioctl");
+            return ioctlBuffer(fd, req, b, null);
+        }
+        if (v314) throw PosixArgs.badArg3("ioctl", arg);
+        return ioctlInt(fd, req, signedInt(arg));
+    }
+
+    /** The request: an unsigned int mask of any Python int, returned zero-extended (a negative value never gets a high half). */
+    private static long ioctlRequest(Object o) {
+        if (LangVersion.atLeast(3, 14) && !PosixArgs.isIndex(o))
+            throw new PyException("TypeError", "ioctl() argument 2 must be int, not " + (o == null && LangVersion.atLeast(3, 15) ? "None" : PyRuntime.typeName(o)));
+        java.math.BigInteger v = BuiltinsExtra.rangeIndex(o);
+        if (LangVersion.atLeast(3, 15) && (v.compareTo(java.math.BigInteger.ONE.shiftLeft(64)) >= 0
+                || v.compareTo(java.math.BigInteger.ONE.shiftLeft(63).negate()) < 0)) PosixArgs.warnOutOfRange();
+        return Integer.toUnsignedLong(v.intValue());
+    }
+
+    /** The {@code i} format of the integer third argument. */
+    private static int signedInt(Object o) {
+        java.math.BigInteger v = BuiltinsExtra.rangeIndex(o);
+        if (v.bitLength() > 63) throw new PyException("OverflowError", "Python int too large to convert to C long");
+        long l = v.longValue();
+        if (l > Integer.MAX_VALUE) throw new PyException("OverflowError", "signed integer is greater than maximum");
+        if (l < Integer.MIN_VALUE) throw new PyException("OverflowError", "signed integer is less than minimum");
+        return (int) l;
+    }
+
+    private static Object ioctlInt(int fd, long req, int v) {
+        int r = retry(() -> ioctlCall(fd, req, v));
+        if (r < 0) throw PosixNative.osError(-r, null);
+        return (long) r;
+    }
+
+    /**
+     * The buffer form. {@code target} non-null is the mutable path: after the call exactly {@code b.length} bytes are
+     * copied back into it and the int result is returned; otherwise the result is bytes and nothing is written back.
+     */
+    private static Object ioctlBuffer(int fd, long req, byte[] b, Object target) {
+        int len = b.length;
+        boolean guard = LangVersion.atLeast(3, 14) && len <= BUF_MIN;
+        try (Arena arena = Arena.ofConfined()) {
+            long size = (long) Math.max(len, BUF_MIN) + SLACK;
+            MemorySegment buf = arena.allocate(size, 8);   // zero-filled; the byte at len stays 0 (CPython's NUL)
+            MemorySegment.copy(b, 0, buf, JAVA_BYTE, 0, len);
+            if (guard) buf.asSlice(len + 1L, GUARD - 1L).fill(SENTINEL);   // guard[0] = buf[len] stays NUL
+            int r = retry(() -> ioctlPtrCall(fd, req, buf));
+            if (r < 0) throw PosixNative.osError(-r, null);
+            byte[] out = new byte[len];
+            MemorySegment.copy(buf, JAVA_BYTE, 0, out, 0, len);
+            boolean overflow = false;
+            if (guard) {
+                overflow = buf.get(JAVA_BYTE, len) != 0;
+                for (long i = len + 1L; i < len + GUARD; i++) if (buf.get(JAVA_BYTE, i) != SENTINEL) { overflow = true; break; }
+            }
+            if (target != null) IoUtil.fill(target, out, 0, len);
+            if (overflow) {
+                throw new PyException("SystemError", !LangVersion.atLeast(3, 15) ? "buffer overflow"
+                    : "Possible stack corruption in ioctl() due to buffer overflow. Provide "
+                      + (target != null ? "a writable buffer argument" : "an argument") + " of sufficient size as determined by the operation.");
+            }
+            return target != null ? (Object) (long) r : new PyBytes(out);
+        }
+    }
+
     // ---------------------------------------------------------------- the lock-wait rule (plan 1.5)
 
     /** One lock call: {@code wait} true is the blocking command, false its non-waiting substitute; returns >= 0 or {@code -errno}. */
@@ -241,6 +361,22 @@ final class PosixFcntlModule {
         MemorySegment cs = PosixNative.tl().cs;
         try {
             int r = (int) FCNTL_PTR.invokeExact(cs, fd, cmd, p);
+            return r >= 0 ? r : -PosixNative.errno(cs);
+        } catch (Throwable t) { throw PosixNative.rethrow(t); }
+    }
+
+    private static int ioctlCall(int fd, long req, int v) {
+        MemorySegment cs = PosixNative.tl().cs;
+        try {
+            int r = (int) IOCTL_INT.invokeExact(cs, fd, req, Integer.toUnsignedLong(v));
+            return r >= 0 ? r : -PosixNative.errno(cs);
+        } catch (Throwable t) { throw PosixNative.rethrow(t); }
+    }
+
+    private static int ioctlPtrCall(int fd, long req, MemorySegment p) {
+        MemorySegment cs = PosixNative.tl().cs;
+        try {
+            int r = (int) IOCTL_PTR.invokeExact(cs, fd, req, p);
             return r >= 0 ? r : -PosixNative.errno(cs);
         } catch (Throwable t) { throw PosixNative.rethrow(t); }
     }

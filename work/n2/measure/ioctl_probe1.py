@@ -1,0 +1,50 @@
+import fcntl, os, sys, warnings, array
+warnings.simplefilter("error")
+r, w = os.pipe()
+os.write(w, b"hello")
+def t(name, *a):
+    try:
+        print(name, "->", repr(fcntl.ioctl(*a)))
+    except BaseException as e:
+        print(name, "!!", type(e).__name__, e.args)
+for req in (-1, 2**31, 2**32, 2**33, -2**31, -2**31 - 1, 2**64, -2**63, 2**63):
+    t("req %d" % req, r, req)
+for arg in (0, -1, 2**31, 2**32, 2**64, -2**31 - 1, True):
+    t("arg %r" % (arg,), r, 0x541B, arg)
+t("req True", r, True)
+t("req float", r, 1.5)
+t("req None", r, None)
+class I:
+    def __index__(self): return 0x541B
+t("req index", r, I())
+t("arg index", r, 0x541B, I())
+t("mv ro", r, 0x541B, memoryview(b"\0\0\0\0"))
+t("mv rw", r, 0x541B, memoryview(bytearray(4)))
+mv = memoryview(bytearray(8))[2:6]
+print(fcntl.ioctl(r, 0x541B, mv), bytes(mv.obj))
+a = array.array("i", [0, 7])
+print(fcntl.ioctl(r, 0x541B, a), a)
+a = array.array("h", [0, 7, 9])
+print(fcntl.ioctl(r, 0x541B, a), a)
+ba = bytearray(3)
+t("ba short", r, 0x541B, ba); print(ba)
+ba = bytearray(b"\1\1\1\1\1")
+print(fcntl.ioctl(r, 0x541B, ba), ba)
+t("ba nomut", r, 0x541B, ba, False); print(ba)
+t("mutate 0", r, 0x541B, bytearray(4), 0)
+t("empty ba", r, 0x541B, bytearray())
+t("empty bytes", r, 0x541B, b"")
+t("arg4 none", r, 0x541B, bytearray(4), None)
+t("arg4 str", r, 0x541B, bytearray(4), "x")
+t("noargs", r)
+t("5 args", r, 1, 2, 3, 4)
+t("bytes sub", r, 0x541B, bytes(4))
+t("mv nonc", r, 0x541B, memoryview(bytearray(8))[::2])
+t("mv nonc ro", r, 0x541B, memoryview(bytes(8))[::2])
+t("mv nonc nomut", r, 0x541B, memoryview(bytearray(8))[::2], False)
+t("array nomut", r, 0x541B, array.array("i", [0]), False)
+t("str", r, 0x541B, "abcd")
+t("str surrogate", r, 0x541B, "\udc80")
+t("fd str", "x", 1)
+t("fd -1", -1, 1)
+t("closed", 9999, 0x541B, bytearray(4))

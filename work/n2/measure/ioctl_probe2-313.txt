@@ -1,0 +1,122 @@
+== pending 5
+ba 0 -> 0
+   after b''
+ba nomut 0 -> b''
+bytes 0 -> b''
+str 0 -> b''
+ba 1 -> 0
+   after b'\x05'
+ba nomut 1 -> b'\x05'
+bytes 1 -> b'\x05'
+str 1 -> b'\x05'
+ba 2 -> 0
+   after b'\x05\x00'
+ba nomut 2 -> b'\x05\x00'
+bytes 2 -> b'\x05\x00'
+str 2 -> b'\x05\x00'
+ba 3 -> 0
+   after b'\x05\x00\x00'
+ba nomut 3 -> b'\x05\x00\x00'
+bytes 3 -> b'\x05\x00\x00'
+str 3 -> b'\x05\x00\x00'
+ba 4 -> 0
+   after b'\x05\x00\x00\x00'
+ba nomut 4 -> b'\x05\x00\x00\x00'
+bytes 4 -> b'\x05\x00\x00\x00'
+str 4 -> b'\x05\x00\x00\x00'
+ba 5 -> 0
+   after b'\x05\x00\x00\x00\xaa'
+ba nomut 5 -> b'\x05\x00\x00\x00\xaa'
+bytes 5 -> b'\x05\x00\x00\x00\xaa'
+str 5 -> b'\x05\x00\x00\x00a'
+arr h2 -> 0
+   after array('h', [5, 0])
+== pending 256
+ba 0 -> 0
+   after b''
+ba nomut 0 -> b''
+bytes 0 -> b''
+str 0 -> b''
+ba 1 -> 0
+   after b'\x00'
+ba nomut 1 -> b'\x00'
+bytes 1 -> b'\x00'
+str 1 -> b'\x00'
+ba 2 -> 0
+   after b'\x00\x01'
+ba nomut 2 -> b'\x00\x01'
+bytes 2 -> b'\x00\x01'
+str 2 -> b'\x00\x01'
+ba 3 -> 0
+   after b'\x00\x01\x00'
+ba nomut 3 -> b'\x00\x01\x00'
+bytes 3 -> b'\x00\x01\x00'
+str 3 -> b'\x00\x01\x00'
+ba 4 -> 0
+   after b'\x00\x01\x00\x00'
+ba nomut 4 -> b'\x00\x01\x00\x00'
+bytes 4 -> b'\x00\x01\x00\x00'
+str 4 -> b'\x00\x01\x00\x00'
+ba 5 -> 0
+   after b'\x00\x01\x00\x00\xaa'
+ba nomut 5 -> b'\x00\x01\x00\x00\xaa'
+bytes 5 -> b'\x00\x01\x00\x00\xaa'
+str 5 -> b'\x00\x01\x00\x00a'
+arr h2 -> 0
+   after array('h', [256, 0])
+== pending 65536
+ba 0 -> 0
+   after b''
+ba nomut 0 -> b''
+bytes 0 -> b''
+str 0 -> b''
+ba 1 -> 0
+   after b'\x00'
+ba nomut 1 -> b'\x00'
+bytes 1 -> b'\x00'
+str 1 -> b'\x00'
+ba 2 -> 0
+   after b'\x00\x00'
+ba nomut 2 -> b'\x00\x00'
+bytes 2 -> b'\x00\x00'
+str 2 -> b'\x00\x00'
+ba 3 -> 0
+   after b'\x00\x00\x01'
+ba nomut 3 -> b'\x00\x00\x01'
+bytes 3 -> b'\x00\x00\x01'
+str 3 -> b'\x00\x00\x01'
+ba 4 -> 0
+   after b'\x00\x00\x01\x00'
+ba nomut 4 -> b'\x00\x00\x01\x00'
+bytes 4 -> b'\x00\x00\x01\x00'
+str 4 -> b'\x00\x00\x01\x00'
+ba 5 -> 0
+   after b'\x00\x00\x01\x00\xaa'
+ba nomut 5 -> b'\x00\x00\x01\x00\xaa'
+bytes 5 -> b'\x00\x00\x01\x00\xaa'
+str 5 -> b'\x00\x00\x01\x00a'
+arr h2 -> 0
+   after array('h', [0, 1])
+big mut -> 0
+   after b'\x00\x01\x00\x00\xaa\xaa' b'\xaa\xaa'
+1024 mut -> 0
+   after b'\x00\x01\x00\x00\xaa\xaa'
+1025 nomut !! ValueError ('ioctl string arg too long',)
+1025 mut -> 0
+   after b'\x00\x01\x00\x00\xaa\xaa'
+bytes sub -> b'\x00\x01\x00\x00'
+float !! TypeError ("'float' object cannot be interpreted as an integer",)
+None !! TypeError ("'NoneType' object cannot be interpreted as an integer",)
+list !! TypeError ("'list' object cannot be interpreted as an integer",)
+index !! OSError (14, 'Bad address')
+index mutate_flag -> 0
+neg2**63 !! OverflowError ('signed integer is less than minimum',)
+neg2**63-1 !! OverflowError ('Python int too large to convert to C long',)
+2**63-1 !! OverflowError ('signed integer is greater than maximum',)
+2**63 !! OverflowError ('Python int too large to convert to C long',)
+req -2**63-1 !! OSError (25, 'Inappropriate ioctl for device')
+req -2**63 !! OSError (25, 'Inappropriate ioctl for device')
+req 2**64-1 !! OSError (25, 'Inappropriate ioctl for device')
+req True !! OSError (25, 'Inappropriate ioctl for device')
+req I !! OSError (25, 'Inappropriate ioctl for device')
+req str !! TypeError ("'str' object cannot be interpreted as an integer",)

@@ -1,0 +1,48 @@
+req -1 !! OSError (25, 'Inappropriate ioctl for device')
+req 2147483648 !! OSError (25, 'Inappropriate ioctl for device')
+req 4294967296 !! OSError (25, 'Inappropriate ioctl for device')
+req 8589934592 !! OSError (25, 'Inappropriate ioctl for device')
+req -2147483648 !! OSError (25, 'Inappropriate ioctl for device')
+req -2147483649 !! OSError (25, 'Inappropriate ioctl for device')
+req 18446744073709551616 !! DeprecationWarning ('integer value out of range',)
+req -9223372036854775808 !! OSError (25, 'Inappropriate ioctl for device')
+req 9223372036854775808 !! OSError (25, 'Inappropriate ioctl for device')
+arg 0 !! OSError (14, 'Bad address')
+arg -1 !! OSError (14, 'Bad address')
+arg 2147483648 !! OverflowError ('signed integer is greater than maximum',)
+arg 4294967296 !! OverflowError ('signed integer is greater than maximum',)
+arg 18446744073709551616 !! OverflowError ('Python int too large to convert to C long',)
+arg -2147483649 !! OverflowError ('signed integer is less than minimum',)
+arg True !! OSError (14, 'Bad address')
+req True !! OSError (25, 'Inappropriate ioctl for device')
+req float !! TypeError ('ioctl() argument 2 must be int, not float',)
+req None !! TypeError ('ioctl() argument 2 must be int, not None',)
+req index !! OSError (14, 'Bad address')
+arg index !! OSError (14, 'Bad address')
+mv ro -> b'\x05\x00\x00\x00'
+mv rw -> 0
+0 b'\x00\x00\x05\x00\x00\x00\x00\x00'
+0 array('i', [5, 7])
+0 array('h', [5, 0, 9])
+ba short -> 0
+bytearray(b'\x05\x00\x00')
+0 bytearray(b'\x05\x00\x00\x00\x01')
+ba nomut -> b'\x05\x00\x00\x00\x01'
+bytearray(b'\x05\x00\x00\x00\x01')
+mutate 0 -> b'\x05\x00\x00\x00'
+empty ba !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+empty bytes !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+arg4 none -> b'\x05\x00\x00\x00'
+arg4 str -> 0
+noargs !! TypeError ('ioctl expected at least 2 arguments, got 1',)
+5 args !! TypeError ('ioctl expected at most 4 arguments, got 5',)
+bytes sub -> b'\x05\x00\x00\x00'
+mv nonc !! BufferError ('memoryview: underlying buffer is not C-contiguous',)
+mv nonc ro !! BufferError ('memoryview: underlying buffer is not C-contiguous',)
+mv nonc nomut !! BufferError ('memoryview: underlying buffer is not C-contiguous',)
+array nomut -> b'\x05\x00\x00\x00'
+str -> b'\x05\x00\x00\x00'
+str surrogate !! UnicodeEncodeError ('utf-8', '\udc80', 0, 1, 'surrogates not allowed')
+fd str !! TypeError ('argument must be an int, or have a fileno() method.',)
+fd -1 !! ValueError ('file descriptor cannot be a negative integer (-1)',)
+closed !! OSError (9, 'Bad file descriptor')

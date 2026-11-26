@@ -1,0 +1,124 @@
+probe2.py:4: DeprecationWarning: integer value out of range
+  print(name, "->", repr(fcntl.ioctl(*a)))
+== pending 5
+ba 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b''
+ba nomut 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b'\x05'
+ba nomut 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b'\x05\x00'
+ba nomut 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 3 -> 0
+   after b'\x05\x00\x00'
+ba nomut 3 -> b'\x05\x00\x00'
+bytes 3 -> b'\x05\x00\x00'
+str 3 -> b'\x05\x00\x00'
+ba 4 -> 0
+   after b'\x05\x00\x00\x00'
+ba nomut 4 -> b'\x05\x00\x00\x00'
+bytes 4 -> b'\x05\x00\x00\x00'
+str 4 -> b'\x05\x00\x00\x00'
+ba 5 -> 0
+   after b'\x05\x00\x00\x00\xaa'
+ba nomut 5 -> b'\x05\x00\x00\x00\xaa'
+bytes 5 -> b'\x05\x00\x00\x00\xaa'
+str 5 -> b'\x05\x00\x00\x00a'
+arr h2 -> 0
+   after array('h', [5, 0])
+== pending 256
+ba 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b''
+ba nomut 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b'\x00'
+ba nomut 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b'\x00\x01'
+ba nomut 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 3 -> 0
+   after b'\x00\x01\x00'
+ba nomut 3 -> b'\x00\x01\x00'
+bytes 3 -> b'\x00\x01\x00'
+str 3 -> b'\x00\x01\x00'
+ba 4 -> 0
+   after b'\x00\x01\x00\x00'
+ba nomut 4 -> b'\x00\x01\x00\x00'
+bytes 4 -> b'\x00\x01\x00\x00'
+str 4 -> b'\x00\x01\x00\x00'
+ba 5 -> 0
+   after b'\x00\x01\x00\x00\xaa'
+ba nomut 5 -> b'\x00\x01\x00\x00\xaa'
+bytes 5 -> b'\x00\x01\x00\x00\xaa'
+str 5 -> b'\x00\x01\x00\x00a'
+arr h2 -> 0
+   after array('h', [256, 0])
+== pending 65536
+ba 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b''
+ba nomut 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 0 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b'\x00'
+ba nomut 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 1 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide a writable buffer argument of sufficient size as determined by the operation.',)
+   after b'\x00\x00'
+ba nomut 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+bytes 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+str 2 !! SystemError ('Possible stack corruption in ioctl() due to buffer overflow. Provide an argument of sufficient size as determined by the operation.',)
+ba 3 -> 0
+   after b'\x00\x00\x01'
+ba nomut 3 -> b'\x00\x00\x01'
+bytes 3 -> b'\x00\x00\x01'
+str 3 -> b'\x00\x00\x01'
+ba 4 -> 0
+   after b'\x00\x00\x01\x00'
+ba nomut 4 -> b'\x00\x00\x01\x00'
+bytes 4 -> b'\x00\x00\x01\x00'
+str 4 -> b'\x00\x00\x01\x00'
+ba 5 -> 0
+   after b'\x00\x00\x01\x00\xaa'
+ba nomut 5 -> b'\x00\x00\x01\x00\xaa'
+bytes 5 -> b'\x00\x00\x01\x00\xaa'
+str 5 -> b'\x00\x00\x01\x00a'
+arr h2 -> 0
+   after array('h', [0, 1])
+big mut -> 0
+   after b'\x00\x01\x00\x00\xaa\xaa' b'\xaa\xaa'
+1024 mut -> 0
+   after b'\x00\x01\x00\x00\xaa\xaa'
+1025 nomut -> b'\x00\x01\x00\x00\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa'
+1025 mut -> 0
+   after b'\x00\x01\x00\x00\xaa\xaa'
+bytes sub -> b'\x00\x01\x00\x00'
+float !! TypeError ('ioctl() argument 3 must be an integer, a bytes-like object, or a string, not float',)
+None !! TypeError ('ioctl() argument 3 must be an integer, a bytes-like object, or a string, not NoneType',)
+list !! TypeError ('ioctl() argument 3 must be an integer, a bytes-like object, or a string, not list',)
+index !! OSError (14, 'Bad address')
+index mutate_flag -> 0
+neg2**63 !! OverflowError ('signed integer is less than minimum',)
+neg2**63-1 !! OverflowError ('Python int too large to convert to C long',)
+2**63-1 !! OverflowError ('signed integer is greater than maximum',)
+2**63 !! OverflowError ('Python int too large to convert to C long',)
+req -2**63-1 !! OSError (25, 'Inappropriate ioctl for device')
+req -2**63 !! OSError (25, 'Inappropriate ioctl for device')
+req 2**64-1 !! OSError (25, 'Inappropriate ioctl for device')
+req True !! OSError (25, 'Inappropriate ioctl for device')
+req I !! OSError (25, 'Inappropriate ioctl for device')
+req str !! TypeError ('ioctl() argument 2 must be int, not str',)

@@ -757,3 +757,67 @@ def test_pty_names_grow_the_buffer(jvm_kit, tmp_path):
     plain = _pty_run(jvm_kit, tmp_path / "main.py", PTY_NAMES)
     assert plain.returncode == 0, plain.stderr
     assert plain.stdout == proc.stdout
+
+
+# ---- N2 ticket 5: fcntl.ioctl ------------------------------------------------------------------------------------------
+# SAFETY (n2_plan 2.3 A): only FIONREAD and unknown requests (ENOTTY) on a pipe the script creates; no terminal, no fd
+# 0/1/2. Every line is compared with the reference CPython of the same lane.
+
+T5_IOCTL = '''
+import array, fcntl, os, warnings
+
+FIONREAD = 0x541B
+r, w = os.pipe()
+os.write(w, b"hello")
+
+
+def t(label, f, *a):
+    try:
+        print(label, "->", repr(f(*a)))
+    except Exception as e:
+        print(label, "!!", type(e).__name__, e.args)
+
+
+buf = array.array("i", [0, 7])
+t("array", fcntl.ioctl, r, FIONREAD, buf)
+print("  array after", buf.tolist())
+buf = array.array("h", [3, 9, 9])
+t("array h", fcntl.ioctl, r, FIONREAD, buf)
+print("  array h after", buf.tolist())
+ba = bytearray(b"\\xaa" * 6)
+t("bytearray", fcntl.ioctl, r, FIONREAD, ba)
+print("  bytearray after", bytes(ba))
+ba = bytearray(b"\\xaa" * 6)
+t("bytearray no mutate", fcntl.ioctl, r, FIONREAD, ba, False)
+print("  bytearray after", bytes(ba))
+backing = bytearray(b"\\xbb" * 10)
+mv = memoryview(backing)[3:7]
+t("memoryview slice", fcntl.ioctl, r, FIONREAD, mv)
+print("  backing after", bytes(backing))
+ro = memoryview(b"\\0\\0\\0\\0")
+t("memoryview read-only", fcntl.ioctl, r, FIONREAD, ro)
+print("  read-only after", bytes(ro))
+big = bytearray(b"\\xcc" * 2000)
+t("2000 mutable", fcntl.ioctl, r, FIONREAD, big)
+print("  big after", bytes(big[:6]), bytes(big[-3:]), len(big))
+t("bytes", fcntl.ioctl, r, FIONREAD, b"\\0\\0\\0\\0")
+t("str", fcntl.ioctl, r, FIONREAD, "\\0\\0\\0\\0")
+t("int arg", fcntl.ioctl, r, FIONREAD, 0)
+t("no arg", fcntl.ioctl, r, FIONREAD)
+for req in (-1, 2**31, 2**32, 2**33, -2**31):
+    t("request %d" % req, fcntl.ioctl, r, req)
+    t("request %d buffer" % req, fcntl.ioctl, r, req, bytearray(8))
+t("closed", fcntl.ioctl, 9999, FIONREAD, bytearray(4))
+t("keyword", lambda: fcntl.ioctl(r, FIONREAD, arg=0))
+t("int arg too big", fcntl.ioctl, r, FIONREAD, 2**31)
+t("int arg too small", fcntl.ioctl, r, FIONREAD, -2**31 - 1)
+t("float arg", fcntl.ioctl, r, FIONREAD, 1.5)
+t("non-contiguous", fcntl.ioctl, r, FIONREAD, memoryview(bytearray(8))[::2])
+os.close(r)
+os.close(w)
+'''
+
+
+def test_ioctl_buffers_requests_and_write_back(jvm_kit, tmp_path, monkeypatch):
+    """Mutable buffers (array, bytearray, memoryview slice) get exactly len bytes back; read-only ones and mutate_flag=False return bytes; request values truncate to 32 bits."""
+    _compare(jvm_kit, tmp_path, monkeypatch, T5_IOCTL)
