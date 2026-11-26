@@ -1,0 +1,78 @@
+posix
+['RUSAGE_CHILDREN', 'RUSAGE_SELF', 'RUSAGE_THREAD', 'error', 'getpagesize', 'getrlimit', 'getrusage', 'prlimit', 'setrlimit', 'struct_rusage']
+['RLIMIT_AS', 'RLIMIT_CORE', 'RLIMIT_CPU', 'RLIMIT_DATA', 'RLIMIT_FSIZE', 'RLIMIT_MEMLOCK', 'RLIMIT_MSGQUEUE', 'RLIMIT_NICE', 'RLIMIT_NOFILE', 'RLIMIT_NPROC', 'RLIMIT_OFILE', 'RLIMIT_RSS', 'RLIMIT_RTPRIO', 'RLIMIT_RTTIME', 'RLIMIT_SIGPENDING', 'RLIMIT_STACK'] [9, 4, 0, 2, 1, 8, 12, 13, 7, 6, 7, 5, 14, 15, 11, 3]
+-1 0 -1 1 True
+RLIMIT_AS tuple 2 int int True
+RLIMIT_CORE tuple 2 int int True
+RLIMIT_CPU tuple 2 int int True
+RLIMIT_DATA tuple 2 int int True
+RLIMIT_FSIZE tuple 2 int int True
+RLIMIT_MEMLOCK tuple 2 int int True
+RLIMIT_MSGQUEUE tuple 2 int int True
+RLIMIT_NICE tuple 2 int int True
+RLIMIT_NOFILE tuple 2 int int True
+RLIMIT_NPROC tuple 2 int int True
+RLIMIT_OFILE tuple 2 int int True
+RLIMIT_RSS tuple 2 int int True
+RLIMIT_RTPRIO tuple 2 int int True
+RLIMIT_RTTIME tuple 2 int int True
+RLIMIT_SIGPENDING tuple 2 int int True
+RLIMIT_STACK tuple 2 int int True
+stack hard inf True as True
+getrlimit -1 !! ValueError ('invalid resource specified',)
+getrlimit 16 !! ValueError ('invalid resource specified',)
+getrlimit str !! TypeError ("'str' object cannot be interpreted as an integer",)
+getrlimit float !! TypeError ("'float' object cannot be interpreted as an integer",)
+getrlimit 2**40 !! OverflowError ('Python int too large to convert to C int',)
+getrlimit keyword !! TypeError ('resource.getrlimit() takes no keyword arguments',)
+getrlimit no args !! TypeError ('resource.getrlimit() takes exactly one argument (0 given)',)
+nofile sane True True
+setrlimit same -> None
+setrlimit soft-1 -> None
+lowered True
+setrlimit restore (list) -> None
+restored True
+soft > hard !! ValueError ('current limit exceeds maximum limit',)
+raise hard !! ValueError ('not allowed to raise maximum limit',)
+hard 2**63 !! ValueError ('not allowed to raise maximum limit',)
+1-tuple !! ValueError ('expected a tuple of 2 integers',)
+3-tuple !! ValueError ('expected a tuple of 2 integers',)
+int !! TypeError ("'int' object is not iterable",)
+str items !! TypeError ("'str' object cannot be interpreted as an integer",)
+float item !! TypeError ("'float' object cannot be interpreted as an integer",)
+bad resource !! ValueError ('invalid resource specified',)
+2**70 !! OverflowError ('Python int too large to convert to C rlim_t',)
+2**64 !! OverflowError ('Python int too large to convert to C rlim_t',)
+keyword !! TypeError ('resource.setrlimit() takes no keyword arguments',)
+core same -> None
+core hard -1 -> None
+warnings []
+core unchanged True
+nofile unchanged True
+prlimit 0 -> True
+prlimit own pid -> True
+prlimit set same -> True
+prlimit None -> True
+prlimit bad resource !! ValueError ('invalid resource specified',)
+prlimit missing pid !! ProcessLookupError (3, 'No such process')
+prlimit pid str !! TypeError ("'str' object cannot be interpreted as an integer",)
+prlimit pid 2**40 !! OverflowError ('Python int too large to convert to C int',)
+prlimit 1-tuple !! ValueError ('expected a tuple of 2 integers',)
+prlimit int !! TypeError ("'int' object is not iterable",)
+prlimit child lower -> 'old value returned'
+prlimit child read -> (64, 128)
+prlimit child raise hard !! PermissionError (1, 'Operation not permitted')
+child -9
+nofile unchanged True
+resource struct_rusage 16 ['float', 'float', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int', 'int'] True True resource.struct_rusage(ru_utime=
+True True 16 16
+rusage children -> 'struct_rusage'
+rusage thread -> 'struct_rusage'
+rusage 5 !! ValueError ('invalid who parameter',)
+rusage -2 !! ValueError ('invalid who parameter',)
+rusage str !! TypeError ("'str' object cannot be interpreted as an integer",)
+rusage 2**40 !! OverflowError ('Python int too large to convert to C int',)
+rusage keyword !! TypeError ('resource.getrusage() takes no keyword arguments',)
+pagesize -> True
+pagesize arg !! TypeError ('resource.getpagesize() takes no arguments (1 given)',)
+audit [('resource.prlimit', 3), ('resource.setrlimit', 2)] 15 11

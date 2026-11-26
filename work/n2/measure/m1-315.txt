@@ -1,0 +1,398 @@
+VERSION (3, 15, 2)
+MODULE fcntl ints 79 other 4
+  NAME fcntl fcntl builtin_function_or_method ($module, fd, cmd, arg=0, /)
+  NAME fcntl flock builtin_function_or_method ($module, fd, operation, /)
+  NAME fcntl ioctl builtin_function_or_method ($module, fd, request, arg=0, mutate_flag=True, /)
+  NAME fcntl lockf builtin_function_or_method ($module, fd, cmd, len=0, start=0, whence=0, /)
+  INT fcntl DN_ACCESS 1
+  INT fcntl DN_ATTRIB 32
+  INT fcntl DN_CREATE 4
+  INT fcntl DN_DELETE 8
+  INT fcntl DN_MODIFY 2
+  INT fcntl DN_MULTISHOT 2147483648
+  INT fcntl DN_RENAME 16
+  INT fcntl FASYNC 8192
+  INT fcntl FD_CLOEXEC 1
+  INT fcntl FICLONE 1074041865
+  INT fcntl FICLONERANGE 1075876877
+  INT fcntl F_DUPFD 0
+  INT fcntl F_DUPFD_CLOEXEC 1030
+  INT fcntl F_EXLCK 4
+  INT fcntl F_GETFD 1
+  INT fcntl F_GETFL 3
+  INT fcntl F_GETLEASE 1025
+  INT fcntl F_GETLK 5
+  INT fcntl F_GETLK64 5
+  INT fcntl F_GETOWN 9
+  INT fcntl F_GETOWN_EX 16
+  INT fcntl F_GETPIPE_SZ 1032
+  INT fcntl F_GETSIG 11
+  INT fcntl F_NOTIFY 1026
+  INT fcntl F_OWNER_PGRP 2
+  INT fcntl F_OWNER_PID 1
+  INT fcntl F_OWNER_TID 0
+  INT fcntl F_RDLCK 0
+  INT fcntl F_SETFD 2
+  INT fcntl F_SETFL 4
+  INT fcntl F_SETLEASE 1024
+  INT fcntl F_SETLK 6
+  INT fcntl F_SETLK64 6
+  INT fcntl F_SETLKW 7
+  INT fcntl F_SETLKW64 7
+  INT fcntl F_SETOWN 8
+  INT fcntl F_SETOWN_EX 15
+  INT fcntl F_SETPIPE_SZ 1031
+  INT fcntl F_SETSIG 10
+  INT fcntl F_SHLCK 8
+  INT fcntl F_UNLCK 2
+  INT fcntl F_WRLCK 1
+  INT fcntl I_ATMARK 21279
+  INT fcntl I_CANPUT 21282
+  INT fcntl I_CKBAND 21277
+  INT fcntl I_FDINSERT 21264
+  INT fcntl I_FIND 21259
+  INT fcntl I_FLUSH 21253
+  INT fcntl I_FLUSHBAND 21276
+  INT fcntl I_GETBAND 21278
+  INT fcntl I_GETCLTIME 21281
+  INT fcntl I_GETSIG 21258
+  INT fcntl I_GRDOPT 21255
+  INT fcntl I_GWROPT 21268
+  INT fcntl I_LINK 21260
+  INT fcntl I_LIST 21269
+  INT fcntl I_LOOK 21252
+  INT fcntl I_NREAD 21249
+  INT fcntl I_PEEK 21263
+  INT fcntl I_PLINK 21270
+  INT fcntl I_POP 21251
+  INT fcntl I_PUNLINK 21271
+  INT fcntl I_PUSH 21250
+  INT fcntl I_RECVFD 21262
+  INT fcntl I_SENDFD 21265
+  INT fcntl I_SETCLTIME 21280
+  INT fcntl I_SETSIG 21257
+  INT fcntl I_SRDOPT 21254
+  INT fcntl I_STR 21256
+  INT fcntl I_SWROPT 21267
+  INT fcntl I_UNLINK 21261
+  INT fcntl LOCK_EX 2
+  INT fcntl LOCK_MAND 32
+  INT fcntl LOCK_NB 4
+  INT fcntl LOCK_READ 64
+  INT fcntl LOCK_RW 192
+  INT fcntl LOCK_SH 1
+  INT fcntl LOCK_UN 8
+  INT fcntl LOCK_WRITE 128
+  DOCNONE fcntl False True
+MODULE termios ints 234 other 9
+  NAME termios error type None
+  NAME termios tcdrain builtin_function_or_method ($module, fd, /)
+  NAME termios tcflow builtin_function_or_method ($module, fd, action, /)
+  NAME termios tcflush builtin_function_or_method ($module, fd, queue, /)
+  NAME termios tcgetattr builtin_function_or_method ($module, fd, /)
+  NAME termios tcgetwinsize builtin_function_or_method ($module, fd, /)
+  NAME termios tcsendbreak builtin_function_or_method ($module, fd, duration, /)
+  NAME termios tcsetattr builtin_function_or_method ($module, fd, when, attributes, /)
+  NAME termios tcsetwinsize builtin_function_or_method ($module, fd, winsize, /)
+  INT termios B0 0
+  INT termios B1000000 4104
+  INT termios B110 3
+  INT termios B115200 4098
+  INT termios B1152000 4105
+  INT termios B1200 9
+  INT termios B134 4
+  INT termios B150 5
+  INT termios B1500000 4106
+  INT termios B1800 10
+  INT termios B19200 14
+  INT termios B200 6
+  INT termios B2000000 4107
+  INT termios B230400 4099
+  INT termios B2400 11
+  INT termios B2500000 4108
+  INT termios B300 7
+  INT termios B3000000 4109
+  INT termios B3500000 4110
+  INT termios B38400 15
+  INT termios B4000000 4111
+  INT termios B460800 4100
+  INT termios B4800 12
+  INT termios B50 1
+  INT termios B500000 4101
+  INT termios B57600 4097
+  INT termios B576000 4102
+  INT termios B600 8
+  INT termios B75 2
+  INT termios B921600 4103
+  INT termios B9600 13
+  INT termios BRKINT 2
+  INT termios BS0 0
+  INT termios BS1 8192
+  INT termios BSDLY 8192
+  INT termios CBAUD 4111
+  INT termios CBAUDEX 4096
+  INT termios CDSUSP 25
+  INT termios CEOF 4
+  INT termios CEOL 0
+  INT termios CEOT 4
+  INT termios CERASE 127
+  INT termios CFLUSH 15
+  INT termios CIBAUD 269418496
+  INT termios CINTR 3
+  INT termios CKILL 21
+  INT termios CLNEXT 22
+  INT termios CLOCAL 2048
+  INT termios CQUIT 28
+  INT termios CR0 0
+  INT termios CR1 512
+  INT termios CR2 1024
+  INT termios CR3 1536
+  INT termios CRDLY 1536
+  INT termios CREAD 128
+  INT termios CRPRNT 18
+  INT termios CRTSCTS 2147483648
+  INT termios CS5 0
+  INT termios CS6 16
+  INT termios CS7 32
+  INT termios CS8 48
+  INT termios CSIZE 48
+  INT termios CSTART 17
+  INT termios CSTOP 19
+  INT termios CSTOPB 64
+  INT termios CSUSP 26
+  INT termios CWERASE 23
+  INT termios ECHO 8
+  INT termios ECHOCTL 512
+  INT termios ECHOE 16
+  INT termios ECHOK 32
+  INT termios ECHOKE 2048
+  INT termios ECHONL 64
+  INT termios ECHOPRT 1024
+  INT termios EXTA 14
+  INT termios EXTB 15
+  INT termios EXTPROC 65536
+  INT termios FF0 0
+  INT termios FF1 32768
+  INT termios FFDLY 32768
+  INT termios FIOASYNC 21586
+  INT termios FIOCLEX 21585
+  INT termios FIONBIO 21537
+  INT termios FIONCLEX 21584
+  INT termios FIONREAD 21531
+  INT termios FLUSHO 4096
+  INT termios HUPCL 1024
+  INT termios ICANON 2
+  INT termios ICRNL 256
+  INT termios IEXTEN 32768
+  INT termios IGNBRK 1
+  INT termios IGNCR 128
+  INT termios IGNPAR 4
+  INT termios IMAXBEL 8192
+  INT termios INLCR 64
+  INT termios INPCK 16
+  INT termios IOCSIZE_MASK 1073676288
+  INT termios IOCSIZE_SHIFT 16
+  INT termios ISIG 1
+  INT termios ISTRIP 32
+  INT termios IUCLC 512
+  INT termios IUTF8 16384
+  INT termios IXANY 2048
+  INT termios IXOFF 4096
+  INT termios IXON 1024
+  INT termios NCC 8
+  INT termios NCCS 32
+  INT termios NL0 0
+  INT termios NL1 256
+  INT termios NLDLY 256
+  INT termios NOFLSH 128
+  INT termios N_MOUSE 2
+  INT termios N_PPP 3
+  INT termios N_SLIP 1
+  INT termios N_STRIP 4
+  INT termios N_TTY 0
+  INT termios OCRNL 8
+  INT termios OFDEL 128
+  INT termios OFILL 64
+  INT termios OLCUC 2
+  INT termios ONLCR 4
+  INT termios ONLRET 32
+  INT termios ONOCR 16
+  INT termios OPOST 1
+  INT termios PARENB 256
+  INT termios PARMRK 8
+  INT termios PARODD 512
+  INT termios PENDIN 16384
+  INT termios TAB0 0
+  INT termios TAB1 2048
+  INT termios TAB2 4096
+  INT termios TAB3 6144
+  INT termios TABDLY 6144
+  INT termios TCFLSH 21515
+  INT termios TCGETA 21509
+  INT termios TCGETS 21505
+  INT termios TCIFLUSH 0
+  INT termios TCIOFF 2
+  INT termios TCIOFLUSH 2
+  INT termios TCION 3
+  INT termios TCOFLUSH 1
+  INT termios TCOOFF 0
+  INT termios TCOON 1
+  INT termios TCSADRAIN 1
+  INT termios TCSAFLUSH 2
+  INT termios TCSANOW 0
+  INT termios TCSBRK 21513
+  INT termios TCSBRKP 21541
+  INT termios TCSETA 21510
+  INT termios TCSETAF 21512
+  INT termios TCSETAW 21511
+  INT termios TCSETS 21506
+  INT termios TCSETSF 21508
+  INT termios TCSETSW 21507
+  INT termios TCXONC 21514
+  INT termios TIOCCONS 21533
+  INT termios TIOCEXCL 21516
+  INT termios TIOCGETD 21540
+  INT termios TIOCGICOUNT 21597
+  INT termios TIOCGLCKTRMIOS 21590
+  INT termios TIOCGPGRP 21519
+  INT termios TIOCGSERIAL 21534
+  INT termios TIOCGSOFTCAR 21529
+  INT termios TIOCGWINSZ 21523
+  INT termios TIOCINQ 21531
+  INT termios TIOCLINUX 21532
+  INT termios TIOCMBIC 21527
+  INT termios TIOCMBIS 21526
+  INT termios TIOCMGET 21525
+  INT termios TIOCMIWAIT 21596
+  INT termios TIOCMSET 21528
+  INT termios TIOCM_CAR 64
+  INT termios TIOCM_CD 64
+  INT termios TIOCM_CTS 32
+  INT termios TIOCM_DSR 256
+  INT termios TIOCM_DTR 2
+  INT termios TIOCM_LE 1
+  INT termios TIOCM_RI 128
+  INT termios TIOCM_RNG 128
+  INT termios TIOCM_RTS 4
+  INT termios TIOCM_SR 16
+  INT termios TIOCM_ST 8
+  INT termios TIOCNOTTY 21538
+  INT termios TIOCNXCL 21517
+  INT termios TIOCOUTQ 21521
+  INT termios TIOCPKT 21536
+  INT termios TIOCPKT_DATA 0
+  INT termios TIOCPKT_DOSTOP 32
+  INT termios TIOCPKT_FLUSHREAD 1
+  INT termios TIOCPKT_FLUSHWRITE 2
+  INT termios TIOCPKT_NOSTOP 16
+  INT termios TIOCPKT_START 8
+  INT termios TIOCPKT_STOP 4
+  INT termios TIOCSCTTY 21518
+  INT termios TIOCSERCONFIG 21587
+  INT termios TIOCSERGETLSR 21593
+  INT termios TIOCSERGETMULTI 21594
+  INT termios TIOCSERGSTRUCT 21592
+  INT termios TIOCSERGWILD 21588
+  INT termios TIOCSERSETMULTI 21595
+  INT termios TIOCSERSWILD 21589
+  INT termios TIOCSER_TEMT 1
+  INT termios TIOCSETD 21539
+  INT termios TIOCSLCKTRMIOS 21591
+  INT termios TIOCSPGRP 21520
+  INT termios TIOCSSERIAL 21535
+  INT termios TIOCSSOFTCAR 21530
+  INT termios TIOCSTI 21522
+  INT termios TIOCSWINSZ 21524
+  INT termios TOSTOP 256
+  INT termios VDISCARD 13
+  INT termios VEOF 4
+  INT termios VEOL 11
+  INT termios VEOL2 16
+  INT termios VERASE 2
+  INT termios VINTR 0
+  INT termios VKILL 3
+  INT termios VLNEXT 15
+  INT termios VMIN 6
+  INT termios VQUIT 1
+  INT termios VREPRINT 12
+  INT termios VSTART 8
+  INT termios VSTOP 9
+  INT termios VSUSP 10
+  INT termios VSWTC 7
+  INT termios VSWTCH 7
+  INT termios VT0 0
+  INT termios VT1 16384
+  INT termios VTDLY 16384
+  INT termios VTIME 5
+  INT termios VWERASE 14
+  INT termios XCASE 4
+  INT termios XTABS 6144
+  INT termios _POSIX_VDISABLE 0
+  DOCNONE termios False True
+MODULE resource ints 22 other 7
+  NAME resource error type None
+  NAME resource getpagesize builtin_function_or_method ($module, /)
+  NAME resource getrlimit builtin_function_or_method ($module, resource, /)
+  NAME resource getrusage builtin_function_or_method ($module, who, /)
+  NAME resource prlimit builtin_function_or_method ($module, pid, resource, limits=None, /)
+  NAME resource setrlimit builtin_function_or_method ($module, resource, limits, /)
+  NAME resource struct_rusage type None
+  INT resource RLIMIT_AS 9
+  INT resource RLIMIT_CORE 4
+  INT resource RLIMIT_CPU 0
+  INT resource RLIMIT_DATA 2
+  INT resource RLIMIT_FSIZE 1
+  INT resource RLIMIT_MEMLOCK 8
+  INT resource RLIMIT_MSGQUEUE 12
+  INT resource RLIMIT_NICE 13
+  INT resource RLIMIT_NOFILE 7
+  INT resource RLIMIT_NPROC 6
+  INT resource RLIMIT_OFILE 7
+  INT resource RLIMIT_RSS 5
+  INT resource RLIMIT_RTPRIO 14
+  INT resource RLIMIT_RTTIME 15
+  INT resource RLIMIT_SIGPENDING 11
+  INT resource RLIMIT_STACK 3
+  INT resource RLIM_INFINITY 18446744073709551615
+  INT resource RLIM_SAVED_CUR 18446744073709551615
+  INT resource RLIM_SAVED_MAX 18446744073709551615
+  INT resource RUSAGE_CHILDREN -1
+  INT resource RUSAGE_SELF 0
+  INT resource RUSAGE_THREAD 1
+  DOCNONE resource True True
+MODULE pwd ints 0 other 4
+  NAME pwd getpwall builtin_function_or_method ($module, /)
+  NAME pwd getpwnam builtin_function_or_method ($module, name, /)
+  NAME pwd getpwuid builtin_function_or_method ($module, uidobj, /)
+  NAME pwd struct_passwd type None
+  DOCNONE pwd False True
+MODULE grp ints 0 other 4
+  NAME grp getgrall builtin_function_or_method ($module, /)
+  NAME grp getgrgid builtin_function_or_method ($module, /, id)
+  NAME grp getgrnam builtin_function_or_method ($module, /, name)
+  NAME grp struct_group type None
+  DOCNONE grp False True
+termios.error <class 'termios.error'> (<class 'termios.error'>, <class 'Exception'>, <class 'BaseException'>, <class 'object'>) termios error
+resource.error True
+SEQ pwd struct_passwd 7 7 0 ('pw_name', 'pw_passwd', 'pw_uid', 'pw_gid', 'pw_gecos', 'pw_dir', 'pw_shell')
+SEQ grp struct_group 4 4 0 ('gr_name', 'gr_passwd', 'gr_gid', 'gr_mem')
+SEQ resource struct_rusage 16 16 0 ('ru_utime', 'ru_stime', 'ru_maxrss', 'ru_ixrss', 'ru_idrss', 'ru_isrss', 'ru_minflt', 'ru_majflt', 'ru_nswap', 'ru_inblock', 'ru_oublock', 'ru_msgsnd', 'ru_msgrcv', 'ru_nsignals', 'ru_nvcsw', 'ru_nivcsw')
+OS openpty True ($module, /)
+OS ttyname True ($module, fd, /)
+OS login_tty True ($module, fd, /)
+OS ctermid True ($module, /)
+OS tcgetpgrp True ($module, fd, /)
+OS tcsetpgrp True ($module, fd, pgid, /)
+OS forkpty True ($module, /)
+OS posix_openpt True ($module, oflag, /)
+OS grantpt True ($module, fd, /)
+OS unlockpt True ($module, fd, /)
+OS ptsname True ($module, fd, /)
+OS getlogin True ($module, /)
+OS getgroups True ($module, /)
+OS getgrouplist True ($module, user, group, /)
+OS setsid True ($module, /)
+OS initgroups True ($module, username, gid, /)
+OS get_terminal_size True ($module, fd=<unrepresentable>, /)
+OS isatty True ($module, fd, /)
+OS fork True ($module, /)

@@ -1,0 +1,56 @@
+posix
+['getpwall', 'getpwnam', 'getpwuid', 'struct_passwd'] ['getgrall', 'getgrgid', 'getgrnam', 'struct_group']
+pwd struct_passwd True 7 ['str', 'str', 'int', 'int', 'str', 'str', 'str']
+True True True True True True
+True True
+7 7 0 ('pw_name', 'pw_passwd', 'pw_uid', 'pw_gid', 'pw_gecos', 'pw_dir', 'pw_shell') True True True tuple
+root 0 0 /root True True
+setattr !! AttributeError ('readonly attribute',)
+uid missing !! KeyError ('getpwuid(): uid not found: 4000000123',)
+uid -1 !! KeyError ('getpwuid(): uid not found: -1',)
+uid -2 !! KeyError ('getpwuid(): uid not found',)
+uid 2**32-1 !! KeyError ('getpwuid(): uid not found: -1',)
+uid 2**32 !! KeyError ('getpwuid(): uid not found',)
+uid 2**64 !! KeyError ('getpwuid(): uid not found',)
+uid -2**70 !! KeyError ('getpwuid(): uid not found',)
+uid str !! TypeError ('uid should be integer, not str',)
+uid float !! TypeError ('uid should be integer, not float',)
+uid None !! TypeError ('uid should be integer, not NoneType',)
+uid keyword !! TypeError ('pwd.getpwuid() takes no keyword arguments',)
+uid no args !! TypeError ('pwd.getpwuid() takes exactly one argument (0 given)',)
+name missing !! KeyError ("getpwnam(): name not found: 'pyjvm-no-such-user'",)
+name empty !! KeyError ("getpwnam(): name not found: ''",)
+name NUL !! ValueError ('embedded null byte',)
+name bytes !! TypeError ('getpwnam() argument must be str, not bytes',)
+name int !! TypeError ('getpwnam() argument must be str, not int',)
+name non-ASCII !! KeyError ("getpwnam(): name not found: 'é€'",)
+name surrogate !! KeyError ("getpwnam(): name not found: '\\udcff'",)
+name keyword !! TypeError ('pwd.getpwnam() takes no keyword arguments',)
+list True True True True True True
+True
+getpwall arg !! TypeError ('pwd.getpwall() takes no arguments (1 given)',)
+grp struct_group True 4 ['str', 'str', 'int', 'list'] True
+True True True True True
+4 4 0 ('gr_name', 'gr_passwd', 'gr_gid', 'gr_mem')
+root 0 True True True
+gid missing !! KeyError ('getgrgid(): gid not found: 4000000123',)
+gid -1 !! KeyError ('getgrgid(): gid not found: -1',)
+gid -2 !! OverflowError ('gid is less than minimum',)
+gid 2**32-1 !! KeyError ('getgrgid(): gid not found: -1',)
+gid 2**32 !! OverflowError ('gid is less than minimum',)
+gid 2**64 !! OverflowError ('gid is greater than maximum',)
+gid -2**70 !! OverflowError ('gid is less than minimum',)
+gid str !! TypeError ('gid should be integer, not str',)
+gid float !! TypeError ('gid should be integer, not float',)
+gid no args !! TypeError ("getgrgid() missing required argument 'id' (pos 1)",)
+gid two args !! TypeError ('getgrgid() takes at most 1 argument (2 given)',)
+gid bad keyword !! TypeError ("getgrgid() missing required argument 'id' (pos 1)",)
+name missing !! KeyError ("getgrnam(): name not found: 'pyjvm-no-such-group'",)
+name NUL !! ValueError ('embedded null byte',)
+name bytes !! TypeError ("getgrnam() argument 'name' must be str, not bytes",)
+name int !! TypeError ("getgrnam() argument 'name' must be str, not int",)
+name surrogate !! KeyError ("getgrnam(): name not found: '\\udcff'",)
+list True True True True True True
+True True
+getgrall arg !! TypeError ('grp.getgrall() takes no arguments (1 given)',)
+True True ~pyjvm-no-such-user

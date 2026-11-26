@@ -1,0 +1,102 @@
+posix
+['fcntl', 'flock', 'ioctl', 'lockf']
+79 1 2 3 4 1030 1 5 6 7 0 1 2 1 2 4 8 1032 1031
+getfd -> 1
+setfd 0 -> 0
+inheritable True
+setfd cloexec -> 0
+inheritable False
+accmode True
+setfl nonblock -> 0
+blocking False
+nonblock bit False
+dup True True True
+dup True True True
+getlk bytes -> b'\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+getlk bytearray !! TypeError ("'bytearray' object cannot be interpreted as an integer",)
+getlk str -> b'\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+arg nonascii str -> b'\xc3\xa9'
+arg 1024 -> 1024
+arg 1025 !! ValueError ('fcntl string arg too long',)
+arg empty -> b''
+arg float !! TypeError ("'float' object cannot be interpreted as an integer",)
+arg None !! TypeError ("'NoneType' object cannot be interpreted as an integer",)
+arg 2**31 -> 1
+arg -1 -> 1
+arg 2**32 -> 1
+warnings []
+cmd str !! TypeError ("'str' object cannot be interpreted as an integer",)
+cmd 2**40 !! OverflowError ('Python int too large to convert to C int',)
+cmd unknown !! OSError (22, 'Invalid argument')
+fd -1 !! ValueError ('file descriptor cannot be a negative integer (-1)',)
+fd closed !! OSError (9, 'Bad file descriptor')
+fd str !! TypeError ('argument must be an int, or have a fileno() method.',)
+fd float !! TypeError ('argument must be an int, or have a fileno() method.',)
+fd 2**40 !! OverflowError ('Python int too large to convert to C int',)
+fd fileno() -> 1
+fd fileno() str !! TypeError ('fileno() returned a non-integer',)
+fd fileno() -1 !! ValueError ('file descriptor cannot be a negative integer (-1)',)
+fd file object -> 1
+keyword !! TypeError ('fcntl.fcntl() takes no keyword arguments',)
+no args !! TypeError ('fcntl expected at least 2 arguments, got 0',)
+4 args !! TypeError ('fcntl expected at most 3 arguments, got 4',)
+flock ex -> None
+flock ex conflict !! BlockingIOError (11, 'Resource temporarily unavailable')
+flock sh conflict !! BlockingIOError (11, 'Resource temporarily unavailable')
+flock un -> None
+flock sh -> None
+flock sh shared -> None
+flock un -> None
+flock un -> None
+flock op 0 !! OSError (22, 'Invalid argument')
+flock closed !! OSError (9, 'Bad file descriptor')
+flock op str !! TypeError ("'str' object cannot be interpreted as an integer",)
+flock op 2**40 !! OverflowError ('Python int too large to convert to C int',)
+flock keyword !! TypeError ('fcntl.flock() takes no keyword arguments',)
+lockf ex -> None
+seen ('WRLCK', 0, 0, True)
+ofd setlk conflict !! BlockingIOError (11, 'Resource temporarily unavailable')
+lockf un -> None
+seen ('UNLCK', 0, 0, True)
+lockf range -> None
+seen ('WRLCK', 5, 10, True)
+lockf un range -> None
+lockf sh -> None
+seen ('RDLCK', 0, 0, True)
+lockf un -> None
+lockf ex read-only !! OSError (9, 'Bad file descriptor')
+lockf cmd 0 !! ValueError ('unrecognized lockf argument',)
+lockf cmd NB !! ValueError ('unrecognized lockf argument',)
+lockf len str !! TypeError ("'str' object cannot be interpreted as an integer",)
+lockf len 2**70 !! OverflowError ('Python int too large to convert to C long',)
+lockf whence 9 !! OSError (22, 'Invalid argument')
+lockf closed !! OSError (9, 'Bad file descriptor')
+lockf keyword !! TypeError ('fcntl.lockf() takes no keyword arguments',)
+FIONREAD array -> 0
+buf 5
+FIONREAD bytearray -> 0
+ba b'\x05\x00\x00\x00'
+FIONREAD no mutate -> b'\x05\x00\x00\x00'
+ba b'\x00\x00\x00\x00'
+FIONREAD bytes -> b'\x05\x00\x00\x00'
+FIONREAD str -> b'\x05\x00\x00\x00'
+FIONREAD 2000 mutable -> 0
+big b'\x05\x00\x00\x00'
+FIONREAD 1024 bytes -> 1024
+FIONREAD 1025 bytes !! ValueError ('ioctl string arg too long',)
+FIONREAD int 0 !! OSError (14, 'Bad address')
+TIOCGWINSZ on pipe !! OSError (25, 'Inappropriate ioctl for device')
+ioctl closed !! OSError (9, 'Bad file descriptor')
+ioctl request -1 !! OSError (25, 'Inappropriate ioctl for device')
+ioctl request 2**31 !! OSError (25, 'Inappropriate ioctl for device')
+ioctl request str !! TypeError ("'str' object cannot be interpreted as an integer",)
+ioctl arg float !! TypeError ("'float' object cannot be interpreted as an integer",)
+ioctl keyword !! TypeError ('fcntl.ioctl() takes no keyword arguments',)
+FIONCLEX -> 0
+inheritable True
+FIOCLEX -> 0
+inheritable False
+pipe size True 8192 8192
+audit ['fcntl.fcntl', 'fcntl.flock', 'fcntl.ioctl', 'fcntl.lockf'] ['fcntl.fcntl', 'fcntl.flock', 'fcntl.lockf', 'fcntl.ioctl']
+audit first ('fcntl.fcntl', 3) (1, None) second (2, 0)
+(2, (2,)) (5, (6, None, None, 0)) (3,)

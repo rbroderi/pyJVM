@@ -1,0 +1,93 @@
+posix
+['error', 'tcdrain', 'tcflow', 'tcflush', 'tcgetattr', 'tcgetwinsize', 'tcsendbreak', 'tcsetattr', 'tcsetwinsize']
+234 3492074298 32 0 1 2 6 5 8 2 1 15 21523 21531
+termios error Exception False
+['openpty', 'ttyname', 'posix_openpt', 'grantpt', 'unlockpt', 'ptsname']
+openpty True True True False False True True True True
+ttyname slave -> True
+ttyname master -> '/dev/ptmx'
+ttyname pipe !! OSError (25, 'Inappropriate ioctl for device') True
+ttyname closed !! OSError (9, 'Bad file descriptor') True
+ttyname str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+openpty arg !! TypeError ('posix.openpty() takes no arguments (1 given)',) False
+same tty True
+list 7 ['int', 'int', 'int', 'int', 'int', 'int'] list 32 ['bytes'] True
+[1280, 5, 191, 35387, 15, 15] [b'\x03', b'\x1c', b'\x7f', b'\x15', b'\x04', b'\x00', b'\x01', b'\x00', b'\x11', b'\x13', b'\x1a', b'\x00', b'\x12', b'\x0f', b'\x17', b'\x16', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00']
+True True True True b'\x03' b'\x04'
+tcgetattr master -> True
+echo off -> None
+echo False
+non-canonical -> None
+int 1 int 0 ['bytes', 'int']
+restore -> None
+restored True
+attributes tuple !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+attributes 6 !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+cc tuple !! TypeError ('tcsetattr: attributes[6] must be 32 element list',) False
+cc 31 !! TypeError ('tcsetattr: attributes[6] must be 32 element list',) False
+cc str !! TypeError ('tcsetattr: elements of attributes must be characters or integers',) False
+cc 2 bytes !! TypeError ('tcsetattr: elements of attributes must be characters or integers',) False
+cc int 300 -> None
+cc [b',', b',', b',']
+flag str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad speed !! error (22, 'Invalid argument') False
+bad when !! error (22, 'Invalid argument') False
+when str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+restore -> None
+restored True
+tcsetattr pipe !! error (25, 'Inappropriate ioctl for device') False
+tcgetattr pipe !! error (25, 'Inappropriate ioctl for device') False
+tcgetattr closed !! error (9, 'Bad file descriptor') False
+tcgetattr -1 !! ValueError ('file descriptor cannot be a negative integer (-1)',) False
+tcgetattr str !! TypeError ('argument must be an int, or have a fileno() method.',) False
+tcgetattr keyword !! TypeError ('termios.tcgetattr() takes no keyword arguments',) False
+tcgetattr fileno() -> True
+winsize -> (0, 0)
+set winsize -> None
+winsize -> (24, 80)
+winsize master -> (24, 80)
+os.get_terminal_size -> (80, 24)
+set winsize list -> None
+TIOCGWINSZ -> (30, 100, 0, 0)
+TIOCSWINSZ -> b'\x05\x00\x06\x00\x00\x00\x00\x00'
+winsize -> (5, 6)
+winsize 3 items !! TypeError ('tcsetwinsize, arg 2: must be a two-item sequence',) False
+winsize int !! TypeError ('tcsetwinsize, arg 2: must be a two-item sequence',) False
+winsize str items !! TypeError ("'str' object cannot be interpreted as an integer",) False
+winsize 70000 !! OverflowError ('winsize value(s) out of range.',) False
+winsize -1 !! OverflowError ('winsize value(s) out of range.',) False
+winsize 2**70 !! OverflowError ('Python int too large to convert to C long',) False
+winsize pipe !! error (25, 'Inappropriate ioctl for device') False
+tcdrain -> None
+tcflush -> None
+tcflush 99 !! error (22, 'Invalid argument') False
+tcflow off -> None
+tcflow on -> None
+tcflow 99 !! error (22, 'Invalid argument') False
+tcflow str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+tcsendbreak -> None
+tcdrain pipe !! error (25, 'Inappropriate ioctl for device') False
+tcflush pipe !! error (25, 'Inappropriate ioctl for device') False
+tcsendbreak pipe !! error (25, 'Inappropriate ioctl for device') False
+error (25, 'Inappropriate ioctl for device') (25, 'Inappropriate ioctl for device') error(25, 'Inappropriate ioctl for device') False
+slave read b'line\n'
+master read b'out\r\n'
+slave read b'echo\n' echoed b'echo\r\n'
+arrived True (8,)
+read after flush !! BlockingIOError (11, 'Resource temporarily unavailable') True
+FIONREAD (0,) []
+tty.setraw -> True
+raw 0 0 1 0
+raw read b'x'
+tty.setcbreak -> 'list'
+pty.openpty True True False
+posix_openpt True False True
+grantpt -> None
+unlockpt -> None
+ptsname -> True
+ptsname pipe !! OSError (25, 'Inappropriate ioctl for device') True
+grantpt pipe !! OSError (22, 'Invalid argument') True
+posix_openpt -1 !! NotADirectoryError (20, 'Not a directory') True
+tcgetattr after master close !! error (5, 'Input/output error') False
+read after master close -> b''
+done

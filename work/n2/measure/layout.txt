@@ -1,0 +1,45 @@
+struct flock size 32
+  flock.l_type offset 0 size 2
+  flock.l_whence offset 2 size 2
+  flock.l_start offset 8 size 8
+  flock.l_len offset 16 size 8
+  flock.l_pid offset 24 size 4
+struct termios size 60 NCCS 32
+  termios.c_iflag offset 0 size 4
+  termios.c_oflag offset 4 size 4
+  termios.c_cflag offset 8 size 4
+  termios.c_lflag offset 12 size 4
+  termios.c_line offset 16 size 1
+  termios.c_cc offset 17 size 32
+  termios.c_ispeed offset 52 size 4
+  termios.c_ospeed offset 56 size 4
+struct winsize size 8
+  winsize.ws_row offset 0 size 2
+  winsize.ws_col offset 2 size 2
+  winsize.ws_xpixel offset 4 size 2
+  winsize.ws_ypixel offset 6 size 2
+struct rlimit size 16 (rlim_t 8)
+  rlimit.rlim_cur offset 0 size 8
+  rlimit.rlim_max offset 8 size 8
+RLIM_INFINITY 18446744073709551615 RLIM_NLIMITS 16
+struct rusage size 144
+struct passwd size 48
+  passwd.pw_name offset 0 size 8
+  passwd.pw_passwd offset 8 size 8
+  passwd.pw_uid offset 16 size 4
+  passwd.pw_gid offset 20 size 4
+  passwd.pw_gecos offset 24 size 8
+  passwd.pw_dir offset 32 size 8
+  passwd.pw_shell offset 40 size 8
+struct group size 32
+  group.gr_name offset 0 size 8
+  group.gr_passwd offset 8 size 8
+  group.gr_gid offset 16 size 4
+  group.gr_mem offset 24 size 8
+_SC_GETPW_R_SIZE_MAX 70 -> 1024; _SC_GETGR_R_SIZE_MAX 69 -> 1024; _SC_PAGESIZE 30 -> 4096
+F_GETLK 5 F_SETLK 6 F_SETLKW 7 F_OFD_GETLK 36 F_OFD_SETLK 37 F_OFD_SETLKW 38 F_DUPFD_CLOEXEC 1030 F_GETPIPE_SZ 1032
+F_RDLCK 0 F_WRLCK 1 F_UNLCK 2 LOCK_SH 1 LOCK_EX 2 LOCK_NB 4 LOCK_UN 8
+TCGETS 0x5401 TCSETS 0x5402 TIOCGWINSZ 0x5413 TIOCSWINSZ 0x5414 FIONREAD 0x541b TIOCSCTTY 0x540e
+TCSANOW 0 TCSADRAIN 1 TCSAFLUSH 2 VMIN 6 VTIME 5 ICANON 2 ECHO 8 B38400 15
+RUSAGE_SELF 0 RUSAGE_CHILDREN -1 RUSAGE_THREAD 1
+O_RDWR 2 O_NOCTTY 256 O_CLOEXEC 524288
