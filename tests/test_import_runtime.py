@@ -146,6 +146,9 @@ os.rmdir(d)
 POSIX_FFM_CLASSES = (
     "PosixNative", "PosixFds", "PosixOsFds", "PosixSelect", "PosixSelectModule", "PosixErrnoText",
     "PosixProc", "PosixSpawn", "PosixOsProc", "PosixSubprocessModule", "PosixConfNames", "PosixStructSeq",
+    # N2: the classes that exist from ticket 1 on, then those of the later tickets (absent classes are simply not in the log)
+    "PosixLibcConsts", "PosixArgs", "PosixFcntlModule", "PosixResourceModule", "PosixAccounts", "PosixOsTty",
+    "PosixTermiosModule",
 )
 
 

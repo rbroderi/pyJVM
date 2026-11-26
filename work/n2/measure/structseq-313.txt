@@ -1,0 +1,174 @@
+== posix waitid_result 5 5 0
+list -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+tuple -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+generator -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+range -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+str-of-right-length -> posix.waitid_result(si_pid='a', si_uid='a', si_signo='a', si_status='a', si_code='a')
+too short !! TypeError ('posix.waitid_result() takes a 5-sequence (4-sequence given)',)
+too long !! TypeError ('posix.waitid_result() takes a 5-sequence (6-sequence given)',)
+empty !! TypeError ('posix.waitid_result() takes a 5-sequence (0-sequence given)',)
+no args !! TypeError ("structseq() missing required argument 'sequence' (pos 1)",)
+two args !! TypeError ('posix.waitid_result() takes a dict as second arg, if any',)
+dict arg -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+dict arg 2 !! TypeError ('posix.waitid_result() got duplicate or unexpected field name(s)',)
+dict arg non-dict !! TypeError ('posix.waitid_result() takes a dict as second arg, if any',)
+keyword sequence -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+keyword dict -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+non-iterable !! TypeError ('constructor requires a sequence',)
+None !! TypeError ('constructor requires a sequence',)
+bytes -> posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+waitid_result 0 4 (0, 1) tuple 5 True
+True False True True True
+posix.waitid_result(si_pid=0, si_uid=1, si_signo=2, si_status=3, si_code=4)
+reduce -> (<class 'posix.waitid_result'>, ((0, 1, 2, 3, 4), {}))
+pickle -> True
+pickle type -> True
+pickle proto 0 -> True
+pickle proto 1 -> True
+pickle proto 2 -> True
+pickle proto 3 -> True
+pickle proto 4 -> True
+pickle proto 5 -> True
+copy -> (True, True, False)
+deepcopy -> (True, True)
+attr after copy -> 0
+attr after pickle -> 4
+setattr !! AttributeError ('readonly attribute',)
+match_args -> ('si_pid', 'si_uid', 'si_signo', 'si_status', 'si_code')
+is tuple subclass -> (True, (<class 'posix.waitid_result'>, <class 'tuple'>, <class 'object'>))
+add -> (0, 1, 2, 3, 4, 1)
+replace -> 'waitid_result'
+subclass !! TypeError ("type 'posix.waitid_result' is not an acceptable base type",)
+setattr field !! AttributeError ('readonly attribute',)
+setattr n_fields !! AttributeError ("'posix.waitid_result' object attribute 'n_fields' is read-only",)
+setattr foo !! AttributeError ("'posix.waitid_result' object has no attribute 'foo' and no __dict__ for setting new attributes",)
+delattr field !! AttributeError ('readonly attribute',)
+delattr n_fields !! AttributeError ("'posix.waitid_result' object attribute 'n_fields' is read-only",)
+delattr foo !! AttributeError ("'posix.waitid_result' object has no attribute 'foo' and no __dict__ for setting new attributes",)
+class setattr -> (None, 1, None)
+5, 5 !! TypeError ('constructor requires a sequence',)
+5, None !! TypeError ('constructor requires a sequence',)
+range, None !! TypeError ('posix.waitid_result() takes a dict as second arg, if any',)
+pos+name sequence !! TypeError ("argument for structseq() given by name ('sequence') and position (1)",)
+pos+name dict !! TypeError ('structseq() takes at most 2 arguments (3 given)',)
+unknown keyword !! TypeError ("structseq() got an unexpected keyword argument 'foo'",)
+three args !! TypeError ('structseq() takes at most 2 arguments (3 given)',)
+iteration TypeError !! TypeError ('inner',)
+iteration ZeroDivisionError !! ZeroDivisionError ('zd',)
+__iter__ raises TypeError !! TypeError ('constructor requires a sequence',)
+== resource struct_rusage 16 16 0
+list -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+tuple -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+generator -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+range -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+str-of-right-length -> resource.struct_rusage(ru_utime='a', ru_stime='a', ru_maxrss='a', ru_ixrss='a', ru_idrss='a', ru_isrss='a', ru_minflt='a', ru_majflt='a', ru_nswap='a', ru_inblock='a', ru_oublock='a', ru_msgsnd='a', ru_msgrcv='a', ru_nsignals='a', ru_nvcsw='a', ru_nivcsw='a')
+too short !! TypeError ('resource.struct_rusage() takes a 16-sequence (15-sequence given)',)
+too long !! TypeError ('resource.struct_rusage() takes a 16-sequence (17-sequence given)',)
+empty !! TypeError ('resource.struct_rusage() takes a 16-sequence (0-sequence given)',)
+no args !! TypeError ("structseq() missing required argument 'sequence' (pos 1)",)
+two args !! TypeError ('resource.struct_rusage() takes a dict as second arg, if any',)
+dict arg -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+dict arg 2 !! TypeError ('resource.struct_rusage() got duplicate or unexpected field name(s)',)
+dict arg non-dict !! TypeError ('resource.struct_rusage() takes a dict as second arg, if any',)
+keyword sequence -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+keyword dict -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+non-iterable !! TypeError ('constructor requires a sequence',)
+None !! TypeError ('constructor requires a sequence',)
+bytes -> resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+struct_rusage 0 15 (0, 1) tuple 16 True
+True False True True True
+resource.struct_rusage(ru_utime=0, ru_stime=1, ru_maxrss=2, ru_ixrss=3, ru_idrss=4, ru_isrss=5, ru_minflt=6, ru_majflt=7, ru_nswap=8, ru_inblock=9, ru_oublock=10, ru_msgsnd=11, ru_msgrcv=12, ru_nsignals=13, ru_nvcsw=14, ru_nivcsw=15)
+reduce -> (<class 'resource.struct_rusage'>, ((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15), {}))
+pickle -> True
+pickle type -> True
+pickle proto 0 -> True
+pickle proto 1 -> True
+pickle proto 2 -> True
+pickle proto 3 -> True
+pickle proto 4 -> True
+pickle proto 5 -> True
+copy -> (True, True, False)
+deepcopy -> (True, True)
+attr after copy -> 0
+attr after pickle -> 15
+setattr !! AttributeError ('readonly attribute',)
+match_args -> ('ru_utime', 'ru_stime', 'ru_maxrss', 'ru_ixrss', 'ru_idrss', 'ru_isrss', 'ru_minflt', 'ru_majflt', 'ru_nswap', 'ru_inblock', 'ru_oublock', 'ru_msgsnd', 'ru_msgrcv', 'ru_nsignals', 'ru_nvcsw', 'ru_nivcsw')
+is tuple subclass -> (True, (<class 'resource.struct_rusage'>, <class 'tuple'>, <class 'object'>))
+add -> (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 1)
+replace -> 'struct_rusage'
+subclass !! TypeError ("type 'resource.struct_rusage' is not an acceptable base type",)
+setattr field !! AttributeError ('readonly attribute',)
+setattr n_fields !! AttributeError ("'resource.struct_rusage' object attribute 'n_fields' is read-only",)
+setattr foo !! AttributeError ("'resource.struct_rusage' object has no attribute 'foo' and no __dict__ for setting new attributes",)
+delattr field !! AttributeError ('readonly attribute',)
+delattr n_fields !! AttributeError ("'resource.struct_rusage' object attribute 'n_fields' is read-only",)
+delattr foo !! AttributeError ("'resource.struct_rusage' object has no attribute 'foo' and no __dict__ for setting new attributes",)
+class setattr -> (None, 1, None)
+5, 5 !! TypeError ('constructor requires a sequence',)
+5, None !! TypeError ('constructor requires a sequence',)
+range, None !! TypeError ('resource.struct_rusage() takes a dict as second arg, if any',)
+pos+name sequence !! TypeError ("argument for structseq() given by name ('sequence') and position (1)",)
+pos+name dict !! TypeError ('structseq() takes at most 2 arguments (3 given)',)
+unknown keyword !! TypeError ("structseq() got an unexpected keyword argument 'foo'",)
+three args !! TypeError ('structseq() takes at most 2 arguments (3 given)',)
+iteration TypeError !! TypeError ('inner',)
+iteration ZeroDivisionError !! ZeroDivisionError ('zd',)
+__iter__ raises TypeError !! TypeError ('constructor requires a sequence',)
+== pwd struct_passwd 7 7 0
+list -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+tuple -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+generator -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+range -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+str-of-right-length -> pwd.struct_passwd(pw_name='a', pw_passwd='a', pw_uid='a', pw_gid='a', pw_gecos='a', pw_dir='a', pw_shell='a')
+too short !! TypeError ('pwd.struct_passwd() takes a 7-sequence (6-sequence given)',)
+too long !! TypeError ('pwd.struct_passwd() takes a 7-sequence (8-sequence given)',)
+empty !! TypeError ('pwd.struct_passwd() takes a 7-sequence (0-sequence given)',)
+no args !! TypeError ("structseq() missing required argument 'sequence' (pos 1)",)
+two args !! TypeError ('pwd.struct_passwd() takes a dict as second arg, if any',)
+dict arg -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+dict arg 2 !! TypeError ('pwd.struct_passwd() got duplicate or unexpected field name(s)',)
+dict arg non-dict !! TypeError ('pwd.struct_passwd() takes a dict as second arg, if any',)
+keyword sequence -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+keyword dict -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+non-iterable !! TypeError ('constructor requires a sequence',)
+None !! TypeError ('constructor requires a sequence',)
+bytes -> pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+struct_passwd 0 6 (0, 1) tuple 7 True
+True False True True True
+pwd.struct_passwd(pw_name=0, pw_passwd=1, pw_uid=2, pw_gid=3, pw_gecos=4, pw_dir=5, pw_shell=6)
+reduce -> (<class 'pwd.struct_passwd'>, ((0, 1, 2, 3, 4, 5, 6), {}))
+pickle -> True
+pickle type -> True
+pickle proto 0 -> True
+pickle proto 1 -> True
+pickle proto 2 -> True
+pickle proto 3 -> True
+pickle proto 4 -> True
+pickle proto 5 -> True
+copy -> (True, True, False)
+deepcopy -> (True, True)
+attr after copy -> 0
+attr after pickle -> 6
+setattr !! AttributeError ('readonly attribute',)
+match_args -> ('pw_name', 'pw_passwd', 'pw_uid', 'pw_gid', 'pw_gecos', 'pw_dir', 'pw_shell')
+is tuple subclass -> (True, (<class 'pwd.struct_passwd'>, <class 'tuple'>, <class 'object'>))
+add -> (0, 1, 2, 3, 4, 5, 6, 1)
+replace -> 'struct_passwd'
+subclass !! TypeError ("type 'pwd.struct_passwd' is not an acceptable base type",)
+setattr field !! AttributeError ('readonly attribute',)
+setattr n_fields !! AttributeError ("'pwd.struct_passwd' object attribute 'n_fields' is read-only",)
+setattr foo !! AttributeError ("'pwd.struct_passwd' object has no attribute 'foo' and no __dict__ for setting new attributes",)
+delattr field !! AttributeError ('readonly attribute',)
+delattr n_fields !! AttributeError ("'pwd.struct_passwd' object attribute 'n_fields' is read-only",)
+delattr foo !! AttributeError ("'pwd.struct_passwd' object has no attribute 'foo' and no __dict__ for setting new attributes",)
+class setattr -> (None, 1, None)
+5, 5 !! TypeError ('constructor requires a sequence',)
+5, None !! TypeError ('constructor requires a sequence',)
+range, None !! TypeError ('pwd.struct_passwd() takes a dict as second arg, if any',)
+pos+name sequence !! TypeError ("argument for structseq() given by name ('sequence') and position (1)",)
+pos+name dict !! TypeError ('structseq() takes at most 2 arguments (3 given)',)
+unknown keyword !! TypeError ("structseq() got an unexpected keyword argument 'foo'",)
+three args !! TypeError ('structseq() takes at most 2 arguments (3 given)',)
+iteration TypeError !! TypeError ('inner',)
+iteration ZeroDivisionError !! ZeroDivisionError ('zd',)
+__iter__ raises TypeError !! TypeError ('constructor requires a sequence',)

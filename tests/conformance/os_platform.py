@@ -73,3 +73,12 @@ if os.name == "nt":
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software") as s:
         print(type(s).__name__, bool(s), str(s).startswith("<PyHKEY:0x"))
     print(bool(s))
+    # the POSIX-only libc modules and the os terminal functions do not exist on Windows (N2)
+    for name in ("fcntl", "termios", "resource", "pwd", "grp"):
+        try:
+            __import__(name)
+        except ImportError as e:
+            print(name, type(e).__name__, e)
+        else:
+            print(name, "imported")
+    print(hasattr(os, "openpty"))

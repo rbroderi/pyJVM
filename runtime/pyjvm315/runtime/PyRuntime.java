@@ -4355,6 +4355,10 @@ public final class PyRuntime {
         throw typeError("attribute assignment on unsupported object", obj);
     }
     public static void delattr(Object obj,Object nameObj) {
+        // sealed native-style classes may define __delattr__ (as __setattr__ in setattr above); PosixStructSeq does
+        if(obj instanceof PyInstance sealedInst && sealedInst.cls.sealed && sealedInst.cls.lookupAttr("__delattr__") instanceof PyFunction hook){
+            callFunction(hook,new ArrayList<>(Arrays.asList(obj,nameObj)),new LinkedHashMap<>());return;
+        }
         if(obj instanceof TypeParamsObject tp){tp.delattr((String)nameObj);return;}
         if(nameObj instanceof String excName && (obj instanceof PyExceptionValue || obj instanceof PyInstance excInst && excInst.cls.exceptionBase!=null && excName.startsWith("__"))
             && ExceptionGroupSupport.delattr(obj,excName)) return;
