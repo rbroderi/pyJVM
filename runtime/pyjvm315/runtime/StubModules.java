@@ -2,15 +2,20 @@
 package pyjvm315.runtime;
 
 /**
- * Importable shells of the POSIX extension modules that {@code subprocess}, {@code tempfile} and the test suite import:
- * {@code fcntl}, {@code pwd} and {@code grp}, and {@code _posixsubprocess} only where it has no real implementation
- * (under {@code PYJVM_POSIX_FDS=nio}; with kernel descriptors on POSIX it is {@code PosixSubprocessModule}, built on
- * {@code posix_spawn}, so it is no longer a shell there). {@code fcntl} likewise is a shell only under
- * {@code PYJVM_POSIX_FDS=nio}: with kernel descriptors it is {@code PosixFcntlModule}. Importing succeeds; the
- * operations that need descriptor control or the account database raise {@code NotImplementedError} or
- * {@code KeyError}. {@code pwd} and {@code grp} are shells only under {@code PYJVM_POSIX_FDS=nio} (with kernel
- * descriptors they are {@code PosixAccounts}, built on libc); there the lookups raise KeyError and
- * {@code getpwall}/{@code getgrall} raise NotImplementedError instead of returning an empty list.
+ * Importable shells of POSIX extension modules, so that {@code subprocess}, {@code tempfile} and the test suite can
+ * import them. Which shells remain after N2:
+ * <ul>
+ * <li>{@code _posixsubprocess}, {@code fcntl}, {@code resource}, {@code pwd} and {@code grp} are shells <b>only under
+ * {@code PYJVM_POSIX_FDS=nio}</b> (the rollback mode of N0 ticket 14, which is still present). With kernel descriptors,
+ * the default on POSIX, they are {@code PosixSubprocessModule} (built on {@code posix_spawn}), {@code PosixFcntlModule},
+ * {@code PosixResourceModule} and {@code PosixAccounts} (libc). Importing a shell succeeds; its operations raise
+ * {@code NotImplementedError} ({@code fork_exec}, {@code fcntl}, {@code ioctl}, {@code flock}, {@code lockf}, every
+ * {@code resource} function, {@code getpwall}, {@code getgrall}) or, for the {@code pwd}/{@code grp} lookups,
+ * {@code KeyError}. None of them returns a made-up value.</li>
+ * <li>{@code _socket} is a shell on every POSIX mode until N3 replaces it (Windows has the real
+ * {@link WindowsSocketModule}).</li>
+ * <li>{@code termios} has no shell: under {@code nio} it is a {@code ModuleNotFoundError} ({@code ImportSupport}).</li>
+ * </ul>
  */
 final class StubModules {
     private StubModules() {}
@@ -53,7 +58,9 @@ final class StubModules {
 
     /**
      * Enough of {@code _socket} for {@code socket}, {@code selectors} and {@code asyncio} to import; sockets cannot be
-     * created. POSIX only: Windows has the real {@link WindowsSocketModule}.
+     * created. POSIX only: Windows has the real {@link WindowsSocketModule}. This shell still returns made-up values:
+     * {@code gethostname} is the fixed string {@code "localhost"} and {@code getdefaulttimeout}/{@code setdefaulttimeout}
+     * do nothing. N3 (the POSIX {@code _socket}) removes it.
      */
     static PyModule socket() {
         PyModule m = module("_socket");

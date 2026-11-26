@@ -24,9 +24,9 @@ The manifest below was measured on a POSIX host (Linux, Ubuntu 24.04 in WSL, gli
 
 | Status | 3.13 | 3.15 |
 |---|---|---|
-| smoke | 430 | 445 |
+| smoke | 433 | 448 |
 | imports | 30 | 34 |
-| compiles | 88 | 130 |
+| compiles | 85 | 127 |
 | unsupported | 0 | 0 |
 | **total** | **548** | **609** |
 
@@ -37,14 +37,13 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | Modules | Blocker | Examples |
 |---|---|---|
 | 30 | smoke-mismatch | `_colorize`, `_pyrepl._threading_handler`, `_pyrepl.commands`, `_pyrepl.console`, `_pyrepl.pager`, ... |
+| 14 | missing-native: _ctypes | `_pyrepl._minimal_curses`, `_pyrepl.curses`, `_pyrepl.unix_console`, `_pyrepl.unix_eventqueue`, `ctypes`, ... |
 | 14 | missing-native: _tkinter | `tkinter`, `tkinter.__main__`, `tkinter.colorchooser`, `tkinter.commondialog`, `tkinter.constants`, ... |
-| 13 | missing-native: _ctypes | `_pyrepl._minimal_curses`, `_pyrepl.curses`, `_pyrepl.unix_eventqueue`, `ctypes`, `ctypes._aix`, ... |
 | 9 | missing-native: unicodedata | `_pyrepl.completing_reader`, `_pyrepl.historical_reader`, `_pyrepl.input`, `_pyrepl.reader`, `_pyrepl.readline`, ... |
 | 7 | runtime-error: LookupError: no such codec is supported. | `encodings.iso2022_jp`, `encodings.iso2022_jp_1`, `encodings.iso2022_jp_2`, `encodings.iso2022_jp_2004`, `encodings.iso2022_jp_3`, ... |
 | 5 | missing-native: _curses | `curses`, `curses.ascii`, `curses.has_key`, `curses.panel`, `curses.textpad` |
 | 5 | missing-native: _sqlite3 | `dbm.sqlite3`, `sqlite3`, `sqlite3.__main__`, `sqlite3.dbapi2`, `sqlite3.dump` |
 | 5 | missing-native: pyexpat | `plistlib`, `xml.dom.expatbuilder`, `xml.parsers.expat`, `xmlrpc.client`, `xmlrpc.server` |
-| 4 | missing-native: termios | `_pyrepl.fancy_termios`, `_pyrepl.unix_console`, `pty`, `tty` |
 | 3 | missing-native: _multiprocessing | `multiprocessing.forkserver`, `multiprocessing.resource_tracker`, `multiprocessing.synchronize` |
 | 2 | missing-native: _bz2 | `bz2`, `encodings.bz2_codec` |
 | 2 | missing-native: mmap | `multiprocessing.heap`, `multiprocessing.shared_memory` |
@@ -61,14 +60,15 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | 1 | missing-native: codecs.mbcs_encode | `encodings.mbcs` |
 | 1 | missing-native: codecs.oem_encode | `encodings.oem` |
 | 1 | runtime-error: AttributeError: module 'codecs' has no attribute 'utf_7_encode' | `encodings.utf_7` |
-| 4 | 4 further reasons | |
+| 1 | runtime-error: ImportError: No support for sending fds between processes | `multiprocessing.popen_forkserver` |
+| 3 | 3 further reasons | |
 
 ## Top blockers, lane 3.15
 
 | Modules | Blocker | Examples |
 |---|---|---|
 | 34 | smoke-mismatch | `_ast_unparse`, `_pyrepl._module_completer`, `_pyrepl._threading_handler`, `_pyrepl.fancycompleter`, `_pyrepl.pager`, ... |
-| 17 | missing-native: unicodedata | `_pyrepl.base_eventqueue`, `_pyrepl.commands`, `_pyrepl.completing_reader`, `_pyrepl.console`, `_pyrepl.content`, ... |
+| 18 | missing-native: unicodedata | `_pyrepl.base_eventqueue`, `_pyrepl.commands`, `_pyrepl.completing_reader`, `_pyrepl.console`, `_pyrepl.content`, ... |
 | 14 | missing-native: _tkinter | `tkinter`, `tkinter.__main__`, `tkinter.colorchooser`, `tkinter.commondialog`, `tkinter.constants`, ... |
 | 12 | missing-native: _ctypes | `_pyrepl.windows_console`, `ctypes`, `ctypes._aix`, `ctypes._endian`, `ctypes._layout`, ... |
 | 11 | missing-native: _curses | `curses`, `curses.ascii`, `curses.has_key`, `curses.panel`, `curses.textpad`, ... |
@@ -79,7 +79,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | 5 | missing-native: pyexpat | `plistlib`, `xml.dom.expatbuilder`, `xml.parsers.expat`, `xmlrpc.client`, `xmlrpc.server` |
 | 4 | missing-native: _interpreters | `concurrent.futures.interpreter`, `concurrent.interpreters`, `concurrent.interpreters._crossinterp`, `concurrent.interpreters._queues` |
 | 4 | missing-native: _lsprof | `cProfile`, `profiling.tracing`, `profiling.tracing.__main__`, `profiling.tracing._utils` |
-| 4 | missing-native: termios | `_pyrepl.fancy_termios`, `_pyrepl.unix_console`, `pty`, `tty` |
 | 3 | missing-native: _bz2 | `bz2`, `compression.bz2`, `encodings.bz2_codec` |
 | 3 | missing-native: _multiprocessing | `multiprocessing.forkserver`, `multiprocessing.resource_tracker`, `multiprocessing.synchronize` |
 | 2 | missing-native: _lzma | `compression.lzma`, `lzma` |
@@ -92,11 +91,12 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | 1 | missing-native: _ssl | `ssl` |
 | 1 | missing-native: _symtable | `symtable` |
 | 1 | missing-native: _tracemalloc | `tracemalloc` |
-| 8 | 8 further reasons | |
+| 1 | missing-native: codecs.mbcs_encode | `encodings.mbcs` |
+| 7 | 7 further reasons | |
 
 ## Modules that are not at `smoke`
 
-<details><summary>Lane 3.13: 118 modules</summary>
+<details><summary>Lane 3.13: 115 modules</summary>
 
 | Module | Status | Reason |
 |---|---|---|
@@ -107,7 +107,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `_pyrepl.completing_reader` | compiles | missing-native: unicodedata |
 | `_pyrepl.console` | imports | smoke-mismatch: names differ: missing annotations; extra none |
 | `_pyrepl.curses` | compiles | missing-native: _ctypes |
-| `_pyrepl.fancy_termios` | compiles | missing-native: termios |
 | `_pyrepl.historical_reader` | compiles | missing-native: unicodedata |
 | `_pyrepl.input` | compiles | missing-native: unicodedata |
 | `_pyrepl.pager` | imports | smoke-mismatch: names differ: missing annotations; extra none |
@@ -115,7 +114,7 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `_pyrepl.readline` | compiles | missing-native: unicodedata |
 | `_pyrepl.simple_interact` | compiles | missing-native: unicodedata |
 | `_pyrepl.trace` | imports | smoke-mismatch: names differ: missing annotations; extra none |
-| `_pyrepl.unix_console` | compiles | missing-native: termios |
+| `_pyrepl.unix_console` | compiles | missing-native: _ctypes |
 | `_pyrepl.unix_eventqueue` | compiles | missing-native: _ctypes |
 | `_pyrepl.utils` | compiles | missing-native: unicodedata |
 | `_pyrepl.windows_console` | compiles | missing-native: msvcrt |
@@ -177,7 +176,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `plistlib` | compiles | missing-native: pyexpat |
 | `poplib` | imports | smoke-mismatch: names differ: missing POP3_SSL; extra none |
 | `pprint` | imports | smoke-mismatch: check differs: jvm '!RecursionError: maximum recursion depth exceeded' vs reference "{'k': [0,\\n       1,\\n       2,\\n       3,\\n       4,\\n       5,\\n    " |
-| `pty` | compiles | missing-native: termios |
 | `shutil` | imports | smoke-mismatch: names differ: missing disk_usage; extra none |
 | `signal` | imports | smoke-mismatch: names differ: missing pidfd_send_signal,sigtimedwait,sigwaitinfo,struct_siginfo; extra none |
 | `smtplib` | imports | smoke-mismatch: names differ: missing SMTP_SSL; extra none |
@@ -206,7 +204,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `tomllib._parser` | imports | smoke-mismatch: names differ: missing annotations; extra none |
 | `tomllib._re` | imports | smoke-mismatch: names differ: missing annotations; extra none |
 | `tracemalloc` | compiles | missing-native: _tracemalloc |
-| `tty` | compiles | missing-native: termios |
 | `turtle` | compiles | missing-native: _tkinter |
 | `types` | imports | smoke-mismatch: check differs: jvm "(namespace(a=1), 'function', 'dict')" vs reference "(namespace(a=1), 'function', 'mappingproxy')" |
 | `unittest.__main__` | compiles | runtime-error: SystemExit: 5 |
@@ -221,7 +218,7 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 
 </details>
 
-<details><summary>Lane 3.15: 164 modules</summary>
+<details><summary>Lane 3.15: 161 modules</summary>
 
 | Module | Status | Reason |
 |---|---|---|
@@ -233,7 +230,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `_pyrepl.completing_reader` | compiles | missing-native: unicodedata |
 | `_pyrepl.console` | compiles | missing-native: unicodedata |
 | `_pyrepl.content` | compiles | missing-native: unicodedata |
-| `_pyrepl.fancy_termios` | compiles | missing-native: termios |
 | `_pyrepl.fancycompleter` | imports | smoke-mismatch: names differ: missing annotations; extra none |
 | `_pyrepl.historical_reader` | compiles | missing-native: unicodedata |
 | `_pyrepl.input` | compiles | missing-native: unicodedata |
@@ -244,7 +240,7 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `_pyrepl.render` | compiles | missing-native: unicodedata |
 | `_pyrepl.simple_interact` | compiles | missing-native: unicodedata |
 | `_pyrepl.trace` | imports | smoke-mismatch: names differ: missing annotations; extra none |
-| `_pyrepl.unix_console` | compiles | missing-native: termios |
+| `_pyrepl.unix_console` | compiles | missing-native: unicodedata |
 | `_pyrepl.unix_eventqueue` | compiles | missing-native: unicodedata |
 | `_pyrepl.utils` | compiles | missing-native: unicodedata |
 | `_pyrepl.windows_console` | compiles | missing-native: _ctypes |
@@ -346,7 +342,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `profiling.tracing` | compiles | missing-native: _lsprof |
 | `profiling.tracing.__main__` | compiles | missing-native: _lsprof |
 | `profiling.tracing._utils` | compiles | missing-native: _lsprof |
-| `pty` | compiles | missing-native: termios |
 | `shlex` | imports | smoke-mismatch: check differs: jvm '!TypeError: method takes no keyword arguments' vs reference '([\'a\', \'b c\', \'d e\'], \'\\\\\'it\\\\\'"\\\\\'"\\\\\'s\\\\\'\')' |
 | `shutil` | imports | smoke-mismatch: names differ: missing disk_usage; extra none |
 | `signal` | imports | smoke-mismatch: names differ: missing pidfd_send_signal,sigtimedwait,sigwaitinfo,struct_siginfo; extra none |
@@ -377,7 +372,6 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `tomllib._parser` | imports | smoke-mismatch: names differ: missing annotations; extra none |
 | `tomllib._re` | imports | smoke-mismatch: names differ: missing annotations; extra none |
 | `tracemalloc` | compiles | missing-native: _tracemalloc |
-| `tty` | compiles | missing-native: termios |
 | `turtle` | compiles | missing-native: _tkinter |
 | `types` | imports | smoke-mismatch: names differ: missing CapsuleType,LazyImportType; extra none; check differs: jvm "(namespace(a=1), 'function', 'dict')" vs reference "(namespace(a=1), 'function', 'mappingproxy')" |
 | `unittest.__main__` | compiles | runtime-error: SystemExit: 5 |
