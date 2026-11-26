@@ -3,8 +3,10 @@ package pyjvm315.runtime;
 
 /**
  * Importable shells of the POSIX extension modules that {@code subprocess}, {@code tempfile} and the test suite import:
- * {@code _posixsubprocess}, {@code fcntl}, {@code pwd} and {@code grp}. Importing succeeds; the operations that need a
- * real process, descriptor control or the account database raise {@code NotImplementedError} or {@code KeyError}.
+ * {@code fcntl}, {@code pwd} and {@code grp}, and {@code _posixsubprocess} only where it has no real implementation
+ * (under {@code PYJVM_POSIX_FDS=nio}; with kernel descriptors on POSIX it is {@code PosixSubprocessModule}, built on
+ * {@code posix_spawn}, so it is no longer a shell there). Importing succeeds; the operations that need descriptor
+ * control or the account database raise {@code NotImplementedError} or {@code KeyError}.
  */
 final class StubModules {
     private StubModules() {}

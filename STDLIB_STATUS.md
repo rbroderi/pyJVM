@@ -11,7 +11,7 @@ The manifest records, per module and per language lane, how far the CPython `Lib
 
 ## Windows host
 
-The manifest below was measured on a POSIX host (Linux, Ubuntu 24.04 in WSL, glibc 2.39), where descriptors, pipes, `select`/`poll`/`epoll` and signals during blocking I/O are real kernel facilities (N0), but `_socket` and `_posixsubprocess` are still importable shells without sockets or processes. On Windows the runtime has a real Winsock `_socket` (stream sockets, IPv4/IPv6; no datagram calls and no name resolution, so `getaddrinfo`-based calls such as `create_connection` and `asyncio.create_server` raise AttributeError), `_overlapped` (completion ports, events, waits, named pipes, `WSARecv`/`WSARecvInto`/`WSASend`; the `AcceptEx`/`ConnectEx`/`DisconnectEx`/`TransmitFile`/`WSAConnect`/`BindLocal`/`WSARecvFrom*`/`WSASendTo` names are absent), `select.select` on sockets and `signal.set_wakeup_fd` with a socket. With these `asyncio` imports and `asyncio.run` works on the ProactorEventLoop (timers, tasks, threads and executors, subprocess pipes, named-pipe servers and clients).
+The manifest below was measured on a POSIX host (Linux, Ubuntu 24.04 in WSL, glibc 2.39), where descriptors, pipes, `select`/`poll`/`epoll` and signals during blocking I/O are real kernel facilities (N0) and processes are created with `posix_spawn` (N1: `_posixsubprocess`, `os.posix_spawn`, the wait family, `os.kill`, `os.system`), but `_socket` is still an importable shell without sockets. On Windows the runtime has a real Winsock `_socket` (stream sockets, IPv4/IPv6; no datagram calls and no name resolution, so `getaddrinfo`-based calls such as `create_connection` and `asyncio.create_server` raise AttributeError), `_overlapped` (completion ports, events, waits, named pipes, `WSARecv`/`WSARecvInto`/`WSASend`; the `AcceptEx`/`ConnectEx`/`DisconnectEx`/`TransmitFile`/`WSAConnect`/`BindLocal`/`WSARecvFrom*`/`WSASendTo` names are absent), `select.select` on sockets and `signal.set_wakeup_fd` with a socket. With these `asyncio` imports and `asyncio.run` works on the ProactorEventLoop (timers, tasks, threads and executors, subprocess pipes, named-pipe servers and clients).
 
 ## Lanes
 
@@ -172,7 +172,7 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `multiprocessing.shared_memory` | compiles | missing-native: mmap |
 | `multiprocessing.sharedctypes` | compiles | missing-native: _ctypes |
 | `multiprocessing.synchronize` | compiles | missing-native: _multiprocessing |
-| `os` | imports | smoke-mismatch: names differ: missing CLD_CONTINUED,CLD_DUMPED,CLD_EXITED,CLD_KILLED,CLD_STOPPED,CLD_TRAPPED...; extra none |
+| `os` | imports | smoke-mismatch: names differ: missing CLONE_FILES,CLONE_FS,CLONE_NEWIPC,CLONE_NEWNET,CLONE_NEWNS,CLONE_NEWPID...; extra none |
 | `pickle` | imports | smoke-mismatch: names differ: missing PickleBuffer; extra none |
 | `plistlib` | compiles | missing-native: pyexpat |
 | `poplib` | imports | smoke-mismatch: names differ: missing POP3_SSL; extra none |
@@ -325,7 +325,7 @@ Excluded directories: `__phello__` (frozen-module test package), `idlelib` (IDLE
 | `multiprocessing.shared_memory` | compiles | missing-native: mmap |
 | `multiprocessing.sharedctypes` | compiles | missing-native: _ctypes |
 | `multiprocessing.synchronize` | compiles | missing-native: _multiprocessing |
-| `os` | imports | smoke-mismatch: names differ: missing AT_NO_AUTOMOUNT,CLD_CONTINUED,CLD_DUMPED,CLD_EXITED,CLD_KILLED,CLD_STOPPED...; extra none |
+| `os` | imports | smoke-mismatch: names differ: missing AT_NO_AUTOMOUNT,CLONE_FILES,CLONE_FS,CLONE_NEWCGROUP,CLONE_NEWIPC,CLONE_NEWNET...; extra none |
 | `pathlib._os` | imports | smoke-mismatch: names differ: missing EHWPOISON; extra none |
 | `pickle` | imports | smoke-mismatch: names differ: missing PickleBuffer; extra none |
 | `plistlib` | compiles | missing-native: pyexpat |

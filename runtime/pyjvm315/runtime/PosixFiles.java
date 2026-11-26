@@ -23,9 +23,13 @@ import java.util.stream.Stream;
 /**
  * The part of {@code posix} beyond importlib's needs: file descriptors (through {@link IoFd}: kernel descriptors on
  * POSIX, FileChannel-backed entries on Windows and under {@code PYJVM_POSIX_FDS=nio}), directory and file
- * manipulation, {@code scandir}, process identity and the {@code os.O_*} / {@code F_OK} constants. Process creation,
- * signals, ownership changes, symbolic-link creation and terminal control are not implemented (they are left out, so
- * os.py's {@code _exists(...)} probes report them as absent, as on a platform without them).
+ * manipulation, {@code scandir}, process identity and the {@code os.O_*} / {@code F_OK} constants, and on Windows and
+ * under {@code PYJVM_POSIX_FDS=nio} placeholder {@code waitpid}/{@code wait} (raising {@code ChildProcessError}) and the
+ * {@code W*} macros. Ownership changes, symbolic-link creation and terminal control are left out here (so os.py's {@code _exists(...)} probes report them as absent, as on a platform
+ * without them). With kernel descriptors on POSIX, {@code PosixOsProc} (installed at the end of
+ * {@code PosixOsFds.install}) registers over these: {@code posix_spawn[p]}, the wait family, {@code kill}/{@code killpg},
+ * process groups, {@code sysconf}/{@code confstr}, {@code pidfd_open}, {@code system}; {@code fork}, {@code exec*} and
+ * {@code spawn*} stay absent (no fork; JVM_BACKEND.md "Processes").
  */
 final class PosixFiles {
     private PosixFiles() {}

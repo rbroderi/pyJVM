@@ -498,7 +498,13 @@ final class SignalModule {
 
     // ---------------------------------------------------------------- os.kill
 
-    /** {@code os.kill(pid, sig)}: this process is signalled in-process; other processes through the system {@code kill}. */
+    /**
+     * {@code os.kill(pid, sig)}: this process is signalled in-process; other processes through the system {@code kill}.
+     * That second path (a {@code ProcessBuilder("kill")}) is what {@code PosixModule}'s {@code os.kill} still uses on
+     * Windows and under {@code PYJVM_POSIX_FDS=nio}. With kernel descriptors on POSIX, {@code PosixOsProc} registers its own {@code os.kill}
+     * (libc {@code kill(2)}) and calls this method only when the target is the process's own pid, so the handler has run
+     * when {@code os.kill} returns; {@code killpg} and every other pid never reach it.
+     */
     static void kill(long pid, long sig) {
         if (WIN && pid == ProcessHandle.current().pid()) {
             // CTRL_C_EVENT / CTRL_BREAK_EVENT signal the console; any other value terminates the process with that exit code

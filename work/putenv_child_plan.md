@@ -54,7 +54,7 @@ Stage 1 (now, Windows; Linux prints one line):
 2. Run under each lane's CPython directly first (`.venv315\Scripts\python.exe tests\conformance\os_putenv_child.py`, seconds) to see the expected output is stable across two runs and across 3.13/3.14/3.15.
 3. Run the case on one lane with a warm cache: `pyjvm-work\run_cases.ps1 -CaseList subprocess_windows,os_putenv_child -Lanes 315` (the first case warms the cache and proves subprocess still works; if `bc-conf` already holds the subprocess classes this is minutes). Then lanes 314 and 313, one at a time.
 4. Replace the TODO in `os_putenv.py:59-60` with a one-line pointer; HANDOFF item 12: "Windows child check done (os_putenv_child); POSIX half waits for `_posixsubprocess`".
-Stage 2 (after native_modules N1 lands):
+Stage 2 (after native_modules N1 lands) -- **done 2026-11-25 (N1 ticket 9; gated at ticket 12)**: `tests/conformance/os_putenv_child.py` has the `posix` branch (checks 1-10 through `/bin/sh` children; `os.putenv`/`os.environ` writes are seen by `subprocess` and by `os.posix_spawn(env=None)` because the spawn reads libc `environ` at call time); it passes on Linux 3.15/3.14/3.13 and on Windows 3.15/3.14/3.13 (see HANDOFF, N1 tickets 9 and 12). The steps below are kept as written:
 5. Add the posix branch (checks 1-10, 12) and run it in WSL on the three lanes (`~/pyjvm-work/conf_cases.sh os_putenv_child`; HANDOFF "WSL": write scripts as files, not through PowerShell quoting; the per-lane host change of HANDOFF item 2 is needed first).
 6. Rerun stage 1's Windows runs (the file changed).
 

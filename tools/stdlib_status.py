@@ -262,8 +262,8 @@ def render_report(manifest: dict, top: int = 25) -> str:
          "- **excluded**: not part of the build (test suites, IDLE and the like)", ""]
     L += ["## Windows host", "",
           "The manifest below was measured on a POSIX host (Linux, Ubuntu 24.04 in WSL, glibc 2.39), where descriptors, pipes, `select`/`poll`/`epoll` and "
-          "signals during blocking I/O are real kernel facilities (N0), but `_socket` and `_posixsubprocess` are still importable shells without sockets or "
-          "processes. On Windows the runtime has "
+          "signals during blocking I/O are real kernel facilities (N0) and processes are created with `posix_spawn` (N1: `_posixsubprocess`, `os.posix_spawn`, "
+          "the wait family, `os.kill`, `os.system`), but `_socket` is still an importable shell without sockets. On Windows the runtime has "
           "a real Winsock `_socket` (stream sockets, IPv4/IPv6; no datagram calls and no name resolution, so `getaddrinfo`-based calls such as "
           "`create_connection` and `asyncio.create_server` raise AttributeError), `_overlapped` (completion ports, events, waits, named pipes, "
           "`WSARecv`/`WSARecvInto`/`WSASend`; the `AcceptEx`/`ConnectEx`/`DisconnectEx`/`TransmitFile`/`WSAConnect`/`BindLocal`/`WSARecvFrom*`/`WSASendTo` "

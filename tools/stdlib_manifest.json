@@ -419,7 +419,7 @@
     "opcode": {"3.13": "smoke", "3.15": "smoke"},
     "operator": {"3.13": "smoke", "3.15": "smoke"},
     "optparse": {"3.13": "smoke", "3.15": "smoke"},
-    "os": {"3.13": ["imports", "smoke-mismatch: names differ: missing CLD_CONTINUED,CLD_DUMPED,CLD_EXITED,CLD_KILLED,CLD_STOPPED,CLD_TRAPPED...; extra none"], "3.15": ["imports", "smoke-mismatch: names differ: missing AT_NO_AUTOMOUNT,CLD_CONTINUED,CLD_DUMPED,CLD_EXITED,CLD_KILLED,CLD_STOPPED...; extra none"]},
+    "os": {"3.13": ["imports", "smoke-mismatch: names differ: missing CLONE_FILES,CLONE_FS,CLONE_NEWIPC,CLONE_NEWNET,CLONE_NEWNS,CLONE_NEWPID...; extra none"], "3.15": ["imports", "smoke-mismatch: names differ: missing AT_NO_AUTOMOUNT,CLONE_FILES,CLONE_FS,CLONE_NEWCGROUP,CLONE_NEWIPC,CLONE_NEWNET...; extra none"]},
     "pathlib": {"3.13": "smoke", "3.15": "smoke"},
     "pathlib._abc": {"3.13": "smoke"},
     "pathlib._local": {"3.13": "smoke", "3.15": "smoke"},

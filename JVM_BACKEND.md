@@ -304,7 +304,7 @@ handler runs between a system call and the copy-out of its result, so a handler 
   Ctrl-C or an outside `kill -INT` does not run the handler (signals raised inside the process, such as
   `os.kill(os.getpid(), ...)` and `raise_signal`, do). The `nio` rollback installs `default_int_handler` over the
   inherited `SIG_IGN`;
-- there is no `fork`; processes arrive with N1 (`posix_spawn`).
+- there is no `fork`; processes are created with `posix_spawn` (see "Processes" below).
 
 **Non-blocking descriptors and re-entrancy in `_io`.** With real descriptors `os.set_blocking(fd, False)` and
 `O_NONBLOCK` work: `FileIO` and the buffered classes return `None` or raise `BlockingIOError` (with
@@ -318,7 +318,150 @@ every lane (3.14+ raises `BlockingIOError`): a known gap.
 `os.chdir` sets `PosixModule.cwd` and relative paths are resolved by string join (`cwd + "/" + path`, no
 normalisation, so `..` is resolved by the kernel through symlinks). The process's real working directory does not
 change. Anything that hands a relative path or the working directory to the kernel or to a child process must account
-for this; `posix_spawn` (N1) has to add a chdir file action for the emulated directory whenever it is set.
+for this; every `posix_spawn` of N1 adds a chdir file action for the emulated directory whenever it is set (see "Processes").
+
+### Processes (N1: `posix_spawn`, the wait family, `kill`, `subprocess`)
+
+Everything in this subsection exists only with kernel descriptors on POSIX (`IoFd.KERNEL`; Linux x86-64, glibc 2.34 or
+later, checked when `PosixSpawn` is first used). Under `PYJVM_POSIX_FDS=nio` the old state remains: `_posixsubprocess`
+is the importable shell of `StubModules` and `os.waitpid`/`os.wait` raise `ChildProcessError`. Windows never loads these
+classes (`tests/test_import_runtime.py::test_windows_never_loads_posix_ffm`); its `subprocess` is
+`_winapi.CreateProcess`. The classes: `PosixProc` (FFM for `waitpid`, `waitid`, `wait4`, `kill`, `killpg`, `getpgid`,
+`getsid`, `setpgid`, `sysconf`, `confstr`, `pidfd_open` through `syscall(434)`, `faccessat`; the blocking-wait rule),
+`PosixSpawn` (the spawn core), `PosixOsProc` (the `os` functions, installed over the shared ones by the last line of
+`PosixOsFds.install`), `PosixSubprocessModule` (`_posixsubprocess`, one name: `fork_exec`), `PosixConfNames` (the
+generated `sysconf_names`/`confstr_names`, 134 and 27 names) and `PosixStructSeq` (a tuple-backed structseq factory,
+used for `os.waitid_result` and `resource.struct_rusage`). Plan and measurements: `work/n1_plan.md`, `work/n1/`; the
+CPython test triage: `work/n1/cpython_tests.md`.
+
+**`posix_spawn`, never `fork`.** The JVM cannot fork safely, so a process is always created by `posix_spawn[p]` through
+FFM, from one confined `Arena` per call. `os.fork`, `forkpty`, `execv*`, `os.spawn*`/`P_WAIT` (os.py defines them only
+where `fork` exists) and `register_at_fork` are absent. Also absent (not N1; `hasattr` is false): `abort`, `setsid`,
+`setpgrp`, `tcgetpgrp`, `tcsetpgrp`, `times`, `nice`, `getpriority`, `setpriority`, `sched_*`, `getlogin`, `uname`,
+`ctermid`, `getgroups`, `getres[ug]id`, `set*id`, `setgroups`, `initgroups`, `getloadavg`, `unshare`, `setns`.
+Present: `posix_spawn` and `posix_spawnp` (with `POSIX_SPAWN_OPEN/CLOSE/DUP2`, no `POSIX_SPAWN_CLOSEFROM`, and
+`setsid=True` raising `NotImplementedError`, as the reference CPython builds do; a `scheduler` tuple raises
+`NotImplementedError`), `waitpid`, `wait`, `wait3`, `wait4`, `waitid` (`P_PID`, `P_PGID`, `P_ALL`, `P_PIDFD`),
+`waitstatus_to_exitcode` and the `W*` macros, `kill`, `killpg`, `getpgid`, `getpgrp`, `getsid`, `setpgid`, `sysconf`,
+`confstr` (`SC_EQUIV_CLASS_MAX` raises `OSError(22)` because libc does, and `sysconf_names`/`confstr_names` are read at call time; both as in CPython), `pidfd_open`, `system`. `os.popen` and `subprocess` are Python code on top of these and work.
+
+**Arguments `fork_exec` cannot honour.** With no fork there is no point at which Python code or `setuid` could run in the
+child. `_posixsubprocess.fork_exec` raises, before anything is created (pyJVM-specific texts, tested by pytest only):
+`preexec_fn` not None -> `RuntimeError`; `uid`, `gid`, `extra_groups`, `child_umask >= 0` -> `NotImplementedError`
+(`subprocess: user is not supported by pyJVM ...`). Through `subprocess`, `user=`, `group=` and `extra_groups=` never get
+that far: they raise `ValueError("The 'user' parameter is not supported on the current platform")` (and likewise)
+because `os.setreuid`/`setregid`/`setgroups` are absent. Lifting these needs the Rust spawn helper of the
+native-modules plan.
+
+**Child start state.** The child is what `posix_spawn` makes. `SETSIGMASK` is always set: the mask is the caller's, else
+the Python-level `pthread_sigmask` set (`SignalModule.blockedMask()`), so a child inherits what Python blocked and not the
+JVM thread's own mask (SIGQUIT is blocked on Java threads). `restore_signals` resets SIGPIPE and SIGXFSZ with
+`SETSIGDEF`. Gaps against CPython, all from what `posix_spawn` can express:
+- (a) CPython itself ignores SIGPIPE and SIGXFSZ, so its children started with `restore_signals=False` or with plain
+  `os.posix_spawn` have them ignored; under pyJVM they are default (HotSpot installs handlers, not `SIG_IGN`).
+- (a2) A SIGQUIT set to ignored by the JVM's launcher does not reach the children: HotSpot installs its own SIGQUIT
+  handler before any Java code runs, so the ignore cannot be seen or passed on, and `posix_spawn` can only reset it to
+  default (an ignored SIGHUP is inherited as usual). Gates started with `setsid nohup` therefore reset SIGHUP and
+  SIGQUIT first, or `subprocess_posix`'s `SigIgn` line differs.
+- (b) Children inherit the JVM's raised soft `RLIMIT_NOFILE` (HotSpot raises it to the hard limit; 1048576 measured).
+- (c) The start-up order is glibc's (signals, session, group, then file actions), not CPython's (descriptors, chdir,
+  signals, session, group); only which error is reported for a call that is wrong in two ways can differ.
+- (d) `fork_exec` with `close_fds=True` lists the parent's descriptors before the spawn (CPython lists inside the
+  child): a descriptor another thread makes inheritable in `[3, maxK)` between the listing and the spawn is not closed.
+
+**Descriptors in children.** Inheritance is the kernel's: only descriptors that are not close-on-exec at spawn time, or
+are named by a `DUP2` action, reach a child. `fork_exec` builds `CLOSE` actions for the parent's open descriptors in
+`[3, maxK)` outside the kept set and ends with `CLOSEFROM(maxK + 1)` (`os.closerange` is not used for this). The JVM
+holds descriptors of its own that are **not** close-on-exec (the JDK's `lib/modules` jimage, `/dev/random` and
+`/dev/urandom` from NativePRNG, and a JDK directory stream while it is open). Before every spawn whose actions do not end
+in `CLOSEFROM(3)` (`close_fds=False`, `os.posix_spawn[p]`, `os.system`), `PosixSpawn` lists the parent's descriptors and
+adds a `CLOSE` for each `f > 2` that Python never adopted (`PosixFds.gen(f) == 0`), that is not close-on-exec, and that
+points under `java.home`, at or under a class-path/module-path entry, or at `/dev/random`/`/dev/urandom`. Limits: a
+descriptor the JVM inherited from its launcher that matches that rule is also closed in children (CPython would pass
+it); a JDK directory stream open on another thread at the moment of a spawn without `CLOSEFROM(3)` can pass its
+descriptor on; `gen(f) == 0` is re-checked when each `CLOSE` is added, so only the native calls up to `posix_spawn`
+remain as a window. `fork_exec`'s temporaries and every pidfd are close-on-exec, adopted through `PosixFds` and closed
+in `finally`.
+
+**Environment and working directory.** `env=None` means the live libc `environ`, read at every spawn (never
+`System.getenv()`, a start-up snapshot), so `os.putenv` is seen by children (case `os_putenv_child`).
+`PosixNative.ENV_LOCK` serialises `setenv`/`unsetenv` with the `environ` read and the spawn call, because glibc's
+`setenv` may free the array while the child still shares the address space. For the emulated working directory (above),
+every spawn starts with a `CHDIR` file action for `PosixModule.cwd` when it is set, before any action that names a
+relative path. Limit: if that directory has been removed or renamed since `os.chdir`, the chdir action fails with ENOENT
+and nothing can be spawned (a CPython child would start in the unlinked directory); `os.system` then returns `127 << 8`.
+
+**Failed starts: the error record and the stand-in child.** `subprocess` expects `fork_exec` to start a child that
+reports its failure through `errpipe_write` and exits 255. After a failed `posix_spawn` no child exists, so `fork_exec`
+tries each entry of `executable_list` with `posix_spawn` (CPython's errno rule: the first errno that is neither ENOENT nor
+ENOTDIR, else the last), classifies the failure, writes one record to `errpipe_write` itself (`OSError:<hex errno>:`
+plus a suffix: `noexec` for EBADF, for a failed stdio temporary (any errno) and for EPERM/ESRCH with a process group, `noexec:chdir` when a chdir is part of the
+plan and the parent-side check of the emulated cwd and `cwd` fails; an empty list gives `SubprocessError:0:`), and then
+starts a **stand-in child**, `/bin/sh -c "exit 255"` with the libc environment, an empty signal mask and `CLOSEFROM(3)`,
+and returns its pid. `Popen` then collects returncode 255 with an ordinary `waitpid`, as with CPython; nothing in the
+wait path is special-cased. If the stand-in cannot start, `fork_exec` returns its own pid (`waitpid` of it is `ECHILD`,
+which `subprocess` handles). `errpipe_write` is never given to a child, so a successful child cannot keep `subprocess`
+blocked on `errpipe_read`. The chdir diagnosis happens in the parent after the spawn, so a concurrent `os.chdir` or
+directory change can make it look at a different state (accepted race). Known gaps, reachable only through direct
+`fork_exec` calls: an empty `executable_list` with a bad `cwd` or bad stdin descriptor records `SubprocessError:0:`
+(CPython `OSError:2:noexec:chdir` / `OSError:9:noexec`); a failing write of the error record raises and starts no child;
+a bad stdio descriptor together with `pgid_to_set` reports EPERM where CPython reports EBADF; a dict subclass as
+`executable_list` or `env_list` fails with `KeyError` instead of "is not a sequence".
+
+**Waiting: the rule and its latencies.** Python handlers run only on the main thread (above), and a `waitpid(2)` parked
+on it is generally not interrupted by a signal. One function serves `waitpid`, `wait`, `waitid`, `wait3` and `wait4`
+(`PosixProc.await`). With `WNOHANG`, off the main thread, or before `_signal` is imported, it is a single blocking call
+(`EINTR` runs the pending handlers and retries). On the main thread with signals active it loops: a `WNOHANG` call,
+`dispatchPending()`, then, for one specific process with exit-only options, a `poll` on a transient pidfd
+(`pidfd_open`; 50 ms slices; readable when the process has exited), else a back-off sleep doubling from 1 ms to 50 ms.
+Latency: none to speak of for a single child (`os_wait_signals` anchors a mean spawn-plus-wait below 40 ms for 20
+`/bin/true` children; `subprocess.run(["/bin/true"])` costs about 1.5 ms against CPython's 0.64 ms, measured in
+`work/n1/cpython_tests.md`); up to `min(time waited, 50 ms)` for `os.wait()`, `waitpid(-1, ...)`, group waits and
+stop/continue waits; a Python handler runs at most about 50 ms late during any wait. A handler that raises propagates out
+of the wait with the child left unreaped, as in CPython. `os.system` is the exception: its handler exception is held until
+the child has been reaped (CPython's `system(3)` is not interrupted by Python handlers) and only the first one is kept;
+once one is pending, a later KeyboardInterrupt during a long child is dropped. `system(3)` itself is never called (it
+would change the JVM's signal dispositions process-wide), so its ignoring of SIGINT/SIGQUIT in the parent and blocking of
+SIGCHLD while waiting are not reproduced (a SIGINT handler runs during `os.system` here), and `os.system` uses
+`sh -c -- command` with a failed spawn reported as `127 << 8`. Throughput limit: `subprocess.run(["cat"], input=64 MiB,
+capture_output=True)` takes about 1.4 s against 0.22 s (the `communicate()` loop of small `poll`/read/write calls in
+Python; not investigated).
+
+**`waitpid(-1)` and the JDK's children.** The JDK reaps only children that `ProcessImpl` started, with one reaper thread
+per pid, so pyJVM's own children stay waitable and the JDK never takes them. The reverse is a real hazard: `os.wait()`,
+`os.waitpid(-1, ...)` and `os.waitid(P_ALL, ...)` can collect a JDK-started child (today only `ExecSupport`'s host-Python
+helper, used when the self-hosted compiler is not on the class path), after which the JDK reports exit status 0 for it.
+There is no guard. Rule for the runtime: no new `ProcessBuilder` use; on POSIX kernel mode `os.kill` no longer starts
+`/bin/kill`.
+
+**Signals to processes.** `os.kill(os.getpid(), sig)` keeps its in-process delivery (the Python handler has run when it
+returns, as in CPython); every other target goes to libc `kill(2)`, and `killpg` to `killpg(2)`. The signal of `kill` is
+truncated to its low 32 bits like CPython's. **Danger:** `os.kill(0, sig)`, a negative pid, `os.kill(-1, sig)`,
+`os.killpg(0, sig)` and `os.killpg(1, sig)` (glibc turns it into `kill(-1, sig)`: every process of the user) can signal the
+JVM itself or everything the user owns. Their behaviour with a real signal was deliberately never exercised: a Python
+handler runs only for signals hooked through `sun.misc.Signal`, otherwise HotSpot's own disposition applies. Tests and
+scripts must signal only children they created (by pid, or their own `process_group=0`/`setpgroup=0` group) and their
+own pid (`work/n1_plan.md` 2.3; a measurement script's `os.killpg(1, 15)` once ended a whole WSL session).
+
+**`sys.executable`.** It is the string `"pyjvm"`, not a runnable program, so `subprocess.run([sys.executable, ...])` and
+every CPython test that starts `sys.executable` fail with `FileNotFoundError`; N1 builds no launcher (owner decision).
+In `work/n1/cpython_tests.md` this blocks 175 tests across the selected CPython test classes (in `test_subprocess`,
+`test_posix`, `test_os`, `test_popen` and `test_signal`; `test_subprocess`'s five classes have 220 tests, of which pyJVM
+passes 53; `test_posix` imports only through a triage shim, because a class-level `skipIf` calls the
+absent `os.sched_getscheduler`). With a runnable stand-in executable 173 of the 175 pass and the other two fail on `Popen.__del__` not running
+at `gc_collect()` (core GC timing), so no N1 defect hides behind the label. The remaining recorded failures: `preexec_fn`
+(6 tests), `umask` (1) and `restore_signals` (1, gap a above), the `os.P_NOWAIT`/`os.spawnv` tests (no fork), one
+loopback-socket test (N3), and four issues in core code outside N1.
+
+**Other recorded limits.**
+- `PosixStructSeq` instances (`os.waitid_result`, `resource.struct_rusage`) cannot be constructed from Python; pickling,
+  copying and the read-only attribute behaviour of CPython's structseq are not checked.
+- `wait3(foo=1)` and `wait4(-1, pid=1)` give other `TypeError` texts than CPython (shared `NativeArgs`); a pid-like
+  argument that is an `__index__` object beyond 63 bits gives a `TypeError` where CPython raises `OverflowError`
+  (`PosixFiles.fd`).
+- The audit event of `os.kill` is raised before its argument checks (the `AuditEvents` wrapper).
+- An `ENOMEM` while adding a file action to `os.posix_spawn`'s action list surfaces after the `os.posix_spawn` audit
+  event (CPython fails before it).
 
 ## Windows overlapped I/O (`_overlapped`, `_socket`, asyncio's ProactorEventLoop)
 
