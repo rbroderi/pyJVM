@@ -19,7 +19,24 @@ public final class WarningsModule {
     private WarningsModule() {}
 
     static final ArrayList<Object> FILTERS = new ArrayList<>();
-    private static ArrayList<Object> filtersSnapshot() { synchronized (FILTERS) { return new ArrayList<>(FILTERS); } }
+    /**
+     * CPython's get_filter: once the Python {@code warnings} module is loaded its list wins (catch_warnings replaces
+     * {@code warnings.filters} with a copy; 3.14+ asks {@code warnings._get_filters()}, which covers context-aware mode).
+     * Not a list: {@code ValueError: warnings.filters must be a list}.
+     */
+    private static ArrayList<Object> filtersSnapshot() {
+        PyModule w = ImportSupport.cachedModule("warnings");
+        if (w != null) {
+            Object getter = LangVersion.atLeast(3, 14) ? PyRuntime.getattrDefault(w, "_get_filters", null) : null;
+            Object f = getter != null ? PyRuntime.callFunction(getter, new ArrayList<Object>(), new LinkedHashMap<Object, Object>())
+                                      : PyRuntime.getattrDefault(w, "filters", null);
+            if (f != null) {
+                if (!(f instanceof List<?> l)) throw new PyException("ValueError", "warnings.filters must be a list");
+                return new ArrayList<Object>(l);
+            }
+        }
+        synchronized (FILTERS) { return new ArrayList<>(FILTERS); }
+    }
     static final PyDict ONCE_REGISTRY = new PyDict();
     static String defaultAction = "default";
 
@@ -96,15 +113,21 @@ public final class WarningsModule {
     @SuppressWarnings("unchecked")
     private static Object explicit(Object message, Object category, String filename, long lineno, Object module, Object registry) {
         String text;
+        Object instance = null;   // CPython's `message` after the check: the Warning instance itself, else category(message)
         if (message instanceof PyInstance || message instanceof PyExceptionValue) {
             if (category == null) category = PyRuntime.typeOf(message);
             text = PyRuntime.pyStr(message);
+            instance = message;
         } else {
             text = PyRuntime.pyStr(message);
             if (category == null) category = PyRuntime.builtinType("UserWarning");
         }
         if (!PyRuntime.truth(PyRuntime.isSubclass(category, PyRuntime.builtinType("Warning"))))
             throw new PyException("TypeError", "category must be a Warning subclass, not '" + PyRuntime.typeName(category) + "'");
+        if (instance == null) {
+            ArrayList<Object> ca = new ArrayList<>(); ca.add(message);
+            instance = PyRuntime.callFunction(category, ca, new LinkedHashMap<Object, Object>());
+        }
         PyTuple key = tuple(text, category, lineno);
         Map<Object,Object> reg = registry instanceof Map<?,?> ? (Map<Object,Object>) registry : null;
         if (reg != null && PyRuntime.truth(reg.get(key))) return null;
@@ -120,8 +143,7 @@ public final class WarningsModule {
         }
         if (action == null) action = defaultAction;
         if (action.equals("error")) {
-            ArrayList<Object> args = new ArrayList<>(); args.add(text);
-            PyRuntime.raiseObject(PyRuntime.callFunction(category, args, new LinkedHashMap<Object,Object>()));
+            PyRuntime.raiseObject(instance);
             return null;
         }
         if (action.equals("ignore")) return null;
@@ -138,7 +160,7 @@ public final class WarningsModule {
         } else {
             throw new PyException("RuntimeError", "Unrecognized action ('" + action + "') in warnings.filters:\n " + ((Object) null));
         }
-        show(filename, lineno, category, text);
+        show(filename, lineno, category, text, instance);
         return null;
     }
 
@@ -149,7 +171,25 @@ public final class WarningsModule {
         return PyRuntime.truth(PyRuntime.callMethod(pattern, "match", new Object[]{text}));
     }
 
-    private static void show(String filename, long lineno, Object category, String text) {
+    /**
+     * CPython's call_show_warning: when the Python {@code warnings} module is loaded and has {@code _showwarnmsg} and
+     * {@code WarningMessage}, the warning is handed to it (so {@code catch_warnings(record=True)} and a replaced
+     * {@code showwarning} see it); false when it is not (the import system's early warnings), then {@link #show} prints.
+     */
+    private static boolean showViaPython(String filename, long lineno, Object category, Object instance) {
+        Object w = ImportSupport.cachedModule("warnings");
+        if (w == null) return false;
+        Object showMsg = PyRuntime.getattrDefault(w, "_showwarnmsg", null), msgType = PyRuntime.getattrDefault(w, "WarningMessage", null);
+        if (showMsg == null || msgType == null) return false;
+        ArrayList<Object> ma = new ArrayList<>(); ma.add(instance); ma.add(category); ma.add(filename); ma.add(lineno);
+        Object wm = PyRuntime.callFunction(msgType, ma, new LinkedHashMap<Object, Object>());
+        ArrayList<Object> sa = new ArrayList<>(); sa.add(wm);
+        PyRuntime.callFunction(showMsg, sa, new LinkedHashMap<Object, Object>());
+        return true;
+    }
+
+    private static void show(String filename, long lineno, Object category, String text, Object instance) {
+        if (showViaPython(filename, lineno, category, instance)) return;
         String name = category instanceof PyBuiltinType b ? b.name : category instanceof PyClass c ? c.name : PyRuntime.pyStr(category);
         StringBuilder sb = new StringBuilder(filename).append(':').append(lineno).append(": ").append(name).append(": ").append(text).append('\n');
         try {
