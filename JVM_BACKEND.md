@@ -486,8 +486,9 @@ Python module (open item).
 `max(len, 1024)` bytes plus 8 guard bytes, and exactly `len` bytes are read back: the kernel never sees heap memory and
 may write a whole struct, so a short Python buffer cannot be overrun. `ioctl` with a writable buffer and
 `mutate_flag` true writes the result back into the object, for any length; only `bytearray`, `array.array` and a
-`memoryview` over a `bytearray` take that path. A writable `memoryview` over an `array` or an `mmap` returns `bytes`
-instead (a reviewer's observation, not separately measured). The 8 guard bytes also reproduce the 3.14+ overflow check
+`memoryview` over a `bytearray` take that path. A writable `memoryview` over an `array` or an `mmap` was observed to
+return `bytes` instead; the dispatch sends any memoryview that is not read-only down the write-back path, so the likely
+cause is that pyJVM exposes those views as read-only (not separately measured or verified). The 8 guard bytes also reproduce the 3.14+ overflow check
 (`SystemError` on 3.14, "Possible stack corruption" on 3.15, only for buffers up to 1024 bytes): a NUL at `buf[len]` and a
 sentinel after it, not CPython's own sentinel value, which is not observable. Where the plan and CPython differed, the
 implementation follows the measured CPython: the integer third argument of `ioctl` is range-checked (unlike
@@ -578,6 +579,14 @@ raise `NotImplementedError`, the `pwd`/`grp` lookups raise `KeyError`. `termios`
 (`ModuleNotFoundError`), and the `os` pty functions are absent. The `_socket` shell is the one that still returns made-up
 values (`gethostname()` is `"localhost"`, the default-timeout functions do nothing) until N3.
 
+**Standard-library paths that changed.** With the real modules present, stdlib code that probes for them now takes its
+real path instead of a fallback: `getpass` has `unix_getpass` (termios) rather than only `fallback_getpass`;
+`tty.setraw`/`setcbreak` change the mode of the descriptor they are given; `os.path.expanduser("~user")`,
+`pathlib.Path.owner()`/`group()` and `getpass.getuser()` resolve accounts through `pwd`/`grp` (case `pwd_grp_basic`,
+equal to CPython); `subprocess`'s pipe-size tests no longer skip for want of `fcntl` (they now stop at
+`sys.executable`, `work/n2/cpython_tests.md`). The conformance cases'
+pass/fail sets against `work/n2/baseline.md` are recorded with the final gates in `HANDOFF.md`.
+
 **CPython's own tests** (`work/n2/cpython_tests.md`, 3.15 lane, Linux, no controlling terminal). Identical to CPython:
 `test_pwd` 3/3, `test_grp` 3/3, `test_openpty` 1/1, `test_tty` 4/4, `test_termios` 21/21, `test_ioctl` 4/4 (its
 `IoctlTestsTty` class skips on both for lack of `/dev/tty`), `test_posixpath` expanduser 5/5, and `test_resource` 7/7
@@ -608,9 +617,12 @@ lower a hard limit; inside a JVM the only soft limits to touch are `RLIMIT_NOFIL
 `test_subprocess.test_preexec_fork_failure` (soft `RLIMIT_NPROC` 0) is never run under pyJVM. Test hooks: the system
 properties `pyjvm.test.pwbuf` (first `pwd`/`grp` buffer size) and `pyjvm.test.ptsbuf` (first pty name buffer size).
 
-**Obligations for N3 and N6.** N3 (sockets) reuses `PosixArgs.fd` for descriptor arguments, the buffer helpers of
-`PosixArgs` (`readBuffer`, `checkBufferLength`, `isIndex`) and `PosixFcntlModule.lockWait`'s shape (polled wait with
-`PosixProc.backOff` on the main thread) for blocking calls, and must adopt every descriptor it creates. N6 `_curses` can
+**Obligations for N3 and N6.** N3 (sockets) uses `PosixArgs.fd` only where CPython uses `PyObject_AsFileDescriptor`
+(`_socket`'s own descriptor arguments, e.g. `socket(fileno=)`, `dup`, `close`, are plain C ints: no `fileno()`, no bool
+warning); reuses the `PosixArgs` buffer helpers (`readBuffer`, `checkBufferLength`, `isIndex`) with native memory, never
+a heap segment; makes blocking socket calls on the main thread wait with the readiness slicing of N0 D5
+(`PosixFds.awaitReady`: a 0 ms probe, then 50 ms poll slices), keeping `lockWait`'s polled back-off only for calls that
+have no pollable readiness; and must adopt every descriptor it creates. N6 `_curses` can
 test under a pty with `os.openpty` and `termios` and must open any terminal with `O_NOCTTY`.
 
 ## Windows overlapped I/O (`_overlapped`, `_socket`, asyncio's ProactorEventLoop)
