@@ -139,7 +139,6 @@ try:
     t("tcflush 2**40", termios.tcflush, s, 2**40)
     t("tcflush None", termios.tcflush, s, None)
     t("tcgetattr 2**31", termios.tcgetattr, 2**31)
-    t("tcgetattr True", termios.tcgetattr, True)
     t("tcgetattr 1.0", termios.tcgetattr, 1.0)
     # --- window size
     t("setwinsize str", termios.tcsetwinsize, s, "ab")

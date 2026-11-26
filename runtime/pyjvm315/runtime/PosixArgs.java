@@ -22,7 +22,10 @@ final class PosixArgs {
      */
     static int fd(Object o) {
         Object u = NativeSubclass.unwrap(o);
-        if (isInt(u)) return checkFd(u);
+        if (isInt(u)) {
+            if (u instanceof Boolean) warnBoolFd();   // PyObject_AsFileDescriptor warns for a bool argument (not for a bool returned by fileno())
+            return checkFd(u);
+        }
         Object method = PyRuntime.getattrDefault(o, "fileno", MISSING);   // looked up once, the fetched bound method is called
         if (method == MISSING) throw new PyException("TypeError", "argument must be an int, or have a fileno() method.");
         Object r = NativeSubclass.unwrap(PyRuntime.callFunction(method, new java.util.ArrayList<Object>(), new java.util.LinkedHashMap<Object, Object>()));
@@ -32,6 +35,12 @@ final class PosixArgs {
                 : "fileno() returned a non-integer");
         }
         return checkFd(r);
+    }
+
+    /** {@code RuntimeWarning: bool is used as a file descriptor}, through the Python {@code warnings} module; stacklevel 1 is the Python frame that called the native function (measured against CPython's location). */
+    private static void warnBoolFd() {
+        PyRuntime.callMethod(ImportSupport.importBuiltin(new java.util.ArrayList<Object>(java.util.List.of("warnings")), new java.util.LinkedHashMap<Object, Object>()), "warn",
+            new Object[]{"bool is used as a file descriptor", PyRuntime.builtinType("RuntimeWarning"), 1L});
     }
 
     private static boolean isInt(Object u) { return u instanceof Long || u instanceof BigInteger || u instanceof Boolean; }

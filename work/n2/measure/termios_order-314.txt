@@ -1,5 +1,3 @@
-/home/ubuntu/pyjvm-n2t7/work/n2/measure/termios_order.py:14: RuntimeWarning: bool is used as a file descriptor
-  r = f(*a)
 (3, 14) posix
 pipe + 6-element list !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
 pipe + bad cc length !! error (25, 'Inappropriate ioctl for device') False
@@ -92,7 +90,6 @@ tcsendbreak float !! TypeError ("'float' object cannot be interpreted as an inte
 tcflush 2**40 !! OverflowError ('Python int too large to convert to C int',) False
 tcflush None !! TypeError ("'NoneType' object cannot be interpreted as an integer",) False
 tcgetattr 2**31 !! OverflowError ('Python int too large to convert to C int',) False
-tcgetattr True !! error (25, 'Inappropriate ioctl for device') False
 tcgetattr 1.0 !! TypeError ('argument must be an int, or have a fileno() method.',) False
 setwinsize str !! TypeError ("'str' object cannot be interpreted as an integer",) False
 setwinsize bytes -> None

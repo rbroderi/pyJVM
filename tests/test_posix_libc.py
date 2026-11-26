@@ -323,7 +323,7 @@ def _t4_pyjvm(kit, main: Path, env: dict[str, str]) -> subprocess.CompletedProce
     cmd = ["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
            "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
     return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full,
-                          timeout=600, stdin=subprocess.DEVNULL)
+                          timeout=600, stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 def _t4_same_stdout(kit, tmp_path: Path, script: str, expected: str) -> None:
@@ -929,3 +929,32 @@ def test_termios_nio_mode_has_no_module(jvm_kit, tmp_path):
     proc = _t4_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == "ModuleNotFoundError No module named 'termios'\n"
+
+
+TERMIOS_BOOL_FD = '''
+import os, termios, fcntl, warnings
+rp, wp = os.pipe()
+os.dup2(rp, 0)   # descriptor 0 is this script's own /dev/null: a pipe is put there, so the bool 0 is never a terminal
+class F:
+    def fileno(self): return False
+def t(label, f, *a):
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        try:
+            out = repr(f(*a))
+        except Exception as e:
+            out = type(e).__name__ + repr(e.args)
+    print(label, out, [(x.category.__name__, str(x.message), os.path.basename(x.filename), x.lineno) for x in w])
+t("tcgetattr False", termios.tcgetattr, False)
+t("fcntl False", fcntl.fcntl, False, fcntl.F_GETFD)
+t("ptsname False", os.ptsname, False)
+t("ttyname False", os.ttyname, False)
+t("fileno() False", termios.tcgetattr, F())
+t("tcsetwinsize deque", termios.tcsetwinsize, rp, __import__("collections").deque([1, 2]))
+'''
+
+
+def test_bool_descriptor_warns_like_cpython(jvm_kit, tmp_path):
+    """A bool descriptor argument gives RuntimeWarning (location included); a bool returned by fileno(), os.ttyname: none."""
+    out = _t7_same_stdout(jvm_kit, tmp_path, TERMIOS_BOOL_FD)
+    assert out.count("bool is used as a file descriptor") == 3

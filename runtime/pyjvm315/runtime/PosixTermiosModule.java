@@ -35,8 +35,8 @@ import java.util.function.IntSupplier;
  * An interrupted call (EINTR) runs pending Python handlers and is retried (PEP 475); a handler does not run while the main
  * thread is blocked inside {@code tcdrain}, {@code tcsendbreak}, {@code tcflow} or a draining {@code tcsetattr} (plan 1.5).
  * <p>
- * Known gap: {@code bool} used as a descriptor does not give CPython's {@code RuntimeWarning: bool is used as a file
- * descriptor} ({@link PosixArgs#fd} is shared with {@code fcntl}).
+ * Known difference: CPython raises {@code termios.error(4)} when a call is interrupted by a signal (after running the
+ * handlers); here EINTR is retried (plan 1.5). Ticket 9 documents it.
  */
 final class PosixTermiosModule {
     private static final Linker.Option VARIADIC2 = Linker.Option.firstVariadicArg(2);
@@ -288,7 +288,7 @@ final class PosixTermiosModule {
         exactly("tcsetwinsize", a, k, 2);
         int fd = PosixArgs.fd(a.get(0));
         Object ws = a.get(1);
-        if (!isSequence(ws) || !(PyRuntime.len(ws) instanceof Long n) || n != 2) throw new PyException("TypeError", "tcsetwinsize, arg 2: must be a two-item sequence");
+        if (!isSequence(ws) || !hasTwoItems(ws)) throw new PyException("TypeError", "tcsetwinsize, arg 2: must be a two-item sequence");
         long rows = cLong(PyRuntime.getitem(ws, 0L));
         long cols = cLong(PyRuntime.getitem(ws, 1L));
         try (Arena arena = Arena.ofConfined()) {
@@ -310,6 +310,15 @@ final class PosixTermiosModule {
         if (u instanceof Map<?, ?> || u instanceof java.util.Set<?>) return false;
         if (u instanceof String || u instanceof PyByteSequence || u instanceof List<?> || u instanceof PyTuple || u instanceof PyRange
             || u instanceof PyMemoryView || ArrayModule.asArray(u) != null) return true;
-        return o instanceof PyInstance p && p.payload == null && p.cls.lookupMethod("__getitem__") != null;
+        if (o instanceof PyInstance p && p.payload == null && p.cls.lookupMethod("__getitem__") != null) return true;
+        return PyRuntime.getattrDefault(o, "__getitem__", NO_ATTR) != NO_ATTR;   // Java-implemented sequences (deque, ...)
+    }
+
+    private static final Object NO_ATTR = new Object();
+
+    /** {@code PySequence_Size(o) == 2}; a {@code len()} that raises, or gives a negative or huge value, is "not two" (measured: the exception is replaced by the TypeError). */
+    private static boolean hasTwoItems(Object o) {
+        try { return PyRuntime.len(o) instanceof Long n && n == 2; }
+        catch (PyException e) { return false; }
     }
 }
