@@ -5,6 +5,8 @@ module here. Every test runs pyJVM on a small script; where it says so the outpu
 SAFETY (n2_plan 2.3): no terminal, no resource limit, no lock and no signal is touched by the tests of this ticket."""
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,8 @@ import pytest
 
 from pyjvm315.cli import build_runtime
 from pyjvm315.conformance import compare_file
+from pyjvm315.driver import compile_file
+from pyjvm315.hostver import reference_stdlib, reference_version
 from pyjvm315.selfhost import build_selfhosted
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the N2 libc modules are Linux-only")
@@ -124,3 +128,82 @@ match r:
 def test_structseq_construct_pickle_copy(jvm_kit, tmp_path, monkeypatch):
     """os.waitid_result is the one public PosixStructSeq type before ticket 2: construction, errors, pickle, copy."""
     _compare(jvm_kit, tmp_path, monkeypatch, STRUCTSEQ)
+
+
+# ---- resource (N2 ticket 2). SAFETY (n2_plan 2.3 B): no limit of the test process is changed; the only limit change is
+# prlimit on the test's own `sleep 30` child (killed and waited for). RESOURCE_WAIT3 reaps with os.wait3, which takes any
+# child; its process has no other children.
+
+RESOURCE_WAIT3 = '''
+import os
+import resource
+import sys
+
+pid = os.posix_spawn("/bin/true", ["true"], {})
+got, status, ru = os.wait3(0)
+print(got == pid, status, type(ru) is resource.struct_rusage, type(resource.getrusage(resource.RUSAGE_SELF)) is type(ru))
+print(hasattr(resource, "RLIM_SAVED_CUR"), hasattr(resource, "RLIM_SAVED_MAX"))
+print(type(resource.RLIM_INFINITY).__name__, resource.RLIM_INFINITY)
+print(resource.getrlimit(resource.RLIMIT_STACK)[1] == resource.RLIM_INFINITY)
+'''
+
+
+def test_resource_wait3_class_and_lane_constants(jvm_kit, tmp_path, monkeypatch):
+    """(b) wait3's rusage is the one resource.struct_rusage class; (c) RLIM_SAVED_* exist on 3.15 only and RLIM_INFINITY
+    is -1 on 3.13/3.14 and 2**64 - 1 on 3.15 (both compared with the reference CPython of the lane)."""
+    _compare(jvm_kit, tmp_path, monkeypatch, RESOURCE_WAIT3)
+
+
+RESOURCE_HIGH_LIMITS = '''
+import resource
+import subprocess
+
+R = resource.RLIMIT_CORE
+child = subprocess.Popen(["sleep", "30"])
+try:
+    hard = resource.prlimit(child.pid, R)[1]
+    if hard != resource.RLIM_INFINITY:
+        print("hard limit is not infinity: skipped")
+    else:
+        for soft in (2**63, 2**64 - 2, 2**63 - 1, 12345, resource.RLIM_INFINITY):
+            resource.prlimit(child.pid, R, (soft, hard))
+            print(soft, "->", resource.prlimit(child.pid, R))
+finally:
+    child.kill()
+    print("child", child.wait(timeout=30))
+'''
+
+
+def test_resource_high_limits_read_unsigned(jvm_kit, tmp_path, monkeypatch):
+    """rlim_t is unsigned: a child's soft limit of 2**63 or 2**64 - 2 reads back unsigned on every lane; only infinity is -1
+    on 3.13/3.14 (2**64 - 1 on 3.15). Set with prlimit on the test's own sleep child only; compared with CPython."""
+    _compare(jvm_kit, tmp_path, monkeypatch, RESOURCE_HIGH_LIMITS)
+
+
+def test_resource_nio_rollback_raises_not_implemented(jvm_kit, tmp_path):
+    """(a) Under PYJVM_POSIX_FDS=nio the shell stays importable but returns no made-up values."""
+    runtime, selfhosted = jvm_kit
+    main = tmp_path / "main.py"
+    main.write_text(
+        "import resource\n"
+        "for f, a in ((resource.getrlimit, (0,)), (resource.setrlimit, (0, (1, 1))), (resource.getpagesize, ()), (resource.getrusage, (0,))):\n"
+        "    try:\n        f(*a)\n    except NotImplementedError as e:\n        print('NotImplementedError', e)\n",
+        encoding="utf-8")
+    out = tmp_path / "out"
+    compile_file(main, out, "ConformanceMain")
+    shutil.copytree(runtime / "pyjvm315", out / "pyjvm315", dirs_exist_ok=True)
+    env = os.environ.copy()
+    env["PYJVM_POSIX_FDS"] = "nio"
+    env["PYJVM_LANG_VERSION"] = "%d.%d" % reference_version(sys.executable)
+    env["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(sys.executable)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = ["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+           "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
+    proc = subprocess.run(cmd, cwd=tmp_path, capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=600)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [
+        "NotImplementedError resource.getrlimit is not supported by pyJVM",
+        "NotImplementedError resource.setrlimit is not supported by pyJVM",
+        "NotImplementedError resource.getpagesize is not supported by pyJVM",
+        "NotImplementedError resource.getrusage is not supported by pyJVM",
+    ]

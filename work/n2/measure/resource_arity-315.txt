@@ -1,0 +1,26 @@
+setrlimit 0 args !! TypeError ('setrlimit expected 2 arguments, got 0',)
+setrlimit 1 arg !! TypeError ('setrlimit expected 2 arguments, got 1',)
+setrlimit 3 args !! TypeError ('setrlimit expected 2 arguments, got 3',)
+prlimit 0 args !! TypeError ('prlimit expected at least 2 arguments, got 0',)
+prlimit 1 arg !! TypeError ('prlimit expected at least 2 arguments, got 1',)
+prlimit 4 args !! TypeError ('prlimit expected at most 3 arguments, got 4',)
+prlimit kw !! TypeError ('resource.prlimit() takes no keyword arguments',)
+getrusage 0 args !! TypeError ('resource.getrusage() takes exactly one argument (0 given)',)
+getrusage 2 args !! TypeError ('resource.getrusage() takes exactly one argument (2 given)',)
+getrlimit 2 args !! TypeError ('resource.getrlimit() takes exactly one argument (2 given)',)
+setrlimit res None !! TypeError ("'NoneType' object cannot be interpreted as an integer",)
+setrlimit res float !! TypeError ("'float' object cannot be interpreted as an integer",)
+setrlimit res True invalid-limits !! TypeError ("'NoneType' object is not iterable",)
+setrlimit limits str-2 !! TypeError ("'str' object cannot be interpreted as an integer",)
+setrlimit limits gen !! ValueError ('expected a tuple of 2 integers',)
+setrlimit limits None !! TypeError ("'NoneType' object is not iterable",)
+prlimit limits str !! TypeError ("'str' object cannot be interpreted as an integer",)
+prlimit pid float !! TypeError ("'float' object cannot be interpreted as an integer",)
+prlimit pid -2**40 !! OverflowError ('Python int too large to convert to C int',)
+prlimit pid True res !! ValueError ('invalid resource specified',)
+getrlimit True -> (18446744073709551615, 18446744073709551615)
+getrusage None !! TypeError ("'NoneType' object cannot be interpreted as an integer",)
+getrlimit RLIMIT_AS type -> 'int'
+int ['RLIM_INFINITY', 'RLIM_SAVED_CUR', 'RLIM_SAVED_MAX']
+True
+getrlimit __index__ -> 2
