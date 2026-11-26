@@ -6,7 +6,10 @@ package pyjvm315.runtime;
  * {@code fcntl}, {@code pwd} and {@code grp}, and {@code _posixsubprocess} only where it has no real implementation
  * (under {@code PYJVM_POSIX_FDS=nio}; with kernel descriptors on POSIX it is {@code PosixSubprocessModule}, built on
  * {@code posix_spawn}, so it is no longer a shell there). Importing succeeds; the operations that need descriptor
- * control or the account database raise {@code NotImplementedError} or {@code KeyError}.
+ * control or the account database raise {@code NotImplementedError} or {@code KeyError}. {@code pwd} and {@code grp}
+ * are shells only under {@code PYJVM_POSIX_FDS=nio} (with kernel descriptors they are {@code PosixAccounts}, built on
+ * libc); there the lookups raise KeyError and {@code getpwall}/{@code getgrall} raise NotImplementedError instead of
+ * returning an empty list.
  */
 final class StubModules {
     private StubModules() {}
@@ -94,7 +97,7 @@ final class StubModules {
         PyModule m = module("pwd");
         NativeTypes.fn(m, "getpwuid", (a, k) -> { throw new PyException("KeyError", "getpwuid(): uid not found"); });
         NativeTypes.fn(m, "getpwnam", (a, k) -> { throw new PyException("KeyError", "getpwnam(): name not found"); });
-        NativeTypes.fn(m, "getpwall", (a, k) -> new java.util.ArrayList<Object>());
+        unsupported(m, "getpwall");
         return m;
     }
 
@@ -102,7 +105,7 @@ final class StubModules {
         PyModule m = module("grp");
         NativeTypes.fn(m, "getgrgid", (a, k) -> { throw new PyException("KeyError", "getgrgid(): gid not found"); });
         NativeTypes.fn(m, "getgrnam", (a, k) -> { throw new PyException("KeyError", "getgrnam(): name not found"); });
-        NativeTypes.fn(m, "getgrall", (a, k) -> new java.util.ArrayList<Object>());
+        unsupported(m, "getgrall");
         return m;
     }
 }

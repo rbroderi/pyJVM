@@ -1,0 +1,4 @@
+N2 ticket 3, measured 2026-11-26 with the uv CPython 3.13/3.14/3.15 (identical on all three lanes):
+- pwd.getpwuid / grp.getgrgid with an object whose __index__ raises ValueError or OverflowError, returns a non-int, or is set only on the instance
+  (not the type): TypeError('uid should be integer, not <ClassName>') / TypeError('gid should be integer, not <ClassName>').
+- grp.getgrnam() with no argument: TypeError("getgrnam() missing required argument 'name' (pos 1)") on 3.13, 3.14 and 3.15 (no "function" prefix; only getgrgid has it, on 3.13).

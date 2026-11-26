@@ -207,3 +207,89 @@ def test_resource_nio_rollback_raises_not_implemented(jvm_kit, tmp_path):
         "NotImplementedError resource.getpagesize is not supported by pyJVM",
         "NotImplementedError resource.getrusage is not supported by pyJVM",
     ]
+# ---- ticket 3: pwd and grp (PosixAccounts) ---------------------------------------------------------------------------
+
+
+def _accounts_run(kit, main: Path, script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run ``script`` under pyJVM with ``env`` added (PYJVM_POSIX_FDS dropped unless ``env`` sets it); stdout is returned."""
+    import os
+    import shutil
+
+    from pyjvm315.driver import compile_file
+    from pyjvm315.hostver import reference_stdlib, reference_version
+
+    runtime, selfhosted = kit
+    main.write_text(script, encoding="utf-8")
+    out = main.parent / "out"
+    compile_file(main, out, "ConformanceMain")
+    shutil.copytree(runtime / "pyjvm315", out / "pyjvm315", dirs_exist_ok=True)
+    full = os.environ.copy()
+    full.pop("PYJVM_POSIX_FDS", None)
+    full.update(env)
+    full["PYJVM_LANG_VERSION"] = "%d.%d" % reference_version(sys.executable)
+    full["PYJVM_STDLIB"] = os.environ.get("PYJVM_STDLIB") or reference_stdlib(sys.executable)
+    full.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = ["java", "--enable-native-access=ALL-UNNAMED", "-Xss64m", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+           "-cp", str(out) + os.pathsep + str(selfhosted), "ConformanceMain"]
+    return subprocess.run(cmd, cwd=main.parent, capture_output=True, encoding="utf-8", errors="replace", env=full, timeout=600)
+
+
+ACCOUNT_LOOKUPS = '''
+import grp, pwd
+print(repr(pwd.getpwuid(0)))
+print(repr(pwd.getpwnam("root")))
+print(repr(grp.getgrgid(0)))
+print(repr(grp.getgrnam("root")))
+try:
+    pwd.getpwnam("pyjvm-no-such-user")
+except KeyError as e:
+    print("KeyError", e.args)
+'''
+
+
+def test_account_lookup_buffer_growth(jvm_kit, tmp_path):
+    """A 16-byte first buffer (test hook pyjvm.test.pwbuf, via JAVA_TOOL_OPTIONS) forces ERANGE doubling; same results."""
+    normal = _accounts_run(jvm_kit, tmp_path / "main.py", ACCOUNT_LOOKUPS, {})
+    assert normal.returncode == 0, normal.stderr
+    assert "pw_name='root'" in normal.stdout and "gr_name='root'" in normal.stdout
+    small = _accounts_run(jvm_kit, tmp_path / "main.py", ACCOUNT_LOOKUPS, {"JAVA_TOOL_OPTIONS": "-Dpyjvm.test.pwbuf=16"})
+    assert small.returncode == 0, small.stderr
+    assert small.stdout == normal.stdout
+
+
+ACCOUNT_THREADS = '''
+import grp, pwd, threading
+want_pw = [tuple(x) for x in pwd.getpwall()]
+want_gr = [tuple((*tuple(x)[:3], tuple(x[3]))) for x in grp.getgrall()]
+bad = []
+def work():
+    for _ in range(20):
+        if [tuple(x) for x in pwd.getpwall()] != want_pw:
+            bad.append("pw")
+        if [tuple((*tuple(x)[:3], tuple(x[3]))) for x in grp.getgrall()] != want_gr:
+            bad.append("gr")
+ts = [threading.Thread(target=work) for _ in range(8)]
+for t in ts:
+    t.start()
+for t in ts:
+    t.join(120)
+print(bad, len(want_pw) > 0, len(want_gr) > 0, any(t.is_alive() for t in ts))
+'''
+
+
+def test_account_enumeration_from_threads(jvm_kit, tmp_path):
+    """Eight threads enumerating both databases 20 times each all see the same lists (ENT_LOCK)."""
+    proc = _accounts_run(jvm_kit, tmp_path / "main.py", ACCOUNT_THREADS, {})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[] True True False\n"
+
+
+def test_account_enumeration_not_implemented_under_nio(jvm_kit, tmp_path):
+    """Under PYJVM_POSIX_FDS=nio the shells stay, but getpwall/getgrall no longer return an empty list."""
+    script = ('import grp, pwd\n'
+              'for f in (pwd.getpwall, grp.getgrall):\n'
+              '    try:\n        f()\n    except NotImplementedError as e:\n        print("NotImplementedError", e.args)\n')
+    proc = _accounts_run(jvm_kit, tmp_path / "main.py", script, {"PYJVM_POSIX_FDS": "nio"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ("NotImplementedError ('pwd.getpwall is not supported by pyJVM',)\n"
+                           "NotImplementedError ('grp.getgrall is not supported by pyJVM',)\n")
