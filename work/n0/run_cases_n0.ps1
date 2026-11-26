@@ -11,6 +11,8 @@ $Cases = $CaseList -split ','
 $tag = Split-Path -Leaf $Tree
 Set-Location $Tree
 $env:PYTHONPATH = $Tree
+# An inherited PYTHONDONTWRITEBYTECODE (some agent shells set it) stops the JVM's compile cache from writing.
+Remove-Item Env:PYTHONDONTWRITEBYTECODE -ErrorAction SilentlyContinue
 $env:Path = "$HOME\.local\bin;" + $env:Path
 New-Item -ItemType Directory -Force (Split-Path $Log) | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $Log

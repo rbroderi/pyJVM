@@ -11,15 +11,21 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -329,7 +335,7 @@ final class ClassCache {
         try {
             Path dir = target.getParent();
             Files.createDirectories(dir);
-            tmp = Files.createTempFile(dir, ".pyjvm-", ".tmp");
+            tmp = createTemp(dir);
             Files.write(tmp, data);
             try { Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
             catch (AtomicMoveNotSupportedException e) { Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING); }
@@ -338,6 +344,30 @@ final class ClassCache {
             if (tmp != null) try { Files.deleteIfExists(tmp); } catch (IOException | RuntimeException ignored) { /* best effort */ }
             return false;
         }
+    }
+
+    private static final int TMP_ATTEMPTS = 8;
+    /** Unpredictable names, as the JDK's own: in a shared fallback directory another user cannot pre-create them. */
+    private static final SecureRandom TMP_NAMES = new SecureRandom();
+
+    /**
+     * A new, empty {@code .pyjvm-<random>.tmp} in {@code dir} (owner read/write only where POSIX permissions exist, as
+     * {@code Files.createTempFile} made it). Bounded, unlike {@code Files.createTempFile}, which retries for ever while
+     * every create reports {@link FileAlreadyExistsException}: Windows does that for every name in a directory reached
+     * through a junction it will not create files through (uv's {@code cpython-3.x} links to the stdlib, seen on Windows 11),
+     * and the cache write must fail over to the next candidate rather than spin.
+     */
+    private static Path createTemp(Path dir) throws IOException {
+        FileAttribute<?>[] attrs = dir.getFileSystem().supportedFileAttributeViews().contains("posix")
+            ? new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))}
+            : new FileAttribute<?>[0];
+        FileAlreadyExistsException last = null;
+        for (int i = 0; i < TMP_ATTEMPTS; i++) {
+            Path p = dir.resolve(".pyjvm-" + Long.toUnsignedString(TMP_NAMES.nextLong()) + ".tmp");
+            try { return Files.createFile(p, attrs); }
+            catch (FileAlreadyExistsException e) { last = e; }
+        }
+        throw last;
     }
 
     private static final long TOUCH_AFTER_MS = 3_600_000L, TMP_MAX_AGE_MS = 86_400_000L;

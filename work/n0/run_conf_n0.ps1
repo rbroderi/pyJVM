@@ -9,6 +9,9 @@ if (-not $Tree) { $Tree = $main }
 $tag = Split-Path -Leaf $Tree
 Set-Location $Tree
 $env:PYTHONPATH = $Tree
+# An inherited PYTHONDONTWRITEBYTECODE (some agent shells set it) stops the JVM's compile cache from writing, so every
+# case recompiles importlib and the stdlib it imports: the lane runs at more than twice its normal time.
+Remove-Item Env:PYTHONDONTWRITEBYTECODE -ErrorAction SilentlyContinue
 $env:Path = "$HOME\.local\bin;" + $env:Path
 $env:PYJVM_BUILD_CACHE = "$work\n0\bc-$tag-$Lane"
 $env:PYJVM_CACHE = "$work\n0\c-$tag-$Lane"
