@@ -821,3 +821,111 @@ os.close(w)
 def test_ioctl_buffers_requests_and_write_back(jvm_kit, tmp_path, monkeypatch):
     """Mutable buffers (array, bytearray, memoryview slice) get exactly len bytes back; read-only ones and mutate_flag=False return bytes; request values truncate to 32 bits."""
     _compare(jvm_kit, tmp_path, monkeypatch, T5_IOCTL)
+
+
+# ---- ticket 7: termios (PosixTermiosModule) ---------------------------------------------------------------------------
+# SAFETY (n2_plan 2.3 A): every termios call is on a pty this script opened with os.openpty (O_NOCTTY) or on a pipe it
+# created; never on descriptors 0/1/2 or /dev/tty; no read from a pty at all; getpass.getpass is never called (only
+# getpass.unix_getpass is looked at); CPython and pyJVM both run in their own session, stdin /dev/null, under a timeout.
+
+def _t7_same_stdout(kit, tmp_path: Path, script: str) -> str:
+    """``script`` prints the same stdout under the reference CPython and under pyJVM (kernel descriptors); returns it."""
+    main = tmp_path / "main.py"
+    main.write_text(script, encoding="utf-8")
+    ref = subprocess.run([sys.executable, str(main)], capture_output=True, encoding="utf-8", timeout=120,
+                         stdin=subprocess.DEVNULL, cwd=tmp_path, start_new_session=True)
+    assert ref.returncode == 0, ref.stderr
+    proc = _pty_run(kit, main, script)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ref.stdout
+    return proc.stdout
+
+
+TERMIOS_ROUNDTRIP = '''
+import os, termios, tty, getpass
+import _pyrepl.fancy_termios, pty
+m, s = os.openpty()
+try:
+    orig = termios.tcgetattr(s)
+    old = tty.setraw(s)
+    raw = termios.tcgetattr(s)
+    print("setraw returns the original", old == orig, "changed", raw != orig,
+          raw[3] & (termios.ECHO | termios.ICANON | termios.ISIG | termios.IEXTEN), raw[1] & termios.OPOST,
+          raw[6][termios.VMIN], raw[6][termios.VTIME])
+    termios.tcsetattr(s, termios.TCSAFLUSH, old)
+    print("restored", termios.tcgetattr(s) == orig)
+    print("unix_getpass", callable(getpass.unix_getpass), getpass.getpass is getpass.unix_getpass)
+    for when in (termios.TCSANOW, termios.TCSADRAIN, termios.TCSAFLUSH):
+        m2, s2 = os.openpty()
+        try:
+            a = termios.tcgetattr(s2)
+            print("when", when, termios.tcsetattr(s2, when, a), termios.tcgetattr(s2) == a,
+                  termios.tcgetattr(m2) == a)
+        finally:
+            os.close(m2)
+            os.close(s2)
+finally:
+    os.close(m)
+    os.close(s)
+'''
+
+
+def test_termios_setraw_roundtrip_and_tcsetattr_accepts_tcgetattr(jvm_kit, tmp_path):
+    """(b) tty.setraw then restoring with the returned list round-trips; (c) tcgetattr's list is accepted unchanged by
+    tcsetattr for TCSANOW, TCSADRAIN and TCSAFLUSH on a fresh pty; tty, pty, getpass, _pyrepl.fancy_termios import."""
+    out = _t7_same_stdout(jvm_kit, tmp_path, TERMIOS_ROUNDTRIP)
+    assert "setraw returns the original True changed True 0 0 1 0\nrestored True\nunix_getpass True True\n" in out
+    assert out.count("None True True") == 3
+
+
+TERMIOS_ERRORS = '''
+import os, termios
+m, s = os.openpty()
+rp, wp = os.pipe()
+try:
+    a = termios.tcgetattr(s)
+    def t(label, f, *args):
+        try:
+            print(label, "->", repr(f(*args)))
+        except Exception as e:
+            print(label, "!!", type(e).__name__, e.args, isinstance(e, OSError))
+    print(termios.error.__mro__[1:], termios.error.__module__, termios.error.__qualname__)
+    t("pipe + bad list", termios.tcsetattr, rp, 0, a[:6])
+    t("pipe + bad flag", termios.tcsetattr, rp, 0, ["x"] + a[1:])
+    t("bad when + bad cc", termios.tcsetattr, s, 99, a[:6] + [a[6][:31]])
+    t("bad when + bad flag", termios.tcsetattr, s, 99, ["x"] + a[1:])
+    t("bad when", termios.tcsetattr, s, 99, a)
+    t("bad speed + bad cc item", termios.tcsetattr, s, 0, a[:4] + [12345, a[5]] + [[1.5] * 32])
+    t("flag 2**63", termios.tcsetattr, s, 0, [2**63] + a[1:])
+    t("cc item 2**63", termios.tcsetattr, s, 0, a[:6] + [[2**63] * 32])
+    t("winsize pipe 70000", termios.tcsetwinsize, rp, (70000, 1))
+    t("winsize pty 70000", termios.tcsetwinsize, s, (70000, 1))
+    t("winsize bytes", termios.tcsetwinsize, s, b"\\x07\\x09")
+    t("winsize read", termios.tcgetwinsize, m)
+    t("winsize dict", termios.tcsetwinsize, s, {1: 2, 3: 4})
+    t("keyword", lambda: termios.tcsendbreak(s, duration=0))
+    t("arity", termios.tcflush, s)
+    t("arity one", termios.tcgetattr)
+    try:
+        termios.tcgetattr(rp)
+    except termios.error as e:
+        print(type(e).__name__, e.args, str(e), repr(e), hasattr(e, "errno"))
+finally:
+    for f in (m, s, rp, wp):
+        os.close(f)
+'''
+
+
+def test_termios_error_class_and_check_order(jvm_kit, tmp_path):
+    """termios.error is not an OSError (args (errno, text)); tcsetattr and tcsetwinsize check in CPython's order."""
+    out = _t7_same_stdout(jvm_kit, tmp_path, TERMIOS_ERRORS)
+    assert out.startswith("(<class 'Exception'>, <class 'BaseException'>, <class 'object'>) termios error\n")
+
+
+def test_termios_nio_mode_has_no_module(jvm_kit, tmp_path):
+    """(a) Under PYJVM_POSIX_FDS=nio `import termios` raises ModuleNotFoundError (the module needs kernel descriptors)."""
+    main = tmp_path / "main.py"
+    main.write_text('try:\n    import termios\nexcept ModuleNotFoundError as e:\n    print(type(e).__name__, e)\n', encoding="utf-8")
+    proc = _t4_pyjvm(jvm_kit, main, {"PYJVM_POSIX_FDS": "nio"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "ModuleNotFoundError No module named 'termios'\n"

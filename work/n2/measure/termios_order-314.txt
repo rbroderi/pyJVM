@@ -1,0 +1,124 @@
+/home/ubuntu/pyjvm-n2t7/work/n2/measure/termios_order.py:14: RuntimeWarning: bool is used as a file descriptor
+  r = f(*a)
+(3, 14) posix
+pipe + 6-element list !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+pipe + bad cc length !! error (25, 'Inappropriate ioctl for device') False
+pipe + bad flag !! error (25, 'Inappropriate ioctl for device') False
+pipe + bad when !! TypeError ("'str' object cannot be interpreted as an integer",) False
+pipe + tuple !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+pipe + valid !! error (25, 'Inappropriate ioctl for device') False
+closed + bad flag !! error (9, 'Bad file descriptor') False
+closed + 6-element list !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+bad fd + bad when !! TypeError ('argument must be an int, or have a fileno() method.',) False
+bad fd + bad list !! TypeError ('argument must be an int, or have a fileno() method.',) False
+bad when 99 + bad cc length !! TypeError ('tcsetattr: attributes[6] must be 32 element list',) False
+bad when 99 + bad cc item !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+bad when 99 + bad flag !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad when 99 + bad speed !! error (22, 'Invalid argument') False
+bad when str + bad flag !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad when str + 6-element !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad flag + bad cc !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad cc length + bad speed !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad speed value + bad cc item !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+bad ospeed value + bad cc item !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+bad ispeed type + bad cc item !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad flag 2 + bad flag 0 !! TypeError ("'str' object cannot be interpreted as an integer",) False
+bad when 99 + all bad !! TypeError ("'str' object cannot be interpreted as an integer",) False
+restore -> None
+flag float !! TypeError ("'float' object cannot be interpreted as an integer",) False
+flag None !! TypeError ("'NoneType' object cannot be interpreted as an integer",) False
+flag bool -> None
+flag __index__ (cflag) -> None
+flag 2**64 !! OverflowError ('Python int too large to convert to C long',) False
+flag 2**63 !! OverflowError ('Python int too large to convert to C long',) False
+flag 2**63-1 -> None
+flag -2**63 -> None
+flag -2**63-1 !! OverflowError ('Python int too large to convert to C long',) False
+after flag trunc [0, 5, 191, 35387]
+restore -> None
+ispeed str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+ispeed float !! TypeError ("'float' object cannot be interpreted as an integer",) False
+ispeed -1 !! error (22, 'Invalid argument') False
+ispeed 2**32+15 -> None
+ispeed 2**40 -> None
+ispeed 2**64 !! OverflowError ('Python int too large to convert to C long',) False
+ispeed 0 (hangup) -> None
+speeds [15, 15]
+ospeed 9600 -> None
+speeds [13, 13]
+restore -> None
+cc item bytes 0 !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc item bytes 2 !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc item bytearray !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc item str !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc item float !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc item None !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc item bool -> None
+cc item -1 -> None
+cc item 2**63 !! OverflowError ('Python int too large to convert to C long',) False
+cc item 2**64 !! OverflowError ('Python int too large to convert to C long',) False
+cc item __index__ !! TypeError ('tcsetattr: elements of attributes must be bytes objects of length 1 or integers',) False
+cc after [b'\x03', b'\xff', b'\x7f', b'\x15']
+restore -> None
+cc as bytes !! TypeError ('tcsetattr: attributes[6] must be 32 element list',) False
+cc as tuple !! TypeError ('tcsetattr: attributes[6] must be 32 element list',) False
+cc 33 !! TypeError ('tcsetattr: attributes[6] must be 32 element list',) False
+attributes 8 !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+attributes dict !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+attributes None !! TypeError ('tcsetattr, arg 3: must be 7 element list',) False
+when float !! TypeError ("'float' object cannot be interpreted as an integer",) False
+when 2**31 !! OverflowError ('Python int too large to convert to C int',) False
+when -1 !! error (22, 'Invalid argument') False
+when True -> None
+noncanon 2 1 0 b'\x04' b'\x00'
+noncanon write back -> None
+noncanon vmin bytes -> None
+vmin 7
+tcgetattr() !! TypeError ('termios.tcgetattr() takes exactly one argument (0 given)',) False
+tcgetattr(1,2) !! TypeError ('termios.tcgetattr() takes exactly one argument (2 given)',) False
+tcsetattr(s) !! TypeError ('tcsetattr expected 3 arguments, got 1',) False
+tcsetattr(s,0) !! TypeError ('tcsetattr expected 3 arguments, got 2',) False
+tcsetattr 4 args !! TypeError ('tcsetattr expected 3 arguments, got 4',) False
+tcsetattr keyword !! TypeError ('termios.tcsetattr() takes no keyword arguments',) False
+tcsendbreak(s) !! TypeError ('tcsendbreak expected 2 arguments, got 1',) False
+tcdrain() !! TypeError ('termios.tcdrain() takes exactly one argument (0 given)',) False
+tcflush(s) !! TypeError ('tcflush expected 2 arguments, got 1',) False
+tcflow(s) !! TypeError ('tcflow expected 2 arguments, got 1',) False
+tcgetwinsize() !! TypeError ('termios.tcgetwinsize() takes exactly one argument (0 given)',) False
+tcsetwinsize(s) !! TypeError ('tcsetwinsize expected 2 arguments, got 1',) False
+tcsetwinsize kw !! TypeError ('termios.tcsetwinsize() takes no keyword arguments',) False
+tcsendbreak 2**31 !! OverflowError ('Python int too large to convert to C int',) False
+tcsendbreak float !! TypeError ("'float' object cannot be interpreted as an integer",) False
+tcflush 2**40 !! OverflowError ('Python int too large to convert to C int',) False
+tcflush None !! TypeError ("'NoneType' object cannot be interpreted as an integer",) False
+tcgetattr 2**31 !! OverflowError ('Python int too large to convert to C int',) False
+tcgetattr True !! error (25, 'Inappropriate ioctl for device') False
+tcgetattr 1.0 !! TypeError ('argument must be an int, or have a fileno() method.',) False
+setwinsize str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+setwinsize bytes -> None
+setwinsize dict !! TypeError ('tcsetwinsize, arg 2: must be a two-item sequence',) False
+setwinsize set !! TypeError ('tcsetwinsize, arg 2: must be a two-item sequence',) False
+setwinsize iter !! TypeError ('tcsetwinsize, arg 2: must be a two-item sequence',) False
+setwinsize range -> None
+setwinsize float !! TypeError ("'float' object cannot be interpreted as an integer",) False
+setwinsize bool -> None
+setwinsize Idx -> None
+setwinsize 65535 -> None
+winsize after -> (65535, 65535)
+setwinsize 65536 !! OverflowError ('winsize value(s) out of range.',) False
+setwinsize second bad !! TypeError ("'str' object cannot be interpreted as an integer",) False
+setwinsize first -1 second str !! TypeError ("'str' object cannot be interpreted as an integer",) False
+setwinsize 2**63 !! OverflowError ('Python int too large to convert to C long',) False
+setwinsize pipe valid !! error (25, 'Inappropriate ioctl for device') False
+setwinsize pipe bad !! TypeError ('tcsetwinsize, arg 2: must be a two-item sequence',) False
+setwinsize pipe 70000 !! error (25, 'Inappropriate ioctl for device') False
+setwinsize closed !! error (9, 'Bad file descriptor') False
+getwinsize closed !! error (9, 'Bad file descriptor') False
+winsize 7x9 -> (7, 9)
+(<class 'termios.error'>, <class 'Exception'>, <class 'BaseException'>, <class 'object'>) (25, 'Inappropriate ioctl for device') {} (25, 'Inappropriate ioctl for device') error(25, 'Inappropriate ioctl for device') termios (<class 'termios.error'>, (25, 'Inappropriate ioctl for device'), {})
+termios error None 
+construct error -> (1, 'x')
+construct error 0 -> ()
+['__doc__', '__loader__', '__name__', '__package__', '__spec__']
+termios True None termios built-in BuiltinImporter
+Get the tty attributes for file descriptor fd. termios tcgetattr tcgetattr

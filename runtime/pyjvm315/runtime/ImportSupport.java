@@ -30,7 +30,7 @@ public final class ImportSupport {
     static final PyDict MODULES = new PyDict();
     static final boolean WINDOWS = System.getProperty("os.name", "").startsWith("Windows");
     /** As in CPython, each OS has its own set: the POSIX modules do not exist on Windows, nor {@code nt}/{@code winreg} elsewhere. */
-    private static final Set<String> POSIX_ONLY = Set.of("posix", "_posixsubprocess", "fcntl", "pwd", "grp", "resource");
+    private static final Set<String> POSIX_ONLY = Set.of("posix", "_posixsubprocess", "fcntl", "pwd", "grp", "resource", "termios");
     private static final Set<String> WINDOWS_ONLY = Set.of("nt", "winreg", "_winapi", "msvcrt", "_overlapped");
     /** Modules implemented in Java: importlib's BuiltinImporter serves exactly these. */
     static final Set<String> NATIVE_NAMES = platformNames("_string", "ast","_ast", "sys", "builtins", "jvm_io", "_imp", "_thread", "_warnings",
@@ -82,7 +82,7 @@ public final class ImportSupport {
             case "_struct" -> StructModule.create();
             case "binascii" -> BinasciiModule.create(); case "_random" -> RandomModule.create(); case "array" -> ArrayModule.create(); case "zlib" -> ZlibModule.create(); case "_signal" -> SignalModule.create(); case "select" -> SelectModule.create(); case "_opcode" -> OpcodeModule.create(); case "_md5" -> HashModule.create("_md5", "md5"); case "_sha1" -> HashModule.create("_sha1", "sha1"); case "_sha3" -> Hash3Module.createSha3(); case "_blake2" -> Hash3Module.createBlake2(); case "_operator" -> OperatorModule.create(); case "_sha2" -> HashModule.create("_sha2", "sha224", "sha256", "sha384", "sha512");
             case "_sre" -> SreModule.create();
-            case "_tokenize" -> TokenizeModule.create();
+            case "_tokenize" -> TokenizeModule.create(); case "termios" -> { if (!IoFd.KERNEL) throw notFound(name); yield PosixTermiosModule.create(); }
             case "_posixsubprocess" -> IoFd.KERNEL ? PosixSubprocessModule.create() : StubModules.posixsubprocess(); case "fcntl" -> IoFd.KERNEL ? PosixFcntlModule.create() : StubModules.fcntl(); case "pwd" -> IoFd.KERNEL ? PosixAccounts.pwd() : StubModules.pwd(); case "grp" -> IoFd.KERNEL ? PosixAccounts.grp() : StubModules.grp(); case "resource" -> IoFd.KERNEL ? PosixResourceModule.create() : StubModules.resource(); case "_socket" -> WINDOWS ? WindowsSocketModule.create() : StubModules.socket(); case "_typing" -> typingModule(); case "_cjkcore" -> CjkModule.create(); case "_multibytecodec", "_codecs_cn", "_codecs_hk", "_codecs_iso2022", "_codecs_jp", "_codecs_kr", "_codecs_tw" -> CjkSource.module(name);
             case "nt" -> WindowsNtModule.create();
             case "winreg" -> WindowsRegModule.create(); case "_winapi" -> WindowsWinApiModule.create(); case "msvcrt" -> WindowsMsvcrtModule.create(); case "_overlapped" -> WindowsOverlappedModule.create();
