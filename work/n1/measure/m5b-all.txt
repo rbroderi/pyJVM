@@ -1,0 +1,32 @@
+lane 313
+-- system sh -c grep (exec'd by dash?)
+SigBlk:	0000000000000000
+-- system sh -c grep; true
+SigBlk:	0000000000000000
+-- system: sh sees
+SigBlk:	0000000000000000
+-- run shell=True
+SigBlk:	0000000000000000
+-- run sh -c
+SigBlk:	0000000000000000
+-- posix_spawn sh -c
+SigBlk:	0000000000000000
+-- run grep
+SigBlk:	0000000000000a00
+lane 315
+-- system sh -c grep (exec'd by dash?)
+SigBlk:	0000000000000000
+-- system sh -c grep; true
+SigBlk:	0000000000000000
+-- system: sh sees
+SigBlk:	0000000000000000
+-- run shell=True
+SigBlk:	0000000000000000
+-- run sh -c
+SigBlk:	0000000000000000
+-- posix_spawn sh -c
+SigBlk:	0000000000000000
+-- run grep
+SigBlk:	0000000000000a00
+ldd (Ubuntu GLIBC 2.39-0ubuntu8.12) 2.39
+/usr/bin/dash

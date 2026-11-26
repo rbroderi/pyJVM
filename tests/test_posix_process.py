@@ -511,3 +511,99 @@ os.close(r)
 
 def test_fork_exec_audit_events(jvm_kit, tmp_path, monkeypatch):
     _compare(jvm_kit, tmp_path, monkeypatch, AUDIT_SCRIPT)
+
+
+SYSTEM_SCRIPT = '''
+import os, signal, sys, time
+def show(label, f):
+    try:
+        print(label, repr(f()))
+    except BaseException as e:
+        print(label, "EXC", type(e).__name__, e)
+class P:
+    def __fspath__(self):
+        return "exit 7"
+show("kw", lambda: os.system(command="exit 5"))
+show("bytes", lambda: os.system(b"exit 6"))
+show("pathlike", lambda: os.system(P()))
+show("surrogateescape", lambda: os.system("exit 8 # " + chr(0xdcff)))
+show("empty", lambda: os.system(""))
+show("big", lambda: os.system("exit 300"))
+show("not found", lambda: os.system("nonexistent_cmd_xyz 2>/dev/null"))
+show("argv", lambda: os.system("echo $0 $#"))
+show("none", lambda: os.system())
+show("int", lambda: os.system(5))
+show("None", lambda: os.system(None))
+show("list", lambda: os.system(["a"]))
+show("nul", lambda: os.system("a\\0b"))
+show("nul bytes", lambda: os.system(b"a\\0b"))
+show("two", lambda: os.system("true", 1))
+show("two kw", lambda: os.system("true", command="x"))
+show("wrong kw", lambda: os.system(cmd="true"))
+show("kw+extra", lambda: os.system(command="true", x=1))
+show("nul+extra", lambda: os.system("a\\0b", x=1))
+events = []
+sys.addaudithook(lambda e, a: events.append((e, a)) if e == "os.system" else None)
+os.system("true"); os.system(b"true"); os.system(P())
+try:
+    os.system("a\\0b")
+except ValueError:
+    pass
+print("audit", events)
+os.putenv("M5_VAR", "put")
+os.environ["M5_VAR2"] = "env"
+sys.stdout.flush()
+os.system('echo "env: $M5_VAR $M5_VAR2"')
+os.chdir("/tmp")
+os.system("pwd")
+os.chdir("/")
+r, w = os.pipe()
+os.set_inheritable(w, True)
+os.system("echo viapipe >&%d" % w)
+os.close(w)
+print("inheritable", os.read(r, 100))
+os.close(r)
+r, w = os.pipe()
+os.system("echo notseen >&%d 2>/dev/null" % w)
+os.close(w)
+print("not inheritable", os.read(r, 100))
+os.close(r)
+def raiser(s, f):
+    raise TimeoutError("handler raised")
+signal.signal(signal.SIGALRM, raiser)
+t0 = time.monotonic()
+signal.setitimer(signal.ITIMER_REAL, 0.3)
+sys.stdout.flush()
+try:
+    print("returned", os.system("sleep 1; echo child-finished"))
+except BaseException as e:
+    print("alarm", type(e).__name__, e, 0.9 < time.monotonic() - t0 < 5)
+signal.setitimer(signal.ITIMER_REAL, 0)
+try:
+    print("leftover", os.waitpid(-1, os.WNOHANG))
+except ChildProcessError:
+    print("leftover none")
+seen = []
+signal.signal(signal.SIGALRM, lambda s, f: seen.append(s))
+t0 = time.monotonic()
+signal.setitimer(signal.ITIMER_REAL, 0.3)
+print("noraise", os.system("sleep 1"), seen, 0.9 < time.monotonic() - t0 < 5)
+signal.setitimer(signal.ITIMER_REAL, 0)
+n = len(os.listdir("/proc/self/fd"))
+for i in range(20):
+    os.system("true")
+print("fds stable", len(os.listdir("/proc/self/fd")) == n)
+'''
+
+
+def test_os_system_matches_cpython(jvm_kit, tmp_path, monkeypatch):
+    _compare(jvm_kit, tmp_path, monkeypatch, SYSTEM_SCRIPT)
+
+
+def test_os_system_output_reaches_inherited_stdout(jvm_kit, tmp_path, monkeypatch):
+    main = tmp_path / "main.py"
+    main.write_text('import os, sys\nprint("before")\nsys.stdout.flush()\nprint(os.system("echo hi"))\nsys.stdout.flush()\n', encoding="utf-8")
+    monkeypatch.delenv("PYJVM_POSIX_FDS", raising=False)
+    r = _run_pyjvm(jvm_kit, main, {})
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "before\nhi\n0\n", (r.stdout, r.stderr)

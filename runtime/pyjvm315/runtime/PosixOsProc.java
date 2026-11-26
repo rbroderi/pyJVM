@@ -35,6 +35,65 @@ final class PosixOsProc {
         m.attrs.put("POSIX_SPAWN_DUP2", 2L);
         fn(m, "posix_spawn", (a, k) -> posixSpawn("posix_spawn", false, a, k));
         fn(m, "posix_spawnp", (a, k) -> posixSpawn("posix_spawnp", true, a, k));
+        fn(m, "system", PosixOsProc::system);
+    }
+
+    // ---------------------------------------------------------------- system
+
+    /**
+     * {@code os.system(command)} without libc {@code system(3)} (which would change signal dispositions process-wide): the
+     * emulated cwd and then {@code /bin/sh -c -- command} (glibc 2.37+ passes {@code --}, measured: a command starting with {@code -} runs) through {@link PosixSpawn#spawn} (the live environment, the Python-level
+     * blocked mask, the parent's inheritable descriptors minus the JVM's own, plan 1.8), then a wait on that pid by the
+     * signal-aware {@link PosixProc#waitpid}. Returns the raw wait status; a spawn failure returns {@code 127 << 8} (what
+     * {@code system(3)} reports when the shell cannot run); a failed wait (ECHILD, e.g. SIGCHLD ignored) returns -1 as
+     * {@code system(3)} does.
+     *
+     * <p>A Python signal handler that raises while the main thread waits does not abandon the child: CPython's
+     * {@code system(3)} is not interrupted by Python handlers (measured: a SIGALRM handler raising after 0.3 s during
+     * {@code os.system("sleep 1")} takes effect only after the child finished, 1.0 s, and the child is reaped). Here the
+     * first such exception is kept, the wait continues until the child is reaped, then it is raised and the status is lost.
+     * Later raising handlers are dropped (CPython leaves them pending). Not reproduced, recorded: {@code system(3)} ignores
+     * SIGINT/SIGQUIT in the parent while waiting (a SIGINT handler runs here) and blocks SIGCHLD.
+     */
+    private static Object system(List<Object> a, Map<Object, Object> k) {
+        int n = a.size() + k.size();
+        if (n > 1) {
+            throw new PyException("TypeError", a.isEmpty() ? "system() takes at most 1 keyword argument (" + n + " given)"
+                : "system() takes at most 1 argument (" + n + " given)");
+        }
+        Object arg = !a.isEmpty() ? a.get(0) : k.get("command");
+        if (a.isEmpty() && !k.containsKey("command")) throw new PyException("TypeError", "system() missing required argument 'command' (pos 1)");
+        byte[] cmd = fsArg(arg);
+        if (SysExtras.auditing()) SysExtras.audit("os.system", new PyBytes(cmd));
+        PosixSpawn.Plan p = new PosixSpawn.Plan();
+        p.path = new byte[]{'/', 'b', 'i', 'n', '/', 's', 'h'};
+        p.argv = new byte[][]{{'s', 'h'}, {'-', 'c'}, {'-', '-'}, cmd};
+        p.sigmask = SignalModule.blockedMask();
+        PosixSpawn.Action cwd = PosixSpawn.cwdAction();
+        if (cwd != null) p.actions.add(cwd);
+        long pid = PosixSpawn.spawn(p);
+        if (pid <= 0) return 127L << 8;
+        RuntimeException pending = null;   // PyException, or any other unchecked failure: the child is still reaped
+        Error pendingError = null;
+        int internal = 0;                   // non-Python failures repeat deterministically: bounded retries, never a spin
+        long r = -1;
+        while (true) {
+            try {
+                r = PosixProc.waitpid((int) pid, 0);
+                break;
+            } catch (PyException e) {
+                if (pending == null && pendingError == null) pending = e;
+            } catch (RuntimeException e) {
+                if (pending == null && pendingError == null) pending = e;
+                if (++internal >= 3) break;
+            } catch (Error e) {
+                if (pending == null && pendingError == null) pendingError = e;
+                if (++internal >= 3) break;
+            }
+        }
+        if (pendingError != null) throw pendingError;
+        if (pending != null) throw pending;
+        return r < 0 ? -1L : (long) (int) r;
     }
 
     // ---------------------------------------------------------------- posix_spawn, posix_spawnp

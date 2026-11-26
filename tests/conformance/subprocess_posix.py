@@ -213,3 +213,8 @@ if os.name == "posix":
     print(p.wait(), (t.join(), res)[1])
     # unsupported without fork (pyJVM-specific texts stay out of this case; see tests/test_posix_process.py)
     print(subprocess.list2cmdline(["a b", 'c"d']))
+    # os.system on the spawn core (never libc system(3)): the raw wait status
+    print(os.system("exit 3"))
+    print(os.system("kill -TERM $$"))
+    print(os.waitstatus_to_exitcode(os.system("true")))
+    print(os.system("-n 2>/dev/null; exit 7"))   # 1792: a leading "-" is a command (sh -c --), not shell options

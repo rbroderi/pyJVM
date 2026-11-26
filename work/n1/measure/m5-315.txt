@@ -1,0 +1,37 @@
+system("exit 3") -> 768
+system("kill -TERM $$") -> 15
+waitstatus_to_exitcode(system("true")) -> 0
+system(command="exit 5") -> 1280
+system(b"exit 6") -> 1536
+system(PathLike) -> 1792
+system(exit 8 surrogateescape) -> 2048
+system(exit 9 lone surrogate) -> EXC UnicodeEncodeError 'utf-8' codec can't encode character '\ud800' in position 9: surrogates not allowed
+system("") -> 0
+system("exit 300") -> 11264
+system("nonexistent_cmd_xyz 2>/dev/null") -> 32512
+sh 0
+system("echo $0 $# ") -> 0
+system() -> EXC TypeError system() missing required argument 'command' (pos 1)
+system(5) -> EXC TypeError expected str, bytes or os.PathLike object, not int
+system(None) -> EXC TypeError expected str, bytes or os.PathLike object, not NoneType
+system(["a"]) -> EXC TypeError expected str, bytes or os.PathLike object, not list
+system("a<NUL>b") -> EXC ValueError embedded null byte
+system(b"a<NUL>b") -> EXC ValueError embedded null byte
+system("true", 1) -> EXC TypeError system() takes at most 1 argument (2 given)
+system("true", command="x") -> EXC TypeError system() takes at most 1 argument (2 given)
+system(cmd="true") -> EXC TypeError system() missing required argument 'command' (pos 1)
+system(command="true", x=1) -> EXC TypeError system() takes at most 1 keyword argument (2 given)
+system(NUL + bad kw) -> EXC TypeError system() takes at most 1 argument (2 given)
+audit: [('os.system', (b'true',)), ('os.system', (b'true',)), ('os.system', (b'exit 7',))]
+env: put env
+/tmp
+pipe: b'viapipe\n'
+sh: 1: 4: Bad file descriptor
+noninh pipe: b''
+SigBlk:	0000000000000000
+child-finished
+alarm: EXC TimeoutError handler raised after 1.0
+leftover child: ChildProcessError
+alarm noraise: 0 [14] after 1.0
+sigint seen after system: [14]
+end
